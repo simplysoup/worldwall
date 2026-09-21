@@ -4,7 +4,7 @@
 
 ## Summary
 
-Worldwall has begun S00 foundation work. A minimal Rust binary, locked dependency graph, toolchain pin, API smoke target, fixture plan, MIT license, and local build/check instructions now exist. `simplysoup` is the assigned maintainer/reviewer. The repository still has no Git metadata, packaged artwork, renderer, or release. The delivery contract and ADR baseline remain proposed pending explicit ratification.
+Worldwall has begun S00 foundation work. A minimal Rust binary, locked dependency graph, toolchain pin, API smoke target, fixture plan, MIT license, and local build/check instructions now exist. `simplysoup` is the assigned maintainer/reviewer. The repository now has local Git history on `main` with origin set to `https://github.com/simplysoup/worldwall`; it still has no packaged artwork, renderer, or release. The delivery contract and ADR baseline remain proposed pending explicit ratification.
 
 **Accepted software stages: 0 of 12; S00 is in-progress.** See the [canonical ledger](roadmap.md) and [S00 evidence](evidence/2026-09-21-s00-foundation.md); the passing smoke checks do not prove Wayland presentation or renderer safety. No GPU rendering, teardown, suspend, weather, or performance acceptance tests have run.
 

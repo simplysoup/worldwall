@@ -1,7 +1,7 @@
 # Evidence — S00 foundation increment
 
 - Date / operator: 2026-09-21 / Pi coding agent
-- Revision or artifact hashes: no Git repository exists; SHA-256 prefixes are recorded below for the stable scaffold files
+- Revision or artifact hashes: local Git commit `85f2952` (parent `6023377` from `origin/main`); SHA-256 prefixes are recorded below for stable scaffold files
 - Stage / requirements: S00; WW-12; S00-AC1 and S00-AC4 licensing/ownership increment
 - Environment: Linux x86_64, kernel `7.2.4-zen2-1-zen`, Rust `1.94.0`, Cargo `1.94.0`, Wayland client library `1.26.0`, Vulkan instance `1.4.357`, NVIDIA GeForce RTX 3070 Ti, NVIDIA driver `615.71.09`; active session reports Hyprland and `WAYLAND_DISPLAY=wayland-1`
 - Inputs: no scene or network input; the binary is a compositor-free dependency smoke target
@@ -12,6 +12,7 @@
 | Criterion | Exact command or manual procedure | Expected | Observed | Outcome | Artifact |
 | --- | --- | --- | --- | --- | --- |
 | S00-AC2 (format/lint/test/build slice) | `cargo fmt --check`; `cargo clippy --locked --all-targets --all-features -- -D warnings`; `cargo test --locked --all-targets --all-features`; `cargo build --locked`; `cargo run --locked` | Locked Rust target compiles, checks run, and the smoke binary executes | All commands passed; one test passed and the binary printed `worldwall foundation scaffold` | pass | `Cargo.toml`, `Cargo.lock`, `rust-toolchain.toml`, `src/main.rs` |
+| S00-AC2 (clean-checkout slice) | `git clone --local . <temporary-directory>` followed by the locked build/check commands | A checkout from the recorded commit can reproduce the scaffold | Pending after the documentation/remote record commit | not-run | local Git commit `85f2952` |
 | S00-AC3 (dependency/API slice) | `cargo info` for `smithay-client-toolkit`, `wgpu`, `raw-window-handle`, `wayland-client`, `calloop`, and `calloop-wayland-source`; locked compile of `src/main.rs` | Selected versions expose a feasible SCTK/calloop/Wayland/raw-handle/wgpu Vulkan path | All pinned crates resolved and the API smoke target compiled; no raw handle or `'static` lifetime was constructed | pass | `Cargo.toml`, `Cargo.lock`, `src/main.rs` |
 | S00-AC4 (environment inventory slice) | `uname -a`; `vulkaninfo --summary`; `hyprctl version`; `hyprctl monitors -j`; session/process inventory | Distinguish available local capabilities from assigned acceptance host/operator | Local Hyprland 0.56.2, Vulkan 1.4.357, NVIDIA RTX 3070 Ti/615.71.09, and two 1920×1080 scale-1 outputs were observed; operator and acceptance assignment remain absent | blocked | command output retained in session; no hardware acceptance claimed |
 | S00-AC1 (authority assignment slice) | Maintainer instruction recorded in this increment; inspect ADR-0001 fields | Named maintainer/reviewer and recorded approval/date | `simplysoup` is assigned as maintainer/reviewer; ADR baseline ratification/date remain pending | blocked | `docs/decisions/ADR-0001-delivery-baseline.md`, `docs/delivery-contract.md` |
@@ -45,18 +46,18 @@ configure/ack ordering, frame callback ordering, and destruction order.
 
 ## Limitations and failures
 
-This increment does not prove a clean checkout because the directory has no Git
-metadata and no remote/ownership arrangement has been supplied. It does not
-prove visible presentation, GPU output, input pass-through, teardown, power
-behavior, or performance. A local Hyprland/Vulkan session is observed, but it
-is not an assigned acceptance host until an operator and hardware matrix are
-recorded. The maintainer selected MIT for project code/documentation and
-directed that art assets and generated fixture packages stay out of the
-repository.
+The local repository now has Git history and origin ownership, but the commit
+has not been pushed by this session. A clean-checkout reproduction is still
+pending the dedicated clone run. This evidence does not prove visible
+presentation, GPU output, input pass-through, teardown, power behavior, or
+performance. A local Hyprland/Vulkan session is observed, but it is not an
+assigned acceptance host until an operator and hardware matrix are recorded.
+The maintainer selected MIT for project code/documentation and directed that
+art assets and generated fixture packages stay out of the repository.
 
 ## Review and acceptance
 
 - Reviewer / date: `simplysoup` assigned; review not yet recorded / 2026-09-21 increment
 - Decision: not submitted; S00 remains in progress
-- Unmet criteria / stale dependent evidence: S00-AC1 baseline ratification, S00-AC4 live-host/operator assignment, and clean-checkout reproducibility remain open; licensing/provenance direction is recorded
-- Next owner / action: `simplysoup` to ratify or amend ADR-0001, decide Git repository ownership/initialization, and name the live Hyprland/Vulkan operator; then review the locked build/API evidence
+- Unmet criteria / stale dependent evidence: S00-AC1 baseline ratification and S00-AC4 live-host/operator assignment remain open; clean-checkout reproducibility is pending the clone run; licensing/provenance direction is recorded
+- Next owner / action: `simplysoup` to ratify or amend ADR-0001, name the live Hyprland/Vulkan operator, and review the locked build/API evidence; push the local commit only when explicitly authorized
