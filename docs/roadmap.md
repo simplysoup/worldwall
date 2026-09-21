@@ -1,0 +1,47 @@
+# Delivery roadmap
+
+**Baseline:** proposed v0.1, pending S00 ratification. This is the only stage-state/owner ledger. No software stage is accepted. Stage details define gates, not progress.
+
+## Stage ledger
+
+| Stage | Delivery | Dependencies | State | Owner | Acceptance evidence |
+| --- | --- | --- | --- | --- | --- |
+| [S00](stages/00-foundation.md) | Foundation and baseline approval | None | in-progress | Pi coding agent | [S00 foundation increment](evidence/2026-09-21-s00-foundation.md) |
+| [S01](stages/01-wayland-surface.md) | Single-output Wayland lifecycle | S00 | planned | unassigned | None |
+| [S02](stages/02-gpu-presentation.md) | Safe GPU presentation | S01 | planned | unassigned | None |
+| [S03](stages/03-indexed-scene.md) | Static indexed scene / M1 | S02 | planned | unassigned | None |
+| [S04](stages/04-palette-animation.md) | GPU animation and pacing | S03 | planned | unassigned | None |
+| [S05](stages/05-scene-registry.md) | Registry and selection / M2 | S04 | planned | unassigned | None |
+| [S06](stages/06-time-astronomy.md) | Civil time and astronomy | S05 | planned | unassigned | None |
+| [S07](stages/07-weather.md) | Optional async weather cache | S06 | planned | unassigned | None |
+| [S08](stages/08-suspend-resume.md) | Suspend/resume / M3 | S07 | planned | unassigned | None |
+| [S09](stages/09-multi-output.md) | Multi-output and hotplug | S08 | planned | unassigned | None |
+| [S10](stages/10-ipc-config.md) | Local IPC and config transactions | S09 | planned | unassigned | None |
+| [S11](stages/11-release-validation.md) | Recovery, performance, release / M4 | S10 | planned | unassigned | None |
+
+`ready` means dependencies/inputs permit starting work, **not** that approval or delivery is complete. S00 is now in progress for the bounded foundation scaffold; its missing approval and host assignment remain open work, not fabricated runtime roadblocks.
+
+## State machine
+
+`planned → ready → in-progress → review → accepted`
+
+- `planned`: waiting for dependencies or required inputs.
+- `ready`: dependencies accepted, a bounded task can be claimed. Integrator assigns owner on claim.
+- `in-progress`: an owner is actively executing the stage with a task/evidence record.
+- `blocked`: required work cannot proceed; link a roadblock with owner and next check. Return to `ready` or `in-progress` on verified resolution.
+- `review`: implementation and gate evidence submitted; not yet accepted.
+- `accepted`: assigned acceptance authority reviewed all criteria, dependencies, and evidence. Record reviewer/date in the evidence linked here.
+
+If new evidence invalidates an accepted gate, retain historical acceptance and append a correction; move the stage to `review` or `blocked`, mark dependent acceptance stale, and stop release claims. Do not rewrite history to hide the regression.
+
+Routine state/owner/evidence changes use the progress workflow. Reordering, scope changes, dropping gates, and adding stages use a [change proposal](workflows/roadmap-changes.md).
+
+## Dependencies and parallel work
+
+The default critical path is deliberately linear: prove the renderer before integrating services. Delegates may prepare fixtures, pure-function tests, or bounded design spikes ahead of integration when their inputs are settled. Such preparation does not accept a future stage or bypass dependency gates. The integrator assigns non-overlapping files; shared renderer interfaces, roadmap, and status have one writer per increment.
+
+No multi-device work, extra scaling modes, live weather reselection, or GUI editor is scheduled. Deferred features stay out of the critical path unless approved.
+
+## Mapping from the original plan
+
+Original Phases 1–10 map to S01–S10. S00 adds reproducibility/decision setup. S11 removes release recovery/performance/packaging from the vague final “polish” bucket. Original MVP acceptance is reached at S03, not merely at creation of a layer role or presentation of a solid color. See [audit A01/A13](audit.md).

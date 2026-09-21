@@ -1,0 +1,27 @@
+[package]
+name = "worldwall"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.87"
+license = "MIT"
+description = "GPU-accelerated indexed pixel-art wallpaper engine for Hyprland/Wayland"
+
+[dependencies]
+calloop = "=0.14.4"
+calloop-wayland-source = "=0.4.1"
+raw-window-handle = "=0.6.2"
+smithay-client-toolkit = { version = "=0.21.1", default-features = false, features = ["calloop"] }
+wayland-client = { version = "=0.31.15", default-features = false, features = ["system"] }
+wgpu = { version = "=30.0.1", default-features = false, features = ["std", "vulkan", "wgsl"] }
+
+[lints.rust]
+unsafe_code = "forbid"
+
+[lints.clippy]
+all = "deny"
+correctness = "deny"
+
+[profile.release]
+codegen-units = 1
+lto = "thin"
+strip = "symbols"
