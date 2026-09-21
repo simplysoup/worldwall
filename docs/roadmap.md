@@ -6,7 +6,7 @@
 
 | Stage | Delivery | Dependencies | State | Owner | Acceptance evidence |
 | --- | --- | --- | --- | --- | --- |
-| [S00](stages/00-foundation.md) | Foundation and baseline approval | None | in-progress | Pi coding agent | [S00 foundation increment](evidence/2026-09-21-s00-foundation.md) |
+| [S00](stages/00-foundation.md) | Foundation and baseline approval | None | review | Pi coding agent | [S00 foundation increment](evidence/2026-09-21-s00-foundation.md) |
 | [S01](stages/01-wayland-surface.md) | Single-output Wayland lifecycle | S00 | planned | unassigned | None |
 | [S02](stages/02-gpu-presentation.md) | Safe GPU presentation | S01 | planned | unassigned | None |
 | [S03](stages/03-indexed-scene.md) | Static indexed scene / M1 | S02 | planned | unassigned | None |
