@@ -6,19 +6,19 @@
 
 Worldwall has begun S00 foundation work. A minimal Rust binary, locked dependency graph, toolchain pin, API smoke target, fixture plan, MIT license, and local build/check instructions now exist. `simplysoup` is the assigned maintainer/reviewer. The repository now has local Git history on `main` with origin set to `https://github.com/simplysoup/worldwall`; it still has no packaged artwork, renderer, or release. The delivery contract and ADR-0001 baseline were ratified by `simplysoup` on 2026-09-21.
 
-**Accepted software stages: 0 of 12; S00 is in review.** See the [canonical ledger](roadmap.md) and [S00 evidence](evidence/2026-09-21-s00-foundation.md); the passing smoke checks do not prove Wayland presentation or renderer safety. No GPU rendering, teardown, suspend, weather, or performance acceptance tests have run.
+**Accepted software stages: 1 of 12; S00 is accepted.** See the [canonical ledger](roadmap.md) and [S00 evidence](evidence/2026-09-21-s00-foundation.md); the passing foundation checks do not prove Wayland presentation or renderer safety. No GPU rendering, teardown, suspend, weather, or performance acceptance tests have run.
 
 ## Advice and next action
 
-1. `simplysoup` should review and accept S00, then authorize any push if desired.
+1. Assign an owner for ready [S01](stages/01-wayland-surface.md) and begin its single-output Wayland lifecycle work on `soupydesktop`.
 2. Retain the final locked-check outputs and preserve the no-bundled-art-assets rule.
-3. Begin S01–S03 on the assigned `soupydesktop` Hyprland/Vulkan host before weather or broad module scaffolding. The first valuable demo is a correctly scaled static indexed image with safe resize and teardown.
+3. Complete S01–S03 before weather or broad module scaffolding. The first valuable demo is a correctly scaled static indexed image with safe resize and teardown.
 4. Measure pacing/resource behavior in S04 and keep those measurements as a regression baseline.
 5. Keep unsupported or untested behavior visible. Do not substitute screenshots for lifecycle tests or claim energy savings without a repeatable baseline.
 
 ## Decisions and blockers
 
-- The maintainer/reviewer is GitHub account `simplysoup`; ADR-0001 and the delivery baseline were ratified on 2026-09-21. `simplysoup` assigned `soupydesktop` as the live Hyprland/Vulkan validation host. Code/docs are MIT-licensed and art assets are not bundled; see the [decision register](decisions/README.md) and [S00 evidence](evidence/2026-09-21-s00-foundation.md).
+- The maintainer/reviewer is GitHub account `simplysoup`; ADR-0001 and S00 were accepted on 2026-09-21. `simplysoup` assigned `soupydesktop` as the live Hyprland/Vulkan validation host. Code/docs are MIT-licensed and art assets are not bundled; see the [decision register](decisions/README.md) and [S00 evidence](evidence/2026-09-21-s00-foundation.md).
 - The local environment exposes Hyprland 0.56.2, Vulkan 1.4.357, an NVIDIA RTX 3070 Ti, and two scale-1 1920×1080 outputs, but this observation is not an assigned acceptance record.
 - Scene decoding/color rules must close before S03; animation packing must close before S04.
 - Provider, location, deadlines, and stale-weather policy must close before S07; numerical release budgets before S11 benchmarking.

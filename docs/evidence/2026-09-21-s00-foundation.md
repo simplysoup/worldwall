@@ -59,6 +59,6 @@ stay out of the repository.
 ## Review and acceptance
 
 - Reviewer / date: `simplysoup` / 2026-09-21
-- Decision: ADR-0001 baseline ratified without amendment; S00 evidence submitted for review and S00 remains unaccepted
-- Unmet criteria / stale dependent evidence: none identified in the S00 evidence slices; live renderer behavior remains outside S00 and must be validated by S01–S03
-- Next owner / action: `simplysoup` to review/accept S00, authorize any push, and then assign or begin S01
+- Decision: ADR-0001 baseline ratified without amendment; `simplysoup` accepted S00 on 2026-09-21
+- Unmet criteria / stale dependent evidence: none for S00; live renderer behavior remains outside S00 and must be validated by S01–S03
+- Next owner / action: assign an S01 owner and begin the single-output Wayland lifecycle stage; authorize any push separately if desired

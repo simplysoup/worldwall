@@ -2,7 +2,7 @@
 
 A planned GPU-accelerated, weather- and time-aware pixel-art wallpaper engine for Hyprland/Wayland.
 
-**Current state:** S00 foundation work has started with a minimal Rust/API smoke target. `simplysoup` ratified the delivery baseline on 2026-09-21; S00 itself remains in progress. Code is MIT-licensed. No renderer, packaged artwork, runtime, or performance claim has been verified.
+**Current state:** S00 foundation is accepted with a minimal Rust/API smoke target. `simplysoup` ratified the delivery baseline and accepted S00 on 2026-09-21. Code is MIT-licensed. No renderer, packaged artwork, runtime, or performance claim has been verified.
 
 ## Start here
 
@@ -12,7 +12,7 @@ A planned GPU-accelerated, weather- and time-aware pixel-art wallpaper engine fo
 4. [Documentation map](docs/README.md) — workflows, templates, and reference material.
 5. [Contributor instructions](AGENTS.md) — how to work safely and leave a useful handoff.
 
-**Next action:** have `simplysoup` assign the live-host operator and complete S00 review. Prove a single-output static indexed image through S03 before adding environmental features. Do not build the entire proposed module tree up front.
+**Next action:** assign an owner and execute [S01 — Wayland surface](docs/stages/01-wayland-surface.md). Prove a single-output static indexed image through S03 before adding environmental features. Do not build the entire proposed module tree up front.
 
 ## Build the foundation smoke target
 
