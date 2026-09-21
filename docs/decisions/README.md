@@ -4,7 +4,7 @@ Use [the ADR template](../templates/decision.md) for a durable technical decisio
 
 | Decision | State | Required by | Owner | Next action |
 | --- | --- | --- | --- | --- |
-| [ADR-0001 — Delivery baseline](ADR-0001-delivery-baseline.md) | proposed | S00 acceptance | `simplysoup` | Explicitly ratify or amend the contract, stage additions, scene-format direction, and command semantics |
+| [ADR-0001 — Delivery baseline](ADR-0001-delivery-baseline.md) | accepted | S00 acceptance | `simplysoup` | Baseline ratified 2026-09-21; maintain stage-local decisions and evidence |
 | Dependency/MSRV/backend matrix and raw-handle ownership strategy | open | S00 versions; S02 lifetime acceptance | S00/S02 assignee | Compile a minimal compatible dependency set; verify upstream APIs |
 | Software/artwork licensing and fixture provenance | accepted | S00 acceptance | `simplysoup` | Code/docs use MIT; keep art assets and generated fixture packages out of the repository |
 | PNG decoding, color path, size limits | open | S03 implementation | S03 assignee | Freeze version-1 validation and reference vectors |

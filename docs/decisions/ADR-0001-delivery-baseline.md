@@ -1,9 +1,9 @@
-# ADR-0001 — Proposed delivery baseline
+# ADR-0001 — Delivery baseline
 
-- **Status:** proposed
+- **Status:** accepted
 - **Date proposed:** 2026-09-21
 - **Decision owner / approver:** GitHub account `simplysoup`
-- **Acceptance date:** not approved; explicit baseline ratification remains pending
+- **Acceptance date:** 2026-09-21
 - **Affected stages:** S00–S11
 - **Evidence:** [outline audit](../audit.md)
 
@@ -29,11 +29,10 @@ Use a versioned `animation.toml` authoring format instead of an undefined float-
 
 More explicit evidence is required, but developers can work on bounded stages and diagnose blockers without silently changing the plan. Numeric performance limits, library APIs, provider choice, and artwork rights still require real decisions/evidence.
 
-## Approval procedure
+## Approval record
 
-The assigned maintainer/reviewer is GitHub account `simplysoup`. The maintainer
-must review the audit and proposal, record identity/date and any amendments
-here, and reconcile the contract and affected stage/interface files in one
-increment. S00 cannot be accepted without ratification. Assignment and the MIT
-licensing direction are recorded, but approval is not inferred from assignment
-alone.
+The assigned maintainer/reviewer, GitHub account `simplysoup`, ratified this
+baseline on 2026-09-21 without amendment. The delivery contract, stage roadmap,
+scene-format direction, command semantics, and affected S00 records are
+reconciled with this decision. This ratifies the baseline; it does not accept
+S00 or any later stage.

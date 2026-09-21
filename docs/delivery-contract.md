@@ -1,7 +1,7 @@
 # Worldwall delivery contract
 
-**Version:** proposed 0.1 · **State:** review-ready; not approved · **Baseline date:** 2026-09-21  
-**Accountable maintainer / acceptance authority:** GitHub account `simplysoup`; assigned in S00, with baseline ratification still to be recorded.  
+**Version:** 0.1 · **State:** approved · **Baseline date:** 2026-09-21  
+**Accountable maintainer / acceptance authority:** GitHub account `simplysoup`; baseline ratified in ADR-0001 on 2026-09-21.  
 **Target:** Linux desktop with Hyprland, Wayland layer-shell, and a supported Vulkan adapter. Library/compositor versions and the tested device matrix are established by evidence, not assumed here.
 
 This is an engineering delivery agreement, not a claim of an existing product. “Must” defines an acceptance requirement once the baseline is approved. S00 may perform setup and feasibility work before ratification; feature work requires the applicable baseline/decisions to be approved.

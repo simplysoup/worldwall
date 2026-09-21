@@ -29,7 +29,7 @@
 
 ## Authority and maintenance
 
-The contract is a **proposed v0.1 baseline** until S00 approval. Once accepted, precedence is: approved contract → approved decisions and interface specifications → stage acceptance → roadmap scheduling → status summaries. If two normative documents disagree, stop the affected change, record the inconsistency, and obtain a reconciled decision; do not silently choose the easier requirement.
+The contract is the **approved v0.1 baseline**, ratified through ADR-0001 on 2026-09-21. Precedence is: approved contract → approved decisions and interface specifications → stage acceptance → roadmap scheduling → status summaries. If two normative documents disagree, stop the affected change, record the inconsistency, and obtain a reconciled decision; do not silently choose the easier requirement.
 
 An approved change must update all affected normative documents in the same integration. Newer timestamps alone do not override requirements. The archive is never normative.
 

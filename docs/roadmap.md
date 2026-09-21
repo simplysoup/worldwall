@@ -1,6 +1,6 @@
 # Delivery roadmap
 
-**Baseline:** proposed v0.1, pending S00 ratification. This is the only stage-state/owner ledger. No software stage is accepted. Stage details define gates, not progress.
+**Baseline:** approved v0.1, ratified by `simplysoup` on 2026-09-21. This is the only stage-state/owner ledger. No software stage is accepted. Stage details define gates, not progress.
 
 ## Stage ledger
 
