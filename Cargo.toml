@@ -9,6 +9,7 @@ description = "GPU-accelerated indexed pixel-art wallpaper engine for Hyprland/W
 [dependencies]
 calloop = "=0.14.4"
 calloop-wayland-source = "=0.4.1"
+png = "=0.17.16"
 pollster = "=0.4.0"
 raw-window-handle = "=0.6.2"
 smithay-client-toolkit = { version = "=0.21.1", default-features = false, features = ["calloop"] }

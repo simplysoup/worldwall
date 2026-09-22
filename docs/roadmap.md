@@ -1,15 +1,15 @@
 # Delivery roadmap
 
-**Baseline:** approved v0.1, ratified by `simplysoup` on 2026-09-21. This is the only stage-state/owner ledger. No software stage is accepted. Stage details define gates, not progress.
+**Baseline:** approved v0.1, ratified by `simplysoup` on 2026-09-21. This is the only stage-state/owner ledger. Stage details define gates, not progress.
 
 ## Stage ledger
 
 | Stage | Delivery | Dependencies | State | Owner | Acceptance evidence |
 | --- | --- | --- | --- | --- | --- |
 | [S00](stages/00-foundation.md) | Foundation and baseline approval | None | accepted | Pi coding agent | [S00 foundation increment](evidence/2026-09-21-s00-foundation.md) |
-| [S01](stages/01-wayland-surface.md) | Single-output Wayland lifecycle | S00 | ready | unassigned | None |
-| [S02](stages/02-gpu-presentation.md) | Safe GPU presentation | S01 | planned | unassigned | None |
-| [S03](stages/03-indexed-scene.md) | Static indexed scene / M1 | S02 | planned | unassigned | None |
+| [S01](stages/01-wayland-surface.md) | Single-output Wayland lifecycle | S00 | accepted | Pi coding agent | [S01 lifecycle increment](evidence/2026-09-21-s01-wayland-lifecycle.md) |
+| [S02](stages/02-gpu-presentation.md) | Safe GPU presentation | S01 | accepted | Pi coding agent | [S02 review and acceptance](evidence/2026-09-21-s02-gpu-presentation.md) |
+| [S03](stages/03-indexed-scene.md) | Static indexed scene / M1 | S02 | accepted | Pi coding agent | [S03 indexed-scene evidence](evidence/2026-09-21-s03-indexed-scene.md) |
 | [S04](stages/04-palette-animation.md) | GPU animation and pacing | S03 | planned | unassigned | None |
 | [S05](stages/05-scene-registry.md) | Registry and selection / M2 | S04 | planned | unassigned | None |
 | [S06](stages/06-time-astronomy.md) | Civil time and astronomy | S05 | planned | unassigned | None |
@@ -19,7 +19,7 @@
 | [S10](stages/10-ipc-config.md) | Local IPC and config transactions | S09 | planned | unassigned | None |
 | [S11](stages/11-release-validation.md) | Recovery, performance, release / M4 | S10 | planned | unassigned | None |
 
-`ready` means dependencies/inputs permit starting work, **not** that approval or delivery is complete. S00 is now in progress for the bounded foundation scaffold; its missing approval and host assignment remain open work, not fabricated runtime roadblocks.
+`ready` means dependencies/inputs permit starting work, **not** that approval or delivery is complete. S03 is accepted with ADR-0003 and recorded pure/GPU/live evidence; S04 remains planned pending its stage-local decision.
 
 ## State machine
 

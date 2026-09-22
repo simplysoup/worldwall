@@ -1,5 +1,7 @@
 # Scene format — proposed version 1
 
+S03's exact decoder limits and color path are fixed by accepted [ADR-0003](decisions/ADR-0003-s03-scene-decoding-color.md). The broader authoring contract remains proposed where later stages own metadata and animation.
+
 **State:** proposed authoring contract; approve through [ADR-0001](decisions/ADR-0001-delivery-baseline.md), then freeze exact decoding/color rules before S03 and animation packing before S04. No loader or assets exist yet.
 
 ## Scene package
@@ -29,11 +31,11 @@ Empty/missing tag lists mean wildcard compatibility. The enumerations are `dawn/
 
 ## Image and palette
 
-- `scene.png` must be 8-bit grayscale used as raw index bytes, or 8-bit indexed-color PNG whose raw indices are preserved. Reject other bit depths/color types in v1 rather than silently quantizing.
+- `scene.png` must be 8-bit grayscale used as raw index bytes, or 8-bit indexed-color PNG whose raw indices are preserved. Reject other bit depths/color types in v1 rather than silently quantizing. The current S03 proposal caps encoded input at 16 MiB and decoded image size at 16,777,216 pixels.
 - The separate palette is authoritative. An embedded indexed-PNG palette is not a second live palette. Reject transparency metadata for index images; indices are labels, not grayscale colors or alpha.
 - `palette.png` must decode losslessly to 256 × 1 opaque RGBA8 entries. Validate alpha is 255. v1 wallpapers are opaque; transparent entries are rejected.
 - Upload indices as `R8Uint`; use integer `textureLoad`, not filtering or normalized reconstruction. Values 0 and 255 are explicit test fixtures.
-- Palette byte values are sRGB-authored. S03 must select and document a consistent GPU decode/output-encode path (e.g. an sRGB palette texture and an sRGB surface, or explicit conversions). Do not blindly combine `RGBA8Unorm` with an sRGB output and call it correct. Capture color reference/readback evidence for the chosen path.
+- Palette byte values are sRGB-authored. ADR-0003 fixes the path: upload them as `Rgba8Unorm`, convert sRGB to linear explicitly in WGSL, and require an sRGB presentation target for output encoding. Capture color reference/readback evidence for S03.
 - Cover scaling preserves aspect ratio, centers the crop, and calculates clamped integer source coordinates. Test odd sizes, both aspect directions, downscaling, edges, and scale changes. Pixel replication need not be integral at arbitrary output sizes; interpolation is still forbidden.
 
 ## Animation authoring versus GPU encoding
