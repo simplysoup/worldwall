@@ -26,6 +26,7 @@ pub struct FrameScheduler {
     bootstrap_pending: bool,
     next_deadline_ns: Option<u64>,
     submitted_frames: u64,
+    paused: bool,
 }
 
 impl FrameScheduler {
@@ -36,6 +37,7 @@ impl FrameScheduler {
             bootstrap_pending: true,
             next_deadline_ns: None,
             submitted_frames: 0,
+            paused: false,
         }
     }
 
@@ -48,7 +50,30 @@ impl FrameScheduler {
     }
 
     pub fn on_callback(&mut self) {
-        self.callback_ready = true;
+        if !self.paused {
+            self.callback_ready = true;
+        }
+    }
+
+    /// Stop deadline and callback-driven submissions while the session is
+    /// asleep. Resume starts a fresh bootstrap frame instead of replaying
+    /// deadlines accumulated during sleep.
+    pub fn pause(&mut self) {
+        self.paused = true;
+        self.callback_ready = false;
+        self.bootstrap_pending = false;
+        self.next_deadline_ns = None;
+    }
+
+    pub fn resume(&mut self) {
+        self.paused = false;
+        self.callback_ready = false;
+        self.bootstrap_pending = true;
+        self.next_deadline_ns = None;
+    }
+
+    pub fn is_paused(&self) -> bool {
+        self.paused
     }
 
     /// Reconfiguration needs one valid frame even if the compositor has not
@@ -73,17 +98,18 @@ impl FrameScheduler {
     }
 
     pub fn is_due(&self, now_ns: u64) -> bool {
-        self.bootstrap_pending
-            || (self.callback_ready
-                && self
-                    .next_deadline_ns
-                    .is_some_and(|deadline| now_ns >= deadline))
+        !self.paused
+            && (self.bootstrap_pending
+                || (self.callback_ready
+                    && self
+                        .next_deadline_ns
+                        .is_some_and(|deadline| now_ns >= deadline)))
     }
 
     /// Mark one submission.  Returns false if the callback/deadline gate was
     /// not satisfied, making accidental catch-up submissions test-visible.
     pub fn submit_if_due(&mut self, now_ns: u64) -> bool {
-        if !self.is_due(now_ns) {
+        if self.paused || !self.is_due(now_ns) {
             return false;
         }
         self.bootstrap_pending = false;
@@ -153,6 +179,21 @@ mod tests {
         let mut scheduler = FrameScheduler::new(Fps::Thirty);
         assert!(scheduler.submit_if_due(0));
         scheduler.on_reconfigure();
+        assert!(scheduler.submit_if_due(1));
+        assert_eq!(scheduler.submitted_frames(), 2);
+    }
+
+    #[test]
+    fn pause_discards_sleep_deadline_and_resume_bootstraps_once() {
+        let mut scheduler = FrameScheduler::new(Fps::Thirty);
+        assert!(scheduler.submit_if_due(0));
+        scheduler.on_callback();
+        scheduler.pause();
+        assert!(scheduler.is_paused());
+        assert!(!scheduler.is_due(u64::MAX));
+        assert!(!scheduler.submit_if_due(u64::MAX));
+        scheduler.resume();
+        assert!(!scheduler.is_paused());
         assert!(scheduler.submit_if_due(1));
         assert_eq!(scheduler.submitted_frames(), 2);
     }

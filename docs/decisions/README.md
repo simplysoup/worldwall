@@ -12,7 +12,7 @@ Use [the ADR template](../templates/decision.md) for a durable technical decisio
 | [ADR-0004 — S04 palette animation schema and GPU packing](ADR-0004-s04-animation.md) | accepted | S04 implementation | `simplysoup` | Accepted 2026-09-21; amended by CR-0001 and CR-0002 on 2026-09-22 |
 | [ADR-0005 — S06 civil time, astronomy, and seasons policy](ADR-0005-s06-time-astronomy-policy.md) | accepted | S06 implementation | Pi coding agent | Accepted by `simplysoup` 2026-09-22; amended by CR-0002; see S06 evidence |
 | [ADR-0006 — S07 Open-Meteo provider](ADR-0006-s07-open-meteo.md) | accepted | S07 implementation | Pi coding agent + `simplysoup` | Accepted 2026-09-22; implement explicit runtime configuration and retain no-live-request default |
-| Power-event adapter and animation suspend timing | open | S08 implementation | S08 assignee | Verify actual signal delivery and missing-service behavior |
+| [ADR-0007 — S08 power-event adapter and paused animation clock](ADR-0007-s08-power-events.md) | accepted | S08 implementation | Pi coding agent | Accepted by `simplysoup` 2026-09-22; retain the recorded suspend/topology limitations |
 | Supported scaling/device matrix and resource budgets | open | S09 matrix; S11 benchmark start | maintainer | Approve named hardware, workloads, metrics, and thresholds |
 
 “Open” rows are decision deadlines, not accepted designs or confirmed blockers. When work reaches a deadline without the decision, create a roadblock and stop the affected implementation. Number new ADRs sequentially; the integrator resolves concurrent ID collisions.

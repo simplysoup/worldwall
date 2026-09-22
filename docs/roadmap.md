@@ -14,7 +14,7 @@
 | [S05](stages/05-scene-registry.md) | Registry and selection / M2 | S04 | accepted | Pi coding agent | [S05 review submission](evidence/2026-09-22-s05-registry-selection.md) |
 | [S06](stages/06-time-astronomy.md) | Civil time and astronomy | S05 | accepted | Pi coding agent | [S06 time/astronomy acceptance](evidence/2026-09-22-s06-time-astronomy.md); [CR-0002 timeline increment](updates/2026-09-22-cr002-time-of-day.md) |
 | [S07](stages/07-weather.md) | Optional async weather cache | S06 | accepted | Pi coding agent | [S07 failure-path and acceptance evidence](updates/2026-09-22-s07-failure-gates.md) |
-| [S08](stages/08-suspend-resume.md) | Suspend/resume / M3 | S07 | planned | unassigned | None |
+| [S08](stages/08-suspend-resume.md) | Suspend/resume / M3 | S07 | accepted | Pi coding agent | [S08 implementation and acceptance](updates/2026-09-22-s08-suspend-resume.md) |
 | [S09](stages/09-multi-output.md) | Multi-output and hotplug | S08 | planned | unassigned | None |
 | [S10](stages/10-ipc-config.md) | Local IPC and config transactions | S09 | planned | unassigned | None |
 | [S11](stages/11-release-validation.md) | Recovery, performance, release / M4 | S10 | planned | unassigned | None |

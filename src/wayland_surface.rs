@@ -11,7 +11,8 @@ use std::{
 };
 
 use calloop::{
-    EventLoop,
+    EventLoop, RegistrationToken,
+    channel::Event as ChannelEvent,
     timer::{TimeoutAction, Timer},
 };
 use calloop_wayland_source::WaylandSource;
@@ -20,7 +21,11 @@ use calloop_wayland_source::WaylandSource;
 use std::cmp::Ordering;
 
 use crate::{
-    environment::{Location, SystemWallClock, WallClock},
+    environment::{
+        EnvironmentProvider, Location, NoaaAstronomy, SystemWallClock, UtcOffsetSchedule,
+        WallClock, Weather,
+    },
+    power::{PausedAnimationClock, PowerAction, PowerEvent, PowerEventSource, PowerStateMachine},
     renderer::{RenderOutcome, Renderer},
     scene::Scene,
     scene_registry::{
@@ -154,7 +159,7 @@ pub fn run() -> Result<(), Box<dyn Error>> {
     // has no public control source yet, so only startup is invoked here; a
     // later explicit request must use the begin/complete handoff below rather
     // than letting output/config/weather callbacks select implicitly.
-    let (scene, _registry_selection) = load_scene(weather.snapshot())?;
+    let (scene, mut registry_selection) = load_scene(civil_time.snapshot(weather.weather()))?;
     let mut renderer = Renderer::new_with_scene(&connection, layer.wl_surface(), extent, &scene)?;
     println!(
         "trace scene-upload-count={} steady-state-reuploads=false",
@@ -164,6 +169,8 @@ pub fn run() -> Result<(), Box<dyn Error>> {
     let fps = configured_fps();
     let mut scheduler = FrameScheduler::new(fps);
     let clock_origin = Instant::now();
+    let mut animation_clock = PausedAnimationClock::new(0);
+    let mut power = PowerStateMachine::new();
     #[cfg(debug_assertions)]
     let test_exit_deadline = test_exit_deadline(clock_origin);
 
@@ -174,7 +181,7 @@ pub fn run() -> Result<(), Box<dyn Error>> {
         &connection,
         &mut renderer,
         extent,
-        0.0,
+        animation_clock.seconds(0),
         civil_time.seconds(),
     )? {
         RenderOutcome::Presented => {
@@ -201,22 +208,18 @@ pub fn run() -> Result<(), Box<dyn Error>> {
     // The timer is a deadline wakeup, not a frame loop: the scheduler still
     // requires a compositor callback before every steady-state submission.
     let interval = Duration::from_nanos(fps.interval_nanos());
-    event_loop
-        .handle()
-        .insert_source(Timer::from_duration(interval), move |_, _, client| {
-            client.mark_timer_fired();
-            TimeoutAction::ToDuration(interval)
-        })?;
+    let mut frame_timer = Some(insert_frame_timer(&event_loop, interval)?);
     // This low-frequency wakeup is separate from the animation timer. Weather
     // completion/deadline checks are therefore not performed per frame.
     let weather_poll_interval = Duration::from_secs(1);
-    event_loop.handle().insert_source(
-        Timer::from_duration(weather_poll_interval),
-        move |_, _, client| {
-            client.mark_weather_timer_fired();
-            TimeoutAction::ToDuration(weather_poll_interval)
-        },
-    )?;
+    let mut weather_timer = Some(insert_weather_timer(&event_loop, weather_poll_interval)?);
+    let power_events = PowerEventSource::start().into_event_source();
+    event_loop
+        .handle()
+        .insert_source(power_events, move |event, _, client| match event {
+            ChannelEvent::Msg(event) => client.mark_power_event(event),
+            ChannelEvent::Closed => client.mark_power_event(PowerEvent::Disconnected),
+        })?;
     WaylandSource::new(connection.clone(), event_queue).insert(event_loop.handle())?;
 
     let mut seen_reconfigure_generation = client.reconfigure_generation;
@@ -235,7 +238,114 @@ pub fn run() -> Result<(), Box<dyn Error>> {
             break;
         }
         let now_ns = clock_origin.elapsed().as_nanos().min(u128::from(u64::MAX)) as u64;
-        if client.callback_ready {
+        for event in client.take_power_events() {
+            let action = power.on_event(event);
+            println!(
+                "trace power-event event={event:?} action={action:?} generation={} service={:?} phase={:?}",
+                power.generation(),
+                power.service(),
+                power.phase()
+            );
+            match action {
+                PowerAction::Pause { generation } => {
+                    scheduler.pause();
+                    animation_clock.pause(now_ns);
+                    client.pause_rendering();
+                    if let Some(token) = frame_timer.take() {
+                        event_loop.handle().remove(token);
+                    }
+                    if let Some(token) = weather_timer.take() {
+                        event_loop.handle().remove(token);
+                    }
+                    println!(
+                        "trace suspend state=paused generation={generation} deadlines=false weather-refresh=false"
+                    );
+                }
+                PowerAction::BeginResume { generation } => {
+                    println!(
+                        "trace resume state=pending generation={generation} output-ready={}",
+                        client.physical_extent().is_some()
+                    );
+                }
+                PowerAction::ServiceDegraded => {
+                    eprintln!(
+                        "trace power-service state=degraded resume-support=false manual-refresh=true"
+                    );
+                }
+                PowerAction::ServiceRestored => {
+                    println!("trace power-service state=available resume-support=true");
+                }
+                PowerAction::Ignored => {}
+            }
+        }
+        if let Some(generation) = power.begin_resume_if_ready(client.physical_extent().is_some()) {
+            weather.refresh_for_resume();
+            let snapshot = civil_time.snapshot(weather.weather());
+            if let Some(selection) = registry_selection.as_mut() {
+                match selection.begin_explicit_request(
+                    snapshot,
+                    generation,
+                    SelectionTrigger::Resume,
+                ) {
+                    Ok((request, token, manifest)) => {
+                        let candidate = manifest.load_scene();
+                        match selection.complete_loaded(&mut renderer, &request, token, candidate) {
+                            Ok(outcome) => println!(
+                                "trace resume-selection generation={generation} outcome={outcome:?}"
+                            ),
+                            Err(error) => eprintln!(
+                                "trace resume-selection generation={generation} outcome=failed error={error}"
+                            ),
+                        }
+                    }
+                    Err(error) => eprintln!(
+                        "trace resume-selection generation={generation} outcome=retained error={error}"
+                    ),
+                }
+            } else {
+                println!(
+                    "trace resume-selection generation={generation} outcome=retained fixed-scene=true"
+                );
+            }
+            scheduler.resume();
+            animation_clock.resume(now_ns);
+            client.resume_rendering();
+            if frame_timer.is_none() {
+                frame_timer = Some(insert_frame_timer(&event_loop, interval)?);
+            }
+            if weather_timer.is_none() {
+                weather_timer = Some(insert_weather_timer(&event_loop, weather_poll_interval)?);
+            }
+            client.request_frame(&queue_handle);
+            let Some(extent) = client.physical_extent() else {
+                continue;
+            };
+            let animation_time_seconds = animation_clock.seconds(now_ns);
+            match render_renderer(
+                &connection,
+                &mut renderer,
+                extent,
+                animation_time_seconds,
+                civil_time.seconds(),
+            )? {
+                RenderOutcome::Presented => {
+                    let _ = scheduler.submit_if_due(now_ns);
+                    println!(
+                        "trace resume-presented generation={generation} phase-seconds={animation_time_seconds:.6} scene-upload-count={}",
+                        renderer.scene_upload_count()
+                    );
+                }
+                RenderOutcome::Timeout | RenderOutcome::Occluded => eprintln!(
+                    "trace resume-presented=false generation={generation} reason=surface-not-ready"
+                ),
+                RenderOutcome::Reconfigure | RenderOutcome::Fatal => {
+                    unreachable!("render_renderer classifies these")
+                }
+            }
+            let _ = power.complete_resume(generation);
+            continue;
+        }
+        if client.callback_ready && !scheduler.is_paused() {
             scheduler.on_callback();
             client.callback_ready = false;
         }
@@ -248,14 +358,14 @@ pub fn run() -> Result<(), Box<dyn Error>> {
             weather.poll();
         }
         client.timer_fired = false;
-        if client.frame_pending || !scheduler.is_due(now_ns) {
+        if client.render_paused || client.frame_pending || !scheduler.is_due(now_ns) {
             continue;
         }
         let Some(extent) = client.physical_extent() else {
             continue;
         };
         client.request_frame(&queue_handle);
-        let animation_time_seconds = (clock_origin.elapsed().as_secs_f64() % 1024.0) as f32;
+        let animation_time_seconds = animation_clock.seconds(now_ns);
         match render_renderer(
             &connection,
             &mut renderer,
@@ -300,6 +410,7 @@ pub fn run() -> Result<(), Box<dyn Error>> {
 
 struct CivilTimeRuntime {
     offset_minutes: Option<i32>,
+    location: Option<Location>,
     clock: SystemWallClock,
 }
 
@@ -318,14 +429,48 @@ impl CivilTimeRuntime {
             if !(-14 * 60..=14 * 60).contains(&offset) {
                 return Err("WORLDWALL_UTC_OFFSET_MINUTES must be between -840 and 840".into());
             }
-            println!("trace civil-time configured=true offset-minutes={offset}");
-        } else {
-            println!("trace civil-time configured=false state=unknown");
         }
+        let location = configured_location()?;
+        println!(
+            "trace civil-time configured={} astronomy-location-configured={}",
+            offset_minutes.is_some(),
+            location.is_some()
+        );
         Ok(Self {
             offset_minutes,
+            location,
             clock: SystemWallClock,
         })
+    }
+
+    fn snapshot(&self, weather: Weather) -> EnvironmentSnapshot {
+        let (Some(offset_minutes), Some(location)) = (self.offset_minutes, self.location) else {
+            return EnvironmentSnapshot {
+                time: crate::scene_registry::TimeOfDay::Unknown,
+                weather,
+                season: crate::scene_registry::Season::Unknown,
+            };
+        };
+        let Ok(timezone) = UtcOffsetSchedule::fixed(offset_minutes) else {
+            return EnvironmentSnapshot {
+                time: crate::scene_registry::TimeOfDay::Unknown,
+                weather,
+                season: crate::scene_registry::Season::Unknown,
+            };
+        };
+        let Ok(utc_seconds) = self.clock.now_utc_seconds() else {
+            return EnvironmentSnapshot {
+                time: crate::scene_registry::TimeOfDay::Unknown,
+                weather,
+                season: crate::scene_registry::Season::Unknown,
+            };
+        };
+        EnvironmentProvider {
+            location: Some(location),
+            timezone: Some(timezone),
+            astronomy: NoaaAstronomy,
+        }
+        .snapshot_at(utc_seconds, weather)
     }
 
     fn seconds(&self) -> u32 {
@@ -390,6 +535,10 @@ impl WeatherRuntime {
         })
     }
 
+    fn weather(&self) -> Weather {
+        self.snapshot().weather
+    }
+
     fn snapshot(&self) -> EnvironmentSnapshot {
         let Some(service) = &self.service else {
             return EnvironmentSnapshot::unknown();
@@ -403,6 +552,21 @@ impl WeatherRuntime {
             weather,
             season: crate::scene_registry::Season::Unknown,
         }
+    }
+
+    fn refresh_for_resume(&mut self) {
+        let Some(service) = &mut self.service else {
+            println!("trace weather-resume state=disabled");
+            return;
+        };
+        let Ok(now_utc) = self.clock.now_utc_seconds() else {
+            eprintln!("trace weather-resume state=unknown reason=clock");
+            return;
+        };
+        let now_mono = Instant::now();
+        service.poll(now_utc, now_mono);
+        let refresh = service.request_refresh(now_utc, now_mono, RefreshKind::Resume);
+        println!("trace weather-resume refresh={refresh:?} bounded=true");
     }
 
     fn poll(&mut self) {
@@ -428,6 +592,29 @@ fn required_weather_coordinate(name: &str) -> Result<f64, Box<dyn Error>> {
     value
         .parse::<f64>()
         .map_err(|_| format!("{name} is not a valid finite decimal coordinate").into())
+}
+
+fn configured_location() -> Result<Option<Location>, Box<dyn Error>> {
+    let latitude = std::env::var("WORLDWALL_LOCATION_LATITUDE");
+    let longitude = std::env::var("WORLDWALL_LOCATION_LONGITUDE");
+    match (latitude, longitude) {
+        (Ok(latitude), Ok(longitude)) => {
+            let latitude = latitude
+                .parse::<f64>()
+                .map_err(|_| "WORLDWALL_LOCATION_LATITUDE is not a valid finite decimal")?;
+            let longitude = longitude
+                .parse::<f64>()
+                .map_err(|_| "WORLDWALL_LOCATION_LONGITUDE is not a valid finite decimal")?;
+            Ok(Some(Location::new(latitude, longitude).map_err(
+                |_| "WORLDWALL_LOCATION coordinates are outside the permitted ranges",
+            )?))
+        }
+        (Err(std::env::VarError::NotPresent), Err(std::env::VarError::NotPresent)) => Ok(None),
+        _ => Err(
+            "WORLDWALL_LOCATION_LATITUDE and WORLDWALL_LOCATION_LONGITUDE must be set together"
+                .into(),
+        ),
+    }
 }
 
 struct RegistrySelection {
@@ -573,6 +760,30 @@ fn test_exit_deadline(origin: Instant) -> Option<Instant> {
         .parse::<u64>()
         .ok()?;
     Some(origin + Duration::from_millis(milliseconds))
+}
+
+fn insert_frame_timer(
+    event_loop: &EventLoop<WaylandClient>,
+    interval: Duration,
+) -> Result<RegistrationToken, Box<dyn Error>> {
+    Ok(event_loop
+        .handle()
+        .insert_source(Timer::from_duration(interval), move |_, _, client| {
+            client.mark_timer_fired();
+            TimeoutAction::ToDuration(interval)
+        })?)
+}
+
+fn insert_weather_timer(
+    event_loop: &EventLoop<WaylandClient>,
+    interval: Duration,
+) -> Result<RegistrationToken, Box<dyn Error>> {
+    Ok(event_loop
+        .handle()
+        .insert_source(Timer::from_duration(interval), move |_, _, client| {
+            client.mark_weather_timer_fired();
+            TimeoutAction::ToDuration(interval)
+        })?)
 }
 
 fn configured_fps() -> Fps {
@@ -789,6 +1000,8 @@ struct WaylandClient {
     timer_fired: bool,
     weather_timer_fired: bool,
     reconfigure_generation: u64,
+    power_events: Vec<PowerEvent>,
+    render_paused: bool,
     #[cfg(debug_assertions)]
     withhold_callbacks: bool,
 }
@@ -807,6 +1020,8 @@ impl WaylandClient {
             timer_fired: false,
             weather_timer_fired: false,
             reconfigure_generation: 0,
+            power_events: Vec::new(),
+            render_paused: false,
             #[cfg(debug_assertions)]
             withhold_callbacks: std::env::var_os("WORLDWALL_TEST_WITHHOLD_CALLBACK").is_some(),
         }
@@ -888,6 +1103,30 @@ impl WaylandClient {
     fn mark_weather_timer_fired(&mut self) {
         self.weather_timer_fired = true;
     }
+
+    fn mark_power_event(&mut self, event: PowerEvent) {
+        self.power_events.push(event);
+    }
+
+    fn take_power_events(&mut self) -> Vec<PowerEvent> {
+        std::mem::take(&mut self.power_events)
+    }
+
+    fn pause_rendering(&mut self) {
+        self.render_paused = true;
+        self.render_requested = false;
+        self.frame_pending = false;
+        self.callback_ready = false;
+        self.timer_fired = false;
+        self.weather_timer_fired = false;
+    }
+
+    fn resume_rendering(&mut self) {
+        self.render_paused = false;
+        self.render_requested = self.lifecycle.state() == LifecycleState::Ready;
+        self.frame_pending = false;
+        self.callback_ready = false;
+    }
 }
 
 fn output_sort_key(id: u32, location: (i32, i32), name: Option<&str>) -> (i32, i32, String, u32) {
@@ -951,6 +1190,12 @@ impl CompositorHandler for WaylandClient {
             .as_ref()
             .is_some_and(|layer_surface| layer_surface == surface)
         {
+            if self.render_paused {
+                self.frame_pending = false;
+                self.callback_ready = false;
+                println!("trace frame-callback ignored=true reason=suspended");
+                return;
+            }
             #[cfg(debug_assertions)]
             if self.withhold_callbacks {
                 // Debug-only evidence seam: retain the pending gate even after

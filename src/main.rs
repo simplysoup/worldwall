@@ -2,6 +2,7 @@
 
 mod animation;
 mod environment;
+mod power;
 mod renderer;
 mod scene;
 mod scene_registry;
