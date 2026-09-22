@@ -4,7 +4,17 @@
 //! configure is acknowledged, the retained layer surface is handed to the
 //! renderer for one event-driven bootstrap frame and later resize frames.
 
-use std::{error::Error, fmt};
+use std::{
+    error::Error,
+    fmt,
+    time::{Duration, Instant},
+};
+
+use calloop::{
+    EventLoop,
+    timer::{TimeoutAction, Timer},
+};
+use calloop_wayland_source::WaylandSource;
 
 #[cfg(test)]
 use std::cmp::Ordering;
@@ -12,6 +22,7 @@ use std::cmp::Ordering;
 use crate::{
     renderer::{RenderOutcome, Renderer},
     scene::Scene,
+    scheduler::{Fps, FrameScheduler},
 };
 use smithay_client_toolkit::{
     compositor::{CompositorHandler, CompositorState, FrameCallbackData, Region},
@@ -134,30 +145,110 @@ pub fn run() -> Result<(), Box<dyn Error>> {
         renderer.scene_upload_count()
     );
 
+    let fps = configured_fps();
+    let mut scheduler = FrameScheduler::new(fps);
+    let clock_origin = Instant::now();
+    #[cfg(debug_assertions)]
+    let test_exit_deadline = test_exit_deadline(clock_origin);
+
     // wl_surface.frame is queued before wgpu's present, which performs the
     // actual commit. There is no speculative duplicate wl_surface.commit.
     client.request_frame(&queue_handle);
-    render_once(&connection, &mut client, &mut renderer, extent)?;
+    match render_renderer(&connection, &mut renderer, extent, 0.0)? {
+        RenderOutcome::Presented => {
+            let _ = scheduler.submit_if_due(0);
+            println!(
+                "trace animation-bootstrap fps={} phase-seconds=0 animation-uniform-updates={}",
+                match fps {
+                    Fps::Fifteen => 15,
+                    Fps::Thirty => 30,
+                },
+                renderer.animation_uniform_update_count(),
+            );
+        }
+        RenderOutcome::Timeout => eprintln!("trace gpu-frame skipped reason=timeout bounded=true"),
+        RenderOutcome::Occluded => {
+            eprintln!("trace gpu-frame skipped reason=occluded bounded=true")
+        }
+        RenderOutcome::Reconfigure | RenderOutcome::Fatal => {
+            unreachable!("render_renderer classifies these")
+        }
+    }
 
+    let mut event_loop: EventLoop<WaylandClient> = EventLoop::try_new()?;
+    // The timer is a deadline wakeup, not a frame loop: the scheduler still
+    // requires a compositor callback before every steady-state submission.
+    let interval = Duration::from_nanos(fps.interval_nanos());
+    event_loop
+        .handle()
+        .insert_source(Timer::from_duration(interval), move |_, _, client| {
+            client.mark_timer_fired();
+            TimeoutAction::ToDuration(interval)
+        })?;
+    WaylandSource::new(connection.clone(), event_queue).insert(event_loop.handle())?;
+
+    let mut seen_reconfigure_generation = client.reconfigure_generation;
     loop {
-        match event_queue.blocking_dispatch(&mut client) {
-            Ok(_) if client.should_exit() => break,
-            Ok(_) => {
-                if let Some(extent) = client.take_render_request() {
-                    client.request_frame(&queue_handle);
-                    render_once(&connection, &mut client, &mut renderer, extent)?;
-                }
+        if let Err(error) = event_loop.dispatch(None, &mut client) {
+            client.mark_disconnected();
+            eprintln!("trace compositor-disconnect state=disconnected error={error}");
+            break;
+        }
+        if client.should_exit() {
+            break;
+        }
+        #[cfg(debug_assertions)]
+        if test_exit_deadline.is_some_and(|deadline| Instant::now() >= deadline) {
+            println!("trace test-exit clean=true reason=deadline");
+            break;
+        }
+        let now_ns = clock_origin.elapsed().as_nanos().min(u128::from(u64::MAX)) as u64;
+        if client.callback_ready {
+            scheduler.on_callback();
+            client.callback_ready = false;
+        }
+        if client.reconfigure_generation != seen_reconfigure_generation {
+            scheduler.on_reconfigure();
+            seen_reconfigure_generation = client.reconfigure_generation;
+        }
+        client.timer_fired = false;
+        if client.frame_pending || !scheduler.is_due(now_ns) {
+            continue;
+        }
+        let Some(extent) = client.physical_extent() else {
+            continue;
+        };
+        client.request_frame(&queue_handle);
+        let animation_time_seconds = (clock_origin.elapsed().as_secs_f64() % 1024.0) as f32;
+        match render_renderer(&connection, &mut renderer, extent, animation_time_seconds)? {
+            RenderOutcome::Presented => {
+                let _ = scheduler.submit_if_due(now_ns);
+                println!(
+                    "trace animation-frame fps={} phase-seconds={:.6} scene-upload-count={} animation-uniform-updates={}",
+                    match fps {
+                        Fps::Fifteen => 15,
+                        Fps::Thirty => 30,
+                    },
+                    animation_time_seconds,
+                    renderer.scene_upload_count(),
+                    renderer.animation_uniform_update_count(),
+                );
             }
-            Err(error) => {
-                client.mark_disconnected();
-                eprintln!("trace compositor-disconnect state=disconnected error={error}");
-                break;
+            RenderOutcome::Timeout => {
+                eprintln!("trace gpu-frame skipped reason=timeout bounded=true")
+            }
+            RenderOutcome::Occluded => {
+                eprintln!("trace gpu-frame skipped reason=occluded bounded=true")
+            }
+            RenderOutcome::Reconfigure | RenderOutcome::Fatal => {
+                unreachable!("render_renderer classifies these")
             }
         }
     }
 
     // Local drop order is intentional: renderer (and any acquired GPU frame)
     // first, then the LayerSurface owner, then the remaining protocol state.
+    drop(event_loop);
     drop(renderer);
     drop(layer);
     client.shutdown_owners();
@@ -169,9 +260,12 @@ fn load_scene() -> Result<Scene, Box<dyn Error>> {
     match std::env::var_os("WORLDWALL_SCENE_DIR") {
         Some(directory) => {
             let directory = std::path::PathBuf::from(directory);
-            let scene = crate::scene::load_png_pair(
+            let animation_path = directory.join("animation.toml");
+            let animation_path = animation_path.is_file().then_some(animation_path);
+            let scene = crate::scene::load_png_pair_with_animation(
                 directory.join("scene.png"),
                 directory.join("palette.png"),
+                animation_path,
             )?;
             println!(
                 "trace scene-source=package image={}x{}",
@@ -186,41 +280,50 @@ fn load_scene() -> Result<Scene, Box<dyn Error>> {
     }
 }
 
-fn render_once<'wayland>(
+#[cfg(debug_assertions)]
+fn test_exit_deadline(origin: Instant) -> Option<Instant> {
+    let milliseconds = std::env::var("WORLDWALL_TEST_EXIT_AFTER_MS")
+        .ok()?
+        .parse::<u64>()
+        .ok()?;
+    Some(origin + Duration::from_millis(milliseconds))
+}
+
+fn configured_fps() -> Fps {
+    match std::env::var("WORLDWALL_FPS").ok().as_deref() {
+        Some("15") => Fps::Fifteen,
+        Some("30") | None => Fps::Thirty,
+        Some(value) => {
+            eprintln!("worldwall: unsupported WORLDWALL_FPS={value:?}; using 30");
+            Fps::Thirty
+        }
+    }
+}
+
+fn render_renderer<'wayland>(
     connection: &'wayland Connection,
-    client: &mut WaylandClient,
     renderer: &mut Renderer<'wayland>,
     extent: (u32, u32),
-) -> Result<(), Box<dyn Error>> {
+    animation_time_seconds: f32,
+) -> Result<RenderOutcome, Box<dyn Error>> {
     renderer.reconfigure(extent)?;
-    match renderer.render()? {
-        RenderOutcome::Presented => {}
-        RenderOutcome::Timeout => {
-            eprintln!("trace gpu-frame skipped reason=timeout bounded=true");
-        }
-        RenderOutcome::Occluded => {
-            eprintln!("trace gpu-frame skipped reason=occluded bounded=true");
-        }
+    let outcome = renderer.render_at(animation_time_seconds)?;
+    match outcome {
+        RenderOutcome::Presented | RenderOutcome::Timeout | RenderOutcome::Occluded => Ok(outcome),
         RenderOutcome::Reconfigure => {
             eprintln!("trace gpu-frame recovery=surface-recreate attempt=1");
             renderer.recreate_surface(connection)?;
             renderer.reconfigure(extent)?;
-            match renderer.render()? {
-                RenderOutcome::Presented => {}
-                outcome => {
-                    return Err(format!(
-                        "surface recovery did not present one bounded retry: {outcome:?}"
-                    )
-                    .into());
-                }
+            match renderer.render_at(animation_time_seconds)? {
+                RenderOutcome::Presented => Ok(RenderOutcome::Presented),
+                outcome => Err(format!(
+                    "surface recovery did not present one bounded retry: {outcome:?}"
+                )
+                .into()),
             }
         }
-        RenderOutcome::Fatal => {
-            return Err("fatal wgpu surface validation failure".into());
-        }
+        RenderOutcome::Fatal => Err("fatal wgpu surface validation failure".into()),
     }
-    client.mark_rendered();
-    Ok(())
 }
 
 /// Lifecycle states owned by one selected output.
@@ -395,6 +498,11 @@ struct WaylandClient {
     lifecycle: OutputLifecycle,
     render_requested: bool,
     frame_pending: bool,
+    callback_ready: bool,
+    timer_fired: bool,
+    reconfigure_generation: u64,
+    #[cfg(debug_assertions)]
+    withhold_callbacks: bool,
 }
 
 impl WaylandClient {
@@ -407,6 +515,11 @@ impl WaylandClient {
             lifecycle: OutputLifecycle::new(1, None),
             render_requested: false,
             frame_pending: false,
+            callback_ready: false,
+            timer_fired: false,
+            reconfigure_generation: 0,
+            #[cfg(debug_assertions)]
+            withhold_callbacks: std::env::var_os("WORLDWALL_TEST_WITHHOLD_CALLBACK").is_some(),
         }
     }
 
@@ -453,25 +566,10 @@ impl WaylandClient {
             if let Some(surface) = &self.surface {
                 surface.frame(queue_handle, FrameCallbackData(surface.clone()));
                 self.frame_pending = true;
+                self.callback_ready = false;
                 println!("trace frame-requested before-present=true");
             }
         }
-    }
-
-    fn take_render_request(&mut self) -> Option<(u32, u32)> {
-        if self.render_requested && !self.frame_pending {
-            let extent = self.physical_extent();
-            if extent.is_some() {
-                self.render_requested = false;
-            }
-            extent
-        } else {
-            None
-        }
-    }
-
-    fn mark_rendered(&mut self) {
-        self.render_requested = false;
     }
 
     fn should_exit(&self) -> bool {
@@ -492,6 +590,10 @@ impl WaylandClient {
         self.surface.take();
         self.selected_output.take();
         println!("trace owners-dropped gpu-before-layer-before-selected-output=true");
+    }
+
+    fn mark_timer_fired(&mut self) {
+        self.timer_fired = true;
     }
 }
 
@@ -519,6 +621,7 @@ impl CompositorHandler for WaylandClient {
         {
             self.lifecycle.scale_changed(new_factor);
             self.render_requested = self.lifecycle.state() == LifecycleState::Ready;
+            self.reconfigure_generation = self.reconfigure_generation.saturating_add(1);
             println!(
                 "trace surface-scale factor={} state={:?}",
                 new_factor,
@@ -555,7 +658,18 @@ impl CompositorHandler for WaylandClient {
             .as_ref()
             .is_some_and(|layer_surface| layer_surface == surface)
         {
+            #[cfg(debug_assertions)]
+            if self.withhold_callbacks {
+                // Debug-only evidence seam: retain the pending gate even after
+                // the compositor reports a callback, so deadline wakeups can
+                // prove that no frame is submitted without readiness.
+                self.frame_pending = true;
+                self.callback_ready = false;
+                println!("trace frame-callback withheld=true time={_time}");
+                return;
+            }
             self.frame_pending = false;
+            self.callback_ready = true;
             println!("trace frame-callback ready=true time={_time}");
         }
     }
@@ -668,6 +782,7 @@ impl LayerShellHandler for WaylandClient {
     ) {
         self.lifecycle.configured(serial, configure.new_size);
         self.render_requested = self.lifecycle.state() == LifecycleState::Ready;
+        self.reconfigure_generation = self.reconfigure_generation.saturating_add(1);
         let record = self.lifecycle.last_configure;
         println!(
             "trace configure serial={} suggested={}x{} logical={}x{} physical={:?} state={:?} ack=toolkit-before-handler",

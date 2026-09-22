@@ -11,6 +11,7 @@ use std::{
     path::Path,
 };
 
+use crate::animation::Animation;
 use png::{BitDepth, ColorType, Decoder, Limits};
 
 /// Maximum compressed size accepted for one S03 PNG input.
@@ -33,10 +34,11 @@ pub struct Palette {
     pub rgba: [u8; 256 * 4],
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Scene {
     pub image: IndexedImage,
     pub palette: Palette,
+    pub animation: Animation,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -54,7 +56,21 @@ impl Scene {
     pub fn new(image: IndexedImage, palette: Palette) -> Result<Self, SceneError> {
         validate_image_shape(image.width, image.height, image.indices.len())?;
         validate_palette(&palette.rgba)?;
-        Ok(Self { image, palette })
+        Ok(Self {
+            image,
+            palette,
+            animation: Animation::static_default(),
+        })
+    }
+
+    pub fn with_animation(
+        image: IndexedImage,
+        palette: Palette,
+        animation: Animation,
+    ) -> Result<Self, SceneError> {
+        let mut scene = Self::new(image, palette)?;
+        scene.animation = animation;
+        Ok(scene)
     }
 
     /// A small original synthetic scene used when no external package is
@@ -84,6 +100,7 @@ impl Scene {
                 indices: vec![0, 1, 2, 255, 1, 0],
             },
             palette: Palette { rgba },
+            animation: Animation::static_default(),
         }
     }
 }
@@ -221,17 +238,33 @@ pub fn decode_palette_png(bytes: &[u8]) -> Result<Palette, SceneError> {
 
 /// Load the two S03 PNGs from a package directory. `scene.toml` is intentionally
 /// outside this first fixed-scene slice; S05 owns package metadata and tags.
+#[cfg(test)]
 pub fn load_png_pair(
     scene_path: impl AsRef<Path>,
     palette_path: impl AsRef<Path>,
+) -> Result<Scene, SceneError> {
+    load_png_pair_with_animation(scene_path, palette_path, None::<&Path>)
+}
+
+/// Load the fixed S03 image/palette pair and an optional S04 animation file.
+/// Package containment and scene.toml metadata remain S05 responsibilities.
+pub fn load_png_pair_with_animation(
+    scene_path: impl AsRef<Path>,
+    palette_path: impl AsRef<Path>,
+    animation_path: Option<impl AsRef<Path>>,
 ) -> Result<Scene, SceneError> {
     let scene_path = scene_path.as_ref();
     let palette_path = palette_path.as_ref();
     let scene_bytes = read_bounded(scene_path, "scene")?;
     let palette_bytes = read_bounded(palette_path, "palette")?;
-    Scene::new(
+    let animation = match animation_path {
+        Some(path) => Animation::load(path).map_err(|error| SceneError(error.to_string()))?,
+        None => Animation::static_default(),
+    };
+    Scene::with_animation(
         decode_index_png(&scene_bytes)?,
         decode_palette_png(&palette_bytes)?,
+        animation,
     )
 }
 

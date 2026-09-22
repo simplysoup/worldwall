@@ -10,7 +10,7 @@
 | [S01](stages/01-wayland-surface.md) | Single-output Wayland lifecycle | S00 | accepted | Pi coding agent | [S01 lifecycle increment](evidence/2026-09-21-s01-wayland-lifecycle.md) |
 | [S02](stages/02-gpu-presentation.md) | Safe GPU presentation | S01 | accepted | Pi coding agent | [S02 review and acceptance](evidence/2026-09-21-s02-gpu-presentation.md) |
 | [S03](stages/03-indexed-scene.md) | Static indexed scene / M1 | S02 | accepted | Pi coding agent | [S03 indexed-scene evidence](evidence/2026-09-21-s03-indexed-scene.md) |
-| [S04](stages/04-palette-animation.md) | GPU animation and pacing | S03 | planned | unassigned | None |
+| [S04](stages/04-palette-animation.md) | GPU animation and pacing | S03 | accepted | Pi coding agent | [S04 implementation and acceptance](updates/2026-09-21-s04-palette-animation.md) |
 | [S05](stages/05-scene-registry.md) | Registry and selection / M2 | S04 | planned | unassigned | None |
 | [S06](stages/06-time-astronomy.md) | Civil time and astronomy | S05 | planned | unassigned | None |
 | [S07](stages/07-weather.md) | Optional async weather cache | S06 | planned | unassigned | None |
@@ -19,7 +19,7 @@
 | [S10](stages/10-ipc-config.md) | Local IPC and config transactions | S09 | planned | unassigned | None |
 | [S11](stages/11-release-validation.md) | Recovery, performance, release / M4 | S10 | planned | unassigned | None |
 
-`ready` means dependencies/inputs permit starting work, **not** that approval or delivery is complete. S03 is accepted with ADR-0003 and recorded pure/GPU/live evidence; S04 remains planned pending its stage-local decision.
+`ready` means dependencies/inputs permit starting work, **not** that approval or delivery is complete. S03 is accepted with ADR-0003 and recorded pure/GPU/live evidence; S04 is accepted with ADR-0004 and the recorded implementation evidence.
 
 ## State machine
 

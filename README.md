@@ -2,7 +2,7 @@
 
 A planned GPU-accelerated, weather- and time-aware pixel-art wallpaper engine for Hyprland/Wayland.
 
-**Current state:** S00 foundation, S01 single-output Wayland lifecycle, S02 safe GPU presentation, and S03 indexed-scene/M1 are accepted. The S03 binary path decodes bounded 8-bit index PNGs, uploads `R8Uint` indices and an opaque palette, and presents a synthetic indexed scene on the retained Background layer.
+**Current state:** S00 foundation, S01 single-output Wayland lifecycle, S02 safe GPU presentation, and S03 indexed-scene/M1 are accepted. S04 palette animation and pacing is implemented and accepted under ADR-0004; animated GPU, pacing, bounded live lifecycle, resize, and observational resource-baseline evidence are recorded. The binary path decodes bounded 8-bit index PNGs, uploads `R8Uint` indices and an opaque palette, and can animate an optional package palette on the retained Background layer.
 
 ## Start here
 
@@ -14,7 +14,7 @@ A planned GPU-accelerated, weather- and time-aware pixel-art wallpaper engine fo
 6. [S03 evidence](docs/evidence/2026-09-21-s03-indexed-scene.md) — accepted M1 decoder/resource/live evidence.
 7. [Contributor instructions](AGENTS.md) — how to work safely and leave a useful handoff.
 
-**Next action:** preserve the accepted S03/M1 baseline and close the S04 animation schema/GPU-packing decision before implementing animation. Do not build the entire proposed module tree up front.
+**Next action:** begin S05 registry/selection work while preserving the accepted S04 renderer and pacing boundaries. Do not start weather or civil-time work ahead of the roadmap.
 
 ## Build and run the S03 indexed-scene path
 
@@ -22,7 +22,7 @@ S00 pins Rust 1.94.0 and exact dependency versions in `Cargo.toml`/`Cargo.lock`.
 The default binary connects to the current Wayland session, binds SCTK output
 and layer-shell globals, waits for configure, creates a Vulkan wgpu surface on
 the retained Background layer, and presents one static indexed synthetic scene. Set `WORLDWALL_SOLID_COLOR=1` to use the S02 solid-color diagnostic path.
-Set `WORLDWALL_LAYER_ONLY=1` to retain the S01 layer-only diagnostic path. Set `WORLDWALL_SCENE_DIR=/path/to/package` to load `scene.png` and `palette.png`; without it, the original synthetic reference scene is used.
+Set `WORLDWALL_LAYER_ONLY=1` to retain the S01 layer-only diagnostic path. Set `WORLDWALL_SCENE_DIR=/path/to/package` to load `scene.png` and `palette.png`; add an optional strict S04 `animation.toml` beside them to enable GPU palette effects. Without the directory, the original synthetic reference scene is used. Set `WORLDWALL_FPS=15` or `WORLDWALL_FPS=30` (the default) to select the pacing target.
 
 ```sh
 cargo fmt --check
@@ -31,6 +31,34 @@ cargo test --locked --all-targets --all-features
 cargo build --locked
 cargo run --locked
 ```
+
+The accepted animation schema and GPU layout are recorded in
+[ADR-0004](docs/decisions/ADR-0004-s04-animation.md). The file is optional;
+unknown fields, overlapping groups, non-finite values, and out-of-range
+indices are rejected.
+
+Example `animation.toml`:
+
+```toml
+schema_version = 1
+
+[[group]]
+name = "water"
+effect = "hue_cycle"
+range = [1, 3]
+speed = 0.25
+amplitude = 0.5
+phase = 0.0
+
+[[group]]
+name = "flags"
+effect = "palette_cycle"
+indices = [9, 4, 11]
+speed = 0.1
+amplitude = 1.0
+phase = 0.0
+```
+
 
 Run `cargo run --locked` only in the assigned Hyprland/Wayland session; it stays
 alive until the layer closes, its selected output is removed, or the compositor
