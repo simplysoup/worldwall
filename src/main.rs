@@ -1,5 +1,7 @@
 //! Worldwall executable.
 
+mod renderer;
+mod scene;
 mod wayland_surface;
 
 fn main() {

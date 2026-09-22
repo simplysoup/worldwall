@@ -20,6 +20,7 @@
 ## Operating procedures
 
 - [Development and progress updates](workflows/development.md)
+- [S02 reviewer guide](reviews/s02-reviewer-guide.md)
 - [Roadblocks](workflows/roadblocks.md)
 - [Roadmap changes](workflows/roadmap-changes.md)
 - [Failure modes and best practices](workflows/learning.md)

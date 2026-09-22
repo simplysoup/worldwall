@@ -10,7 +10,7 @@ S01 accepted; live Vulkan host available; pinned raw-handle APIs inspected. Read
 
 ## Deliverables
 
-Shared instance/adapter/device/queue, one dependent presentation surface, capabilities-derived configuration, minimal WGSL pipeline, and safe teardown/reconfigure handling.
+Shared instance/adapter/device/queue, one dependent presentation surface, capabilities-derived configuration, minimal WGSL pipeline, and safe teardown/reconfigure handling. The concrete ownership decision is recorded and accepted in [ADR-0002](../decisions/ADR-0002-s02-wayland-wgpu-ownership.md); the stage's live behavior gates remain separate.
 
 ## Execution
 
@@ -36,4 +36,4 @@ Keep S01's layer-only path as a diagnostic baseline. If adapter/surface compatib
 
 ## Handoff
 
-Provide the safety ADR, actual API matrix, presentation trace, supported format path, error policy, and evidence. S03 should only add resources/shader lookup, not rewrite the ownership boundary.
+Provide the safety ADR, actual API matrix, presentation trace, supported format path, error policy, and evidence. Use the [S02 reviewer guide](../reviews/s02-reviewer-guide.md) for the assigned-host acceptance walkthrough. S03 should only add resources/shader lookup, not rewrite the ownership boundary.

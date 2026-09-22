@@ -1,13 +1,18 @@
-//! Single-output Wayland layer-shell ownership and S01 lifecycle.
+//! Single-output Wayland layer-shell ownership and S02 presentation loop.
 //!
-//! SCTK owns protocol dispatch, output selection, layer configuration, and
-//! teardown. S02 adds the dependent GPU presentation path after this boundary.
+//! SCTK owns protocol dispatch and layer configuration. Once a nonzero
+//! configure is acknowledged, the retained layer surface is handed to the
+//! renderer for one event-driven bootstrap frame and later resize frames.
 
 use std::{error::Error, fmt};
 
 #[cfg(test)]
 use std::cmp::Ordering;
 
+use crate::{
+    renderer::{RenderOutcome, Renderer},
+    scene::Scene,
+};
 use smithay_client_toolkit::{
     compositor::{CompositorHandler, CompositorState, FrameCallbackData, Region},
     delegate_registry,
@@ -97,16 +102,52 @@ pub fn run() -> Result<(), Box<dyn Error>> {
     // The second roundtrip is the explicit configure/ack barrier. No GPU
     // surface is created until SCTK has recorded a nonzero physical extent.
     event_queue.roundtrip(&mut client)?;
-    let _extent = client.physical_extent().ok_or_else(|| {
+    let extent = client.physical_extent().ok_or_else(|| {
         "compositor did not provide a nonzero physical configure extent".to_owned()
     })?;
 
-    // The renderer is intentionally absent in S01. The layer remains alive
-    // until close, output removal, or compositor disconnect is dispatched.
+    // Preserve the accepted S01 layer-only path as an explicit diagnostic
+    // baseline. Normal operation always takes the GPU path below.
+    if std::env::var_os("WORLDWALL_LAYER_ONLY").is_some() {
+        println!("trace diagnostic layer-only=true gpu=false");
+        loop {
+            match event_queue.blocking_dispatch(&mut client) {
+                Ok(_) if client.should_exit() => break,
+                Ok(_) => {}
+                Err(error) => {
+                    client.mark_disconnected();
+                    eprintln!("trace compositor-disconnect state=disconnected error={error}");
+                    break;
+                }
+            }
+        }
+        drop(layer);
+        client.shutdown_owners();
+        println!("trace shutdown state={:?}", client.lifecycle.state());
+        return Ok(());
+    }
+
+    let scene = load_scene()?;
+    let mut renderer = Renderer::new_with_scene(&connection, layer.wl_surface(), extent, &scene)?;
+    println!(
+        "trace scene-upload-count={} steady-state-reuploads=false",
+        renderer.scene_upload_count()
+    );
+
+    // wl_surface.frame is queued before wgpu's present, which performs the
+    // actual commit. There is no speculative duplicate wl_surface.commit.
+    client.request_frame(&queue_handle);
+    render_once(&connection, &mut client, &mut renderer, extent)?;
+
     loop {
         match event_queue.blocking_dispatch(&mut client) {
             Ok(_) if client.should_exit() => break,
-            Ok(_) => {}
+            Ok(_) => {
+                if let Some(extent) = client.take_render_request() {
+                    client.request_frame(&queue_handle);
+                    render_once(&connection, &mut client, &mut renderer, extent)?;
+                }
+            }
             Err(error) => {
                 client.mark_disconnected();
                 eprintln!("trace compositor-disconnect state=disconnected error={error}");
@@ -115,9 +156,70 @@ pub fn run() -> Result<(), Box<dyn Error>> {
         }
     }
 
+    // Local drop order is intentional: renderer (and any acquired GPU frame)
+    // first, then the LayerSurface owner, then the remaining protocol state.
+    drop(renderer);
     drop(layer);
     client.shutdown_owners();
     println!("trace shutdown state={:?}", client.lifecycle.state());
+    Ok(())
+}
+
+fn load_scene() -> Result<Scene, Box<dyn Error>> {
+    match std::env::var_os("WORLDWALL_SCENE_DIR") {
+        Some(directory) => {
+            let directory = std::path::PathBuf::from(directory);
+            let scene = crate::scene::load_png_pair(
+                directory.join("scene.png"),
+                directory.join("palette.png"),
+            )?;
+            println!(
+                "trace scene-source=package image={}x{}",
+                scene.image.width, scene.image.height
+            );
+            Ok(scene)
+        }
+        None => {
+            println!("trace scene-source=synthetic-reference");
+            Ok(Scene::reference())
+        }
+    }
+}
+
+fn render_once<'wayland>(
+    connection: &'wayland Connection,
+    client: &mut WaylandClient,
+    renderer: &mut Renderer<'wayland>,
+    extent: (u32, u32),
+) -> Result<(), Box<dyn Error>> {
+    renderer.reconfigure(extent)?;
+    match renderer.render()? {
+        RenderOutcome::Presented => {}
+        RenderOutcome::Timeout => {
+            eprintln!("trace gpu-frame skipped reason=timeout bounded=true");
+        }
+        RenderOutcome::Occluded => {
+            eprintln!("trace gpu-frame skipped reason=occluded bounded=true");
+        }
+        RenderOutcome::Reconfigure => {
+            eprintln!("trace gpu-frame recovery=surface-recreate attempt=1");
+            renderer.recreate_surface(connection)?;
+            renderer.reconfigure(extent)?;
+            match renderer.render()? {
+                RenderOutcome::Presented => {}
+                outcome => {
+                    return Err(format!(
+                        "surface recovery did not present one bounded retry: {outcome:?}"
+                    )
+                    .into());
+                }
+            }
+        }
+        RenderOutcome::Fatal => {
+            return Err("fatal wgpu surface validation failure".into());
+        }
+    }
+    client.mark_rendered();
     Ok(())
 }
 
