@@ -14,7 +14,7 @@ A planned GPU-accelerated, weather- and time-aware pixel-art wallpaper engine fo
 6. [S03 evidence](docs/evidence/2026-09-21-s03-indexed-scene.md) — accepted M1 decoder/resource/live evidence.
 7. [Contributor instructions](AGENTS.md) — how to work safely and leave a useful handoff.
 
-**Current action:** S05 registry/selection implementation and fixture/error coverage are complete and accepted across `src/scene_registry.rs`, startup loading, the explicit request/token handoff, and the renderer-facing upload/swap seam. It preserves the accepted S04 renderer and pacing boundaries. S06 remains planned pending its time/astronomy policy decision and owner assignment.
+**Current action:** S06 is accepted under [ADR-0005](docs/decisions/ADR-0005-s06-time-astronomy-policy.md). The dependency-free environment slice provides explicit location/UTC-offset inputs, civil calendar conversion, injectable astronomy, polar/unknown states, hemispheric seasons, and boundary tests without changing the accepted S05 selection or renderer contracts. S07 remains planned pending its weather-provider policy.
 
 ## Build and run the S03 indexed-scene path
 

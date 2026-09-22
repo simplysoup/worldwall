@@ -10,7 +10,7 @@ Use [the ADR template](../templates/decision.md) for a durable technical decisio
 | [ADR-0002 — S02 Wayland/wgpu surface ownership](ADR-0002-s02-wayland-wgpu-ownership.md) | accepted | S02 lifetime review | `simplysoup` | Accepted 2026-09-21; remaining live S02 gates stay in the stage evidence |
 | [ADR-0003 — S03 scene decoding, limits, and color path](ADR-0003-s03-scene-decoding-color.md) | accepted | S03 implementation | `simplysoup` | Accepted 2026-09-21; use the recorded limits/path for S03 evidence |
 | [ADR-0004 — S04 palette animation schema and GPU packing](ADR-0004-s04-animation.md) | accepted | S04 implementation | `simplysoup` | Accepted 2026-09-21; finish S04 implementation gates |
-| Dawn/dusk, polar day/night, hemispheric seasons | open | S06 implementation | S06 assignee | Define boundaries and fixtures, including missing location |
+| [ADR-0005 — S06 civil time, astronomy, and seasons policy](ADR-0005-s06-time-astronomy-policy.md) | accepted | S06 implementation | Pi coding agent | Accepted by `simplysoup` 2026-09-22; see S06 evidence |
 | Weather provider, timeout, cache freshness/backoff, location consent | open | S07 implementation | S07 assignee + maintainer | Choose one provider and document mapping/terms/privacy |
 | Power-event adapter and animation suspend timing | open | S08 implementation | S08 assignee | Verify actual signal delivery and missing-service behavior |
 | Supported scaling/device matrix and resource budgets | open | S09 matrix; S11 benchmark start | maintainer | Approve named hardware, workloads, metrics, and thresholds |

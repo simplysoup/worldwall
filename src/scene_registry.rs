@@ -24,6 +24,8 @@ use crate::{
     scene::{self, Scene},
 };
 
+pub use crate::environment::{EnvironmentSnapshot, Season, TimeOfDay, Weather};
+
 pub const SCENE_SCHEMA_VERSION: u32 = 1;
 pub const REGISTRY_SCHEMA_VERSION: u32 = 1;
 const MAX_REGISTRY_BYTES: usize = 1024 * 1024;
@@ -42,52 +44,6 @@ impl fmt::Display for RegistryError {
 }
 
 impl Error for RegistryError {}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Ord, PartialOrd)]
-pub enum TimeOfDay {
-    Dawn,
-    Day,
-    Dusk,
-    Night,
-    Unknown,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Ord, PartialOrd)]
-pub enum Weather {
-    Clear,
-    Cloudy,
-    Rain,
-    Snow,
-    Storm,
-    Fog,
-    Unknown,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Ord, PartialOrd)]
-pub enum Season {
-    Spring,
-    Summer,
-    Autumn,
-    Winter,
-    Unknown,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct EnvironmentSnapshot {
-    pub time: TimeOfDay,
-    pub weather: Weather,
-    pub season: Season,
-}
-
-impl EnvironmentSnapshot {
-    pub const fn unknown() -> Self {
-        Self {
-            time: TimeOfDay::Unknown,
-            weather: Weather::Unknown,
-            season: Season::Unknown,
-        }
-    }
-}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SceneManifest {
@@ -1274,6 +1230,32 @@ phase = 0.25
             registry.select(snapshot, 42, SelectionTrigger::ManualId("missing".into())),
             SelectionResult::Rejected(_)
         ));
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn environment_snapshot_changes_are_inert_until_an_explicit_trigger() {
+        let (root, registry) = loaded_registry();
+        let mut controller = SelectionController::new(registry);
+        let initial = EnvironmentSnapshot::unknown();
+        let startup = controller
+            .request(initial, 1, SelectionTrigger::Startup)
+            .unwrap();
+        controller.mark_active(&startup.id).unwrap();
+        let changed = EnvironmentSnapshot {
+            time: TimeOfDay::Night,
+            weather: Weather::Clear,
+            season: Season::Winter,
+        };
+        assert!(matches!(
+            controller.request(changed, 2, SelectionTrigger::ClockTick),
+            Err(SelectionResult::Ignored)
+        ));
+        assert_eq!(controller.generation(), 1);
+        let reload = controller
+            .request(changed, 2, SelectionTrigger::Reload)
+            .unwrap();
+        assert_eq!(reload.generation, 2);
         std::fs::remove_dir_all(root).unwrap();
     }
 

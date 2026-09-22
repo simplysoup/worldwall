@@ -1,6 +1,7 @@
 //! Worldwall executable.
 
 mod animation;
+mod environment;
 mod renderer;
 mod scene;
 mod scene_registry;
