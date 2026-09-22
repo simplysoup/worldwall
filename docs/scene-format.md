@@ -2,7 +2,7 @@
 
 S03's exact decoder limits and color path are fixed by accepted [ADR-0003](decisions/ADR-0003-s03-scene-decoding-color.md). The broader authoring contract remains proposed where later stages own metadata and animation.
 
-**State:** proposed authoring contract; approve through [ADR-0001](decisions/ADR-0001-delivery-baseline.md), then freeze exact decoding/color rules before S03 and animation packing before S04. No loader or assets exist yet.
+**State:** the S03 decoding/color and S04 animation portions are accepted; S05 now implements the registry and selection subset below. Remaining environment metadata and later-stage policy stays proposed until its owning stage.
 
 ## Scene package
 
@@ -28,6 +28,25 @@ seasons = ["spring", "summer"]
 Example paths are proposed, not supplied files. S05 adds validated tags around the S03 decoding contract. Relative paths must remain within the scene package after canonical resolution; reject traversal and escaping symlinks. Reject duplicate IDs, unsupported versions/tags, missing required files, and excessive dimensions before allocating GPU memory. Enforce documented encoded-size and decoded-size limits established in S03.
 
 Empty/missing tag lists mean wildcard compatibility. The enumerations are `dawn/day/dusk/night`, `clear/cloudy/rain/snow/storm/fog/unknown`, and `spring/summer/autumn/winter/unknown`. Unknown environment values do not pretend to match a specific tag. Registry-level fallback is an explicitly designated, valid scene that works offline; invalid or empty registries produce a clear error, never an unchecked index/panic.
+
+## Registry root (S05 implementation increment)
+
+A registry root contains an explicit `registry.toml` and one directory per
+listed scene. The explicit list avoids accidental package discovery:
+
+```toml
+schema_version = 1
+fallback = "village"
+scenes = ["village", "stream"]
+```
+
+Each listed directory contains `scene.toml` and the package files described
+below. The S05 loader requires a non-empty list and a fallback whose manifest
+and assets validate completely. It canonicalizes the registry, package, and
+asset paths, rejects absolute/parent paths and symlink escapes, and bounds
+manifest/animation reads before decoding. Invalid registry state is rejected
+without replacing a previously active scene. This is a stage-local loader
+interface; it does not add public IPC or environment refresh behavior.
 
 ## Image and palette
 

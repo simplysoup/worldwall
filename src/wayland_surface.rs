@@ -22,6 +22,11 @@ use std::cmp::Ordering;
 use crate::{
     renderer::{RenderOutcome, Renderer},
     scene::Scene,
+    scene_registry::{
+        CommitOutcome, EnvironmentSnapshot, LoadedScene, RegistryError, SceneLoadToken,
+        SceneManifest, SceneRegistry, SceneTransaction, SelectionController, SelectionRequest,
+        SelectionTrigger,
+    },
     scheduler::{Fps, FrameScheduler},
 };
 use smithay_client_toolkit::{
@@ -138,7 +143,11 @@ pub fn run() -> Result<(), Box<dyn Error>> {
         return Ok(());
     }
 
-    let scene = load_scene()?;
+    // Keep the validated selection transaction alive with the renderer. S05
+    // has no public control source yet, so only startup is invoked here; a
+    // later explicit request must use the begin/complete handoff below rather
+    // than letting output/config/weather callbacks select implicitly.
+    let (scene, _registry_selection) = load_scene()?;
     let mut renderer = Renderer::new_with_scene(&connection, layer.wl_surface(), extent, &scene)?;
     println!(
         "trace scene-upload-count={} steady-state-reuploads=false",
@@ -256,8 +265,110 @@ pub fn run() -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-fn load_scene() -> Result<Scene, Box<dyn Error>> {
-    match std::env::var_os("WORLDWALL_SCENE_DIR") {
+struct RegistrySelection {
+    controller: SelectionController,
+    transaction: SceneTransaction,
+}
+
+impl RegistrySelection {
+    fn startup(root: std::path::PathBuf) -> Result<(Self, Scene), Box<dyn Error>> {
+        let registry = SceneRegistry::load(root)?;
+        let mut selection = Self {
+            controller: SelectionController::new(registry),
+            transaction: SceneTransaction::default(),
+        };
+        let request = selection
+            .controller
+            .request(EnvironmentSnapshot::unknown(), 0, SelectionTrigger::Startup)
+            .map_err(|result| format!("startup registry selection failed: {result:?}"))?;
+        let token = selection.transaction.begin(&request);
+        let manifest = selection
+            .controller
+            .registry()
+            .get(&request.id)
+            .ok_or_else(|| format!("validated registry lost selected scene {:?}", request.id))?;
+        let candidate = manifest.load_scene()?;
+        let selected_id = candidate.id.clone();
+        let outcome = selection.transaction.complete(token, Ok(candidate));
+        if !matches!(outcome, CommitOutcome::Applied { .. }) {
+            return Err(format!("startup registry transaction failed: {outcome:?}").into());
+        }
+        selection.controller.mark_active(&selected_id)?;
+        let scene = selection
+            .transaction
+            .active()
+            .ok_or_else(|| "startup registry transaction produced no active scene".to_owned())?
+            .scene
+            .clone();
+        println!(
+            "trace scene-source=registry id={} trigger=startup generation={} rationale={:?} image={}x{}",
+            selected_id,
+            request.generation,
+            request.rationale,
+            scene.image.width,
+            scene.image.height
+        );
+        Ok((selection, scene))
+    }
+
+    /// Begin one explicit request and return a cloneable manifest for loading
+    /// outside the Wayland dispatch thread. The returned token must be paired
+    /// with `complete_loaded`; newer requests make older tokens stale.
+    #[allow(dead_code)]
+    fn begin_explicit_request(
+        &mut self,
+        snapshot: EnvironmentSnapshot,
+        seed: u64,
+        trigger: SelectionTrigger,
+    ) -> Result<(SelectionRequest, SceneLoadToken, SceneManifest), Box<dyn Error>> {
+        let request = self
+            .controller
+            .request(snapshot, seed, trigger)
+            .map_err(|result| format!("explicit scene request was not accepted: {result:?}"))?;
+        let token = self.transaction.begin(&request);
+        let manifest = self
+            .controller
+            .registry()
+            .get(&request.id)
+            .cloned()
+            .ok_or_else(|| format!("validated registry lost requested scene {:?}", request.id))?;
+        Ok((request, token, manifest))
+    }
+
+    /// Finish an explicit request at the renderer-safe boundary. Asset
+    /// decoding is supplied as a completed result, so this method performs no
+    /// filesystem work while Wayland dispatch is active.
+    #[allow(dead_code)]
+    fn complete_loaded<'wayland>(
+        &mut self,
+        renderer: &mut Renderer<'wayland>,
+        request: &SelectionRequest,
+        token: SceneLoadToken,
+        candidate: Result<LoadedScene, RegistryError>,
+    ) -> Result<CommitOutcome, Box<dyn Error>> {
+        let outcome = self
+            .transaction
+            .complete_with_swap(token, candidate, |scene| {
+                renderer.upload_and_swap_scene(scene)
+            });
+        if let CommitOutcome::Applied { ref id, .. } = outcome {
+            self.controller.mark_active(id)?;
+        }
+        println!(
+            "trace scene-selection generation={} id={} trigger={:?} outcome={outcome:?}",
+            request.generation, request.id, request.trigger
+        );
+        Ok(outcome)
+    }
+}
+
+fn load_scene() -> Result<(Scene, Option<RegistrySelection>), Box<dyn Error>> {
+    if let Some(root) = std::env::var_os("WORLDWALL_REGISTRY_DIR") {
+        let (selection, scene) = RegistrySelection::startup(std::path::PathBuf::from(root))?;
+        return Ok((scene, Some(selection)));
+    }
+
+    let scene = match std::env::var_os("WORLDWALL_SCENE_DIR") {
         Some(directory) => {
             let directory = std::path::PathBuf::from(directory);
             let animation_path = directory.join("animation.toml");
@@ -271,13 +382,14 @@ fn load_scene() -> Result<Scene, Box<dyn Error>> {
                 "trace scene-source=package image={}x{}",
                 scene.image.width, scene.image.height
             );
-            Ok(scene)
+            scene
         }
         None => {
             println!("trace scene-source=synthetic-reference");
-            Ok(Scene::reference())
+            Scene::reference()
         }
-    }
+    };
+    Ok((scene, None))
 }
 
 #[cfg(debug_assertions)]

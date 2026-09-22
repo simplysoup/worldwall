@@ -14,7 +14,7 @@ A planned GPU-accelerated, weather- and time-aware pixel-art wallpaper engine fo
 6. [S03 evidence](docs/evidence/2026-09-21-s03-indexed-scene.md) — accepted M1 decoder/resource/live evidence.
 7. [Contributor instructions](AGENTS.md) — how to work safely and leave a useful handoff.
 
-**Next action:** begin S05 registry/selection work while preserving the accepted S04 renderer and pacing boundaries. Do not start weather or civil-time work ahead of the roadmap.
+**Current action:** S05 registry/selection implementation and fixture/error coverage are complete and accepted across `src/scene_registry.rs`, startup loading, the explicit request/token handoff, and the renderer-facing upload/swap seam. It preserves the accepted S04 renderer and pacing boundaries. S06 remains planned pending its time/astronomy policy decision and owner assignment.
 
 ## Build and run the S03 indexed-scene path
 
@@ -22,7 +22,7 @@ S00 pins Rust 1.94.0 and exact dependency versions in `Cargo.toml`/`Cargo.lock`.
 The default binary connects to the current Wayland session, binds SCTK output
 and layer-shell globals, waits for configure, creates a Vulkan wgpu surface on
 the retained Background layer, and presents one static indexed synthetic scene. Set `WORLDWALL_SOLID_COLOR=1` to use the S02 solid-color diagnostic path.
-Set `WORLDWALL_LAYER_ONLY=1` to retain the S01 layer-only diagnostic path. Set `WORLDWALL_SCENE_DIR=/path/to/package` to load `scene.png` and `palette.png`; add an optional strict S04 `animation.toml` beside them to enable GPU palette effects. Without the directory, the original synthetic reference scene is used. Set `WORLDWALL_FPS=15` or `WORLDWALL_FPS=30` (the default) to select the pacing target.
+Set `WORLDWALL_LAYER_ONLY=1` to retain the S01 layer-only diagnostic path. Set `WORLDWALL_REGISTRY_DIR=/path/to/registry-root` to load and validate the explicit S05 registry, perform deterministic startup selection from an unknown snapshot (using the designated fallback when no environmental tag matches), and upload that candidate. The older `WORLDWALL_SCENE_DIR=/path/to/package` path remains available for one fixed package; add an optional strict S04 `animation.toml` beside it to enable GPU palette effects. With neither path, the original synthetic reference scene is used. If both paths are set, the validated registry is selected. Set `WORLDWALL_FPS=15` or `WORLDWALL_FPS=30` (the default) to select the pacing target.
 
 ```sh
 cargo fmt --check

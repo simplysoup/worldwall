@@ -11,7 +11,7 @@
 | [S02](stages/02-gpu-presentation.md) | Safe GPU presentation | S01 | accepted | Pi coding agent | [S02 review and acceptance](evidence/2026-09-21-s02-gpu-presentation.md) |
 | [S03](stages/03-indexed-scene.md) | Static indexed scene / M1 | S02 | accepted | Pi coding agent | [S03 indexed-scene evidence](evidence/2026-09-21-s03-indexed-scene.md) |
 | [S04](stages/04-palette-animation.md) | GPU animation and pacing | S03 | accepted | Pi coding agent | [S04 implementation and acceptance](updates/2026-09-21-s04-palette-animation.md) |
-| [S05](stages/05-scene-registry.md) | Registry and selection / M2 | S04 | planned | unassigned | None |
+| [S05](stages/05-scene-registry.md) | Registry and selection / M2 | S04 | accepted | Pi coding agent | [S05 review submission](evidence/2026-09-22-s05-registry-selection.md) |
 | [S06](stages/06-time-astronomy.md) | Civil time and astronomy | S05 | planned | unassigned | None |
 | [S07](stages/07-weather.md) | Optional async weather cache | S06 | planned | unassigned | None |
 | [S08](stages/08-suspend-resume.md) | Suspend/resume / M3 | S07 | planned | unassigned | None |

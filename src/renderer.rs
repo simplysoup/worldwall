@@ -29,13 +29,10 @@ pub struct Renderer<'wayland> {
     // presentation surface so they are dropped before it.
     pipeline: wgpu::RenderPipeline,
     solid_pipeline: wgpu::RenderPipeline,
-    bind_group: wgpu::BindGroup,
-    index_texture: wgpu::Texture,
-    palette_texture: wgpu::Texture,
-    mapping_buffer: wgpu::Buffer,
-    animation_metadata_buffer: wgpu::Buffer,
-    cycle_indices_buffer: wgpu::Buffer,
-    animation_clock_buffer: wgpu::Buffer,
+    // One complete scene bundle is swapped as a single owner. Uploading a
+    // candidate never mutates this field until every resource and bind group
+    // has been created successfully.
+    scene: UploadedScene,
     source_extent: (u32, u32),
     queue: wgpu::Queue,
     device: wgpu::Device,
@@ -167,16 +164,7 @@ impl<'wayland> Renderer<'wayland> {
         surface.configure(&device, &config);
 
         let uploaded = upload_scene(&device, &queue, scene, extent)?;
-        let UploadedScene {
-            index_texture,
-            palette_texture,
-            bind_group,
-            mapping_buffer,
-            animation_metadata_buffer,
-            cycle_indices_buffer,
-            animation_clock_buffer,
-            indexed_layout,
-        } = uploaded;
+        let indexed_layout = &uploaded.indexed_layout;
         let indexed_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("worldwall-indexed-scene-shader"),
             source: wgpu::ShaderSource::Wgsl(INDEXED_SCENE_SHADER.into()),
@@ -184,7 +172,7 @@ impl<'wayland> Renderer<'wayland> {
         let indexed_pipeline_layout =
             device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                 label: Some("worldwall-indexed-scene-layout"),
-                bind_group_layouts: &[Some(&indexed_layout)],
+                bind_group_layouts: &[Some(indexed_layout)],
                 immediate_size: 0,
             });
         let pipeline = create_pipeline(
@@ -234,13 +222,7 @@ impl<'wayland> Renderer<'wayland> {
             queue,
             pipeline,
             solid_pipeline,
-            bind_group,
-            index_texture,
-            palette_texture,
-            mapping_buffer,
-            animation_metadata_buffer,
-            cycle_indices_buffer,
-            animation_clock_buffer,
+            scene: uploaded,
             source_extent: (scene.image.width, scene.image.height),
             format,
             config,
@@ -268,6 +250,35 @@ impl<'wayland> Renderer<'wayland> {
         Ok(())
     }
 
+    /// Upload a complete candidate and atomically make it active.
+    ///
+    /// This is a stage-local seam until an explicit reload/manual trigger is
+    /// wired by the event dispatcher. Call this between frame submissions,
+    /// after the scene registry has validated and prepared the candidate. The
+    /// old bundle remains active if any resource creation/upload step fails;
+    /// assignment is the only point
+    /// at which the renderer-visible scene changes. wgpu retains resources
+    /// referenced by already-submitted work, so dropping the old bundle here
+    /// is safe and does not require blocking the Wayland thread.
+    #[allow(dead_code)]
+    pub fn upload_and_swap_scene(&mut self, scene: &Scene) -> Result<(), Box<dyn Error>> {
+        let candidate = upload_scene_with_layout(
+            &self.device,
+            &self.queue,
+            scene,
+            (self.config.width, self.config.height),
+            Some(&self.scene.indexed_layout),
+        )?;
+        self.scene = candidate;
+        self.source_extent = (scene.image.width, scene.image.height);
+        self.scene_upload_count = self.scene_upload_count.saturating_add(1);
+        println!(
+            "trace scene-upload swapped=true image={}x{} uploads={}",
+            scene.image.width, scene.image.height, self.scene_upload_count
+        );
+        Ok(())
+    }
+
     /// Render with a bounded monotonic animation phase in seconds.  Only the
     /// 16-byte clock buffer changes per frame; scene textures and metadata are
     /// immutable after upload.
@@ -282,7 +293,7 @@ impl<'wayland> Renderer<'wayland> {
         }
 
         self.queue.write_buffer(
-            &self.animation_clock_buffer,
+            &self.scene.animation_clock_buffer,
             0,
             &animation_clock_bytes(animation_time_seconds),
         );
@@ -325,7 +336,7 @@ impl<'wayland> Renderer<'wayland> {
                 pass.set_pipeline(&self.solid_pipeline);
             } else {
                 pass.set_pipeline(&self.pipeline);
-                pass.set_bind_group(0, &self.bind_group, &[]);
+                pass.set_bind_group(0, &self.scene.bind_group, &[]);
             }
             pass.draw(0..3, 0..1);
         }
@@ -342,10 +353,10 @@ impl<'wayland> Renderer<'wayland> {
         // Keep the texture owners explicit: the bind group references their
         // views, while these fields document the renderer's scene lifetime.
         let _scene_resources_alive = (
-            &self.index_texture,
-            &self.palette_texture,
-            &self.animation_metadata_buffer,
-            &self.cycle_indices_buffer,
+            &self.scene.index_texture,
+            &self.scene.palette_texture,
+            &self.scene.animation_metadata_buffer,
+            &self.scene.cycle_indices_buffer,
         );
         self.scene_upload_count
     }
@@ -356,7 +367,7 @@ impl<'wayland> Renderer<'wayland> {
 
     fn update_mapping(&self, extent: (u32, u32)) {
         self.queue.write_buffer(
-            &self.mapping_buffer,
+            &self.scene.mapping_buffer,
             0,
             &mapping_bytes(self.source_extent, extent),
         );
@@ -423,6 +434,7 @@ fn animation_clock_bytes(seconds: f32) -> [u8; 16] {
     bytes
 }
 
+#[derive(Debug)]
 struct UploadedScene {
     index_texture: wgpu::Texture,
     palette_texture: wgpu::Texture,
@@ -439,6 +451,16 @@ fn upload_scene(
     queue: &wgpu::Queue,
     scene: &Scene,
     output_extent: (u32, u32),
+) -> Result<UploadedScene, Box<dyn Error>> {
+    upload_scene_with_layout(device, queue, scene, output_extent, None)
+}
+
+fn upload_scene_with_layout(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    scene: &Scene,
+    output_extent: (u32, u32),
+    existing_layout: Option<&wgpu::BindGroupLayout>,
 ) -> Result<UploadedScene, Box<dyn Error>> {
     // Keep the CPU reference mapping beside the shader mapping. Numeric
     // vectors in scene tests exercise this same centered-cover contract.
@@ -558,72 +580,75 @@ fn upload_scene(
     });
     queue.write_buffer(&animation_clock_buffer, 0, &animation_clock_bytes(0.0));
 
-    // The layout is created here so the bind group and pipeline share the same
-    // concrete layout object for this upload.
-    let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-        label: Some("worldwall-indexed-bindings-upload"),
-        entries: &[
-            wgpu::BindGroupLayoutEntry {
-                binding: 0,
-                visibility: wgpu::ShaderStages::FRAGMENT,
-                ty: wgpu::BindingType::Texture {
-                    sample_type: wgpu::TextureSampleType::Uint,
-                    view_dimension: wgpu::TextureViewDimension::D2,
-                    multisampled: false,
+    // Reuse the renderer's layout during a replacement. A standalone upload
+    // creates its own layout so the readback tests can construct a pipeline
+    // from the returned bundle.
+    let layout = existing_layout.cloned().unwrap_or_else(|| {
+        device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("worldwall-indexed-bindings-upload"),
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Uint,
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
                 },
-                count: None,
-            },
-            wgpu::BindGroupLayoutEntry {
-                binding: 1,
-                visibility: wgpu::ShaderStages::FRAGMENT,
-                ty: wgpu::BindingType::Texture {
-                    sample_type: wgpu::TextureSampleType::Float { filterable: false },
-                    view_dimension: wgpu::TextureViewDimension::D2,
-                    multisampled: false,
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: false },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
                 },
-                count: None,
-            },
-            wgpu::BindGroupLayoutEntry {
-                binding: 2,
-                visibility: wgpu::ShaderStages::FRAGMENT,
-                ty: wgpu::BindingType::Buffer {
-                    ty: wgpu::BufferBindingType::Uniform,
-                    has_dynamic_offset: false,
-                    min_binding_size: NonZeroU64::new(16),
+                wgpu::BindGroupLayoutEntry {
+                    binding: 2,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: NonZeroU64::new(16),
+                    },
+                    count: None,
                 },
-                count: None,
-            },
-            wgpu::BindGroupLayoutEntry {
-                binding: 3,
-                visibility: wgpu::ShaderStages::FRAGMENT,
-                ty: wgpu::BindingType::Buffer {
-                    ty: wgpu::BufferBindingType::Storage { read_only: true },
-                    has_dynamic_offset: false,
-                    min_binding_size: NonZeroU64::new(256 * 32),
+                wgpu::BindGroupLayoutEntry {
+                    binding: 3,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: NonZeroU64::new(256 * 32),
+                    },
+                    count: None,
                 },
-                count: None,
-            },
-            wgpu::BindGroupLayoutEntry {
-                binding: 4,
-                visibility: wgpu::ShaderStages::FRAGMENT,
-                ty: wgpu::BindingType::Buffer {
-                    ty: wgpu::BufferBindingType::Storage { read_only: true },
-                    has_dynamic_offset: false,
-                    min_binding_size: NonZeroU64::new(256 * 4),
+                wgpu::BindGroupLayoutEntry {
+                    binding: 4,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: NonZeroU64::new(256 * 4),
+                    },
+                    count: None,
                 },
-                count: None,
-            },
-            wgpu::BindGroupLayoutEntry {
-                binding: 5,
-                visibility: wgpu::ShaderStages::FRAGMENT,
-                ty: wgpu::BindingType::Buffer {
-                    ty: wgpu::BufferBindingType::Uniform,
-                    has_dynamic_offset: false,
-                    min_binding_size: NonZeroU64::new(16),
+                wgpu::BindGroupLayoutEntry {
+                    binding: 5,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: NonZeroU64::new(16),
+                    },
+                    count: None,
                 },
-                count: None,
-            },
-        ],
+            ],
+        })
     });
     let index_view = index_texture.create_view(&wgpu::TextureViewDescriptor::default());
     let palette_view = palette_texture.create_view(&wgpu::TextureViewDescriptor::default());

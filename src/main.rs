@@ -3,6 +3,7 @@
 mod animation;
 mod renderer;
 mod scene;
+mod scene_registry;
 mod scheduler;
 mod wayland_surface;
 
