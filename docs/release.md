@@ -93,6 +93,13 @@ and retained evidence described in [validation](validation.md).
 Scene registries and scene packages are supplied separately. Art assets are not
 bundled by this project; verify provenance and license terms before use. Weather
 is disabled unless the operator explicitly configures the Open-Meteo provider
-and coordinates. Coordinates are sent only to that provider over HTTPS and are
-not logged or cached. Host timezone/location inference, telemetry, and automatic
-geolocation are not performed.
+and coordinates. Enabling it makes the operator the Open-Meteo API consumer:
+the free API is for non-commercial use only, is rate-limited by Open-Meteo
+(currently 10,000 calls/day, 5,000/hour, 600/minute), and its data is used
+under the CC-BY 4.0 licence, which requires attribution to Open-Meteo. See
+[Open-Meteo's terms](https://open-meteo.com/en/terms) for the current text;
+Worldwall's fixed polling cadence requests at most one update per 900 seconds
+(about 96 calls/day) and never sends coordinates anywhere else. Coordinates are
+sent only to that provider over HTTPS and are not logged or cached. Host
+timezone/location inference, telemetry, and automatic geolocation are not
+performed.
