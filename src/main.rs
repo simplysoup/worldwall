@@ -1,7 +1,9 @@
 //! Worldwall executable.
 
 mod animation;
+mod config;
 mod environment;
+mod ipc;
 mod power;
 mod renderer;
 mod scene;

@@ -22,11 +22,15 @@ use calloop_wayland_source::WaylandSource;
 #[cfg(test)]
 use std::cmp::Ordering;
 
+use serde_json::{Value, json};
+
 use crate::{
+    config::AppConfig,
     environment::{
         EnvironmentProvider, Location, NoaaAstronomy, SystemWallClock, UtcOffsetSchedule,
         WallClock, Weather,
     },
+    ipc::{self, Command, ControlRequest, IpcServer},
     power::{PausedAnimationClock, PowerAction, PowerEvent, PowerEventSource, PowerStateMachine},
     renderer::{AllocationCounters, OutputRenderer, RenderOutcome, Renderer, SharedRenderer},
     scene::Scene,
@@ -36,7 +40,10 @@ use crate::{
         SelectionTrigger,
     },
     scheduler::{Fps, FrameScheduler},
-    weather::{CacheStore, OpenMeteoProvider, RefreshKind, WeatherConfig, WeatherService},
+    weather::{
+        CacheStore, Freshness, OpenMeteoProvider, RefreshKind, WeatherConfig, WeatherService,
+        WeatherState,
+    },
 };
 use smithay_client_toolkit::{
     compositor::{CompositorHandler, CompositorState, FrameCallbackData, Region},
@@ -168,14 +175,18 @@ pub fn run() -> Result<(), Box<dyn Error>> {
     // has no public control source yet, so only startup is invoked here; a
     // later explicit request must use the begin/complete handoff below rather
     // than letting output/config/weather callbacks select implicitly.
-    let (scene, mut registry_selection) = load_scene(civil_time.snapshot(weather.weather()))?;
+    let config = AppConfig::from_environment()?;
+    let (scene, mut registry_selection) = load_scene(
+        civil_time.snapshot(weather.weather()),
+        config.registry_dir.as_deref(),
+    )?;
     let mut renderer = Renderer::new_with_scene(&connection, layer.wl_surface(), extent, &scene)?;
     println!(
         "trace scene-upload-count={} steady-state-reuploads=false",
         renderer.scene_upload_count()
     );
 
-    let fps = configured_fps();
+    let fps = config.fps;
     let mut scheduler = FrameScheduler::new(fps);
     let clock_origin = Instant::now();
     let mut animation_clock = PausedAnimationClock::new(0);
@@ -593,6 +604,39 @@ impl WeatherRuntime {
             println!("trace weather-cache epoch={epoch} state={state:?}");
         }
     }
+
+    fn status_value(&self) -> Value {
+        let Some(service) = &self.service else {
+            return json!({"state": "disabled", "freshness": "unknown", "cache_epoch": 0});
+        };
+        let Ok(now_utc) = self.clock.now_utc_seconds() else {
+            return json!({"state": "error", "freshness": "unknown", "cache_epoch": service.cache_epoch(), "error": "clock unavailable"});
+        };
+        let snapshot = service.snapshot(now_utc);
+        let state = match snapshot.state {
+            WeatherState::Disabled => "disabled",
+            WeatherState::Unknown => "unknown",
+            WeatherState::Fresh => "fresh",
+            WeatherState::Stale => "stale",
+            WeatherState::Error => "error",
+        };
+        let freshness = match snapshot.freshness {
+            Freshness::Unknown => "unknown",
+            Freshness::Fresh => "fresh",
+            Freshness::Stale => "stale",
+        };
+        let mut value = json!({
+            "state": state,
+            "freshness": freshness,
+            "cache_epoch": service.cache_epoch(),
+        });
+        if let Some(error) = snapshot.last_error {
+            // Provider/cache diagnostics are intentionally bounded and never
+            // include the configured coordinates.
+            value["error"] = Value::String(error);
+        }
+        value
+    }
 }
 
 fn required_weather_coordinate(name: &str) -> Result<f64, Box<dyn Error>> {
@@ -632,15 +676,19 @@ struct RegistrySelection {
 }
 
 impl RegistrySelection {
+    fn from_registry(registry: SceneRegistry) -> Self {
+        Self {
+            controller: SelectionController::new(registry),
+            transaction: SceneTransaction::default(),
+        }
+    }
+
     fn startup(
         root: std::path::PathBuf,
         snapshot: EnvironmentSnapshot,
     ) -> Result<(Self, Scene), Box<dyn Error>> {
         let registry = SceneRegistry::load(root)?;
-        let mut selection = Self {
-            controller: SelectionController::new(registry),
-            transaction: SceneTransaction::default(),
-        };
+        let mut selection = Self::from_registry(registry);
         let request = selection
             .controller
             .request(snapshot, 0, SelectionTrigger::Startup)
@@ -729,6 +777,14 @@ impl RegistrySelection {
     /// the device and textures authoritative, then rebuilds only the output
     /// bind groups so old per-output dimensions cannot survive the swap.
     #[allow(dead_code)]
+    fn replace_registry(&mut self, registry: SceneRegistry) {
+        self.controller.replace_registry(registry);
+    }
+
+    fn disable_registry(&mut self) {
+        self.controller.replace_registry(SceneRegistry::empty());
+    }
+
     fn complete_loaded_shared<'wayland>(
         &mut self,
         renderer: &mut SharedRenderer,
@@ -758,8 +814,9 @@ impl RegistrySelection {
 
 fn load_scene(
     snapshot: EnvironmentSnapshot,
+    registry_dir: Option<&std::path::Path>,
 ) -> Result<(Scene, Option<RegistrySelection>), Box<dyn Error>> {
-    if let Some(root) = std::env::var_os("WORLDWALL_REGISTRY_DIR") {
+    if let Some(root) = registry_dir {
         let (selection, scene) =
             RegistrySelection::startup(std::path::PathBuf::from(root), snapshot)?;
         return Ok((scene, Some(selection)));
@@ -823,17 +880,6 @@ fn insert_weather_timer(
             client.mark_weather_timer_fired();
             TimeoutAction::ToDuration(interval)
         })?)
-}
-
-fn configured_fps() -> Fps {
-    match std::env::var("WORLDWALL_FPS").ok().as_deref() {
-        Some("15") => Fps::Fifteen,
-        Some("30") | None => Fps::Thirty,
-        Some(value) => {
-            eprintln!("worldwall: unsupported WORLDWALL_FPS={value:?}; using 30");
-            Fps::Thirty
-        }
-    }
 }
 
 fn render_renderer<'wayland>(
@@ -1473,6 +1519,7 @@ struct MultiWaylandClient {
     timer_fired: bool,
     power_events: Vec<PowerEvent>,
     weather_timer_fired: bool,
+    ipc_requests: Vec<ControlRequest>,
     render_paused: bool,
     /// Outputs that failed capability validation remain degraded until their
     /// Wayland identity is removed or rediscovered. This prevents a missing
@@ -1498,6 +1545,7 @@ impl MultiWaylandClient {
             timer_fired: false,
             power_events: Vec::new(),
             weather_timer_fired: false,
+            ipc_requests: Vec::new(),
             render_paused: false,
             degraded_outputs: BTreeSet::new(),
             fractional_globals,
@@ -1699,6 +1747,14 @@ impl MultiWaylandClient {
 
     fn mark_weather_timer_fired(&mut self) {
         self.weather_timer_fired = true;
+    }
+
+    fn mark_ipc_request(&mut self, request: ControlRequest) {
+        self.ipc_requests.push(request);
+    }
+
+    fn take_ipc_requests(&mut self) -> Vec<ControlRequest> {
+        std::mem::take(&mut self.ipc_requests)
     }
 
     fn take_power_events(&mut self) -> Vec<PowerEvent> {
@@ -2187,11 +2243,228 @@ fn render_multi_presenter<'wayland>(
     }
 }
 
+struct DiagnosticRateLimiter {
+    last_emitted: BTreeMap<String, (Instant, u32)>,
+    interval: Duration,
+}
+
+impl DiagnosticRateLimiter {
+    fn new() -> Self {
+        Self {
+            last_emitted: BTreeMap::new(),
+            interval: Duration::from_secs(1),
+        }
+    }
+
+    fn record(&mut self, code: &str) {
+        let now = Instant::now();
+        let Some(entry) = self.last_emitted.get_mut(code) else {
+            eprintln!("trace ipc-diagnostic code={} suppressed=0", code);
+            self.last_emitted.insert(code.to_owned(), (now, 0));
+            return;
+        };
+        if now.duration_since(entry.0) >= self.interval {
+            eprintln!("trace ipc-diagnostic code={} suppressed={}", code, entry.1);
+            *entry = (now, 0);
+        } else {
+            entry.1 = entry.1.saturating_add(1);
+        }
+    }
+}
+
+fn record_ipc_failure(diagnostics: &mut DiagnosticRateLimiter, response: &Value) {
+    if response.get("ok").and_then(Value::as_bool) == Some(false)
+        && let Some(code) = response
+            .get("error")
+            .and_then(Value::as_object)
+            .and_then(|error| error.get("code"))
+            .and_then(Value::as_str)
+    {
+        diagnostics.record(code);
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn handle_ipc_requests<'wayland>(
+    client: &mut MultiWaylandClient,
+    shared: &mut Option<SharedRenderer>,
+    presenters: &mut BTreeMap<u32, OutputRenderer<'wayland>>,
+    selection: &mut Option<RegistrySelection>,
+    config: &mut AppConfig,
+    schedulers: &mut BTreeMap<u32, FrameScheduler>,
+    civil_time: &CivilTimeRuntime,
+    weather: &WeatherRuntime,
+    diagnostics: &mut DiagnosticRateLimiter,
+) -> Option<Fps> {
+    let mut applied_fps = None;
+    for request in client.take_ipc_requests() {
+        let command_name = match &request.command {
+            Command::Status => "status",
+            Command::Reload => "reload",
+            Command::ReloadConfig => "reload-config",
+            Command::Scene(_) => "scene",
+            Command::Next => "next",
+            Command::Weather => "weather",
+        };
+        let command = request.command.clone();
+        let response = match command {
+            Command::Status => {
+                let outputs = client.ready_output_ids();
+                ipc::success_response(
+                    command_name,
+                    json!({
+                        "outputs": outputs,
+                        "scene": selection
+                            .as_ref()
+                            .and_then(|value| value.transaction.active().map(|scene| scene.id.as_str()))
+                            .or_else(|| selection.as_ref().and_then(|value| value.controller.active_id()))
+                            .unwrap_or("synthetic-reference"),
+                        "weather": weather.status_value(),
+                        "fps": match config.fps { Fps::Fifteen => 15, Fps::Thirty => 30 },
+                        "backend": "vulkan",
+                        "degraded_outputs": client.degraded_outputs.iter().copied().collect::<Vec<_>>(),
+                        "selection_generation": selection.as_ref().map_or(0, |value| value.controller.generation()),
+                    }),
+                )
+            }
+            Command::Weather => ipc::success_response(command_name, weather.status_value()),
+            Command::ReloadConfig => match config.reload_path().and_then(AppConfig::load) {
+                Ok(candidate) => {
+                    let registry_changed = candidate.registry_dir != config.registry_dir;
+                    let replacement = candidate
+                        .registry_dir
+                        .as_ref()
+                        .map(SceneRegistry::load)
+                        .transpose();
+                    match replacement {
+                        Ok(replacement) if registry_changed => {
+                            match replacement {
+                                Some(registry) => {
+                                    if let Some(active) = selection.as_mut() {
+                                        active.replace_registry(registry);
+                                    } else {
+                                        *selection =
+                                            Some(RegistrySelection::from_registry(registry));
+                                    }
+                                }
+                                None => {
+                                    // Keep the resident transaction alive while
+                                    // making future registry selections
+                                    // unavailable. This preserves status for
+                                    // the current scene across a path change.
+                                    if let Some(active) = selection.as_mut() {
+                                        active.disable_registry();
+                                    }
+                                }
+                            }
+                            for scheduler in schedulers.values_mut() {
+                                scheduler.set_fps(candidate.fps, 0);
+                            }
+                            let fps = match candidate.fps {
+                                Fps::Fifteen => 15,
+                                Fps::Thirty => 30,
+                            };
+                            *config = candidate;
+                            applied_fps = Some(config.fps);
+                            ipc::success_response(
+                                command_name,
+                                json!({"applied": true, "reselected": false, "fps": fps}),
+                            )
+                        }
+                        Ok(_) => {
+                            for scheduler in schedulers.values_mut() {
+                                scheduler.set_fps(candidate.fps, 0);
+                            }
+                            let fps = match candidate.fps {
+                                Fps::Fifteen => 15,
+                                Fps::Thirty => 30,
+                            };
+                            *config = candidate;
+                            applied_fps = Some(config.fps);
+                            ipc::success_response(
+                                command_name,
+                                json!({"applied": true, "reselected": false, "fps": fps}),
+                            )
+                        }
+                        Err(error) => ipc::error_response("invalid_config", error.to_string()),
+                    }
+                }
+                Err(error) => ipc::error_response("invalid_config", error.to_string()),
+            },
+            trigger => {
+                let trigger = match trigger {
+                    Command::Reload => SelectionTrigger::Reload,
+                    Command::Next => SelectionTrigger::Next,
+                    Command::Scene(id) => SelectionTrigger::ManualId(id),
+                    _ => unreachable!(),
+                };
+                match (selection.as_mut(), shared.as_mut()) {
+                    (None, _) => ipc::error_response(
+                        "selection_unavailable",
+                        "the active scene has no validated registry selection",
+                    ),
+                    (_, None) => ipc::error_response(
+                        "outputs_unavailable",
+                        "no configured output is available",
+                    ),
+                    (Some(active), Some(_renderer)) if active.controller.registry().is_empty() => {
+                        ipc::error_response(
+                            "selection_unavailable",
+                            "the active scene has no validated registry selection",
+                        )
+                    }
+                    (Some(active), Some(renderer)) => {
+                        let snapshot = civil_time.snapshot(weather.weather());
+                        let seed = u64::from(civil_time.seconds());
+                        match active.begin_explicit_request(snapshot, seed, trigger) {
+                            Ok((request, token, manifest)) => {
+                                let candidate = manifest.load_scene();
+                                match active.complete_loaded_shared(
+                                    renderer, presenters, &request, token, candidate,
+                                ) {
+                                    Ok(outcome) => match outcome {
+                                        CommitOutcome::Applied { ref id, .. }
+                                        | CommitOutcome::Unchanged { ref id, .. } => {
+                                            ipc::success_response(
+                                                command_name,
+                                                json!({"applied": true, "scene": id, "outcome": format!("{outcome:?}")}),
+                                            )
+                                        }
+                                        CommitOutcome::Failed { ref reason, .. } => {
+                                            ipc::error_response("selection_failed", reason.clone())
+                                        }
+                                        CommitOutcome::Stale { .. } => ipc::error_response(
+                                            "stale_request",
+                                            "selection generation is stale",
+                                        ),
+                                    },
+                                    Err(error) => {
+                                        ipc::error_response("selection_failed", error.to_string())
+                                    }
+                                }
+                            }
+                            Err(error) => {
+                                ipc::error_response("selection_rejected", error.to_string())
+                            }
+                        }
+                    }
+                }
+            }
+        };
+        record_ipc_failure(diagnostics, &response);
+        request.respond(response);
+    }
+    applied_fps
+}
+
 #[allow(clippy::too_many_arguments)]
 fn run_multi_presenting<'wayland>(
     event_loop: &mut EventLoop<MultiWaylandClient>,
     client: &mut MultiWaylandClient,
     mut presenters: BTreeMap<u32, OutputRenderer<'wayland>>,
+    shared: &mut Option<SharedRenderer>,
+    selection: &mut Option<RegistrySelection>,
+    config: &mut AppConfig,
     connection: &'wayland Connection,
     queue_handle: &QueueHandle<MultiWaylandClient>,
     layers: &'wayland [(u32, LayerSurface)],
@@ -2208,7 +2481,10 @@ fn run_multi_presenting<'wayland>(
     shared_scene_uploads: u64,
     interval: Duration,
     #[cfg(debug_assertions)] test_exit_deadline: Option<Instant>,
+    diagnostics: &mut DiagnosticRateLimiter,
 ) -> Result<bool, Box<dyn Error>> {
+    let mut fps = fps;
+    let mut interval = interval;
     // Bootstrap each newly-created presenter only after its callback request
     // is queued. The next steady-state draw is callback/deadline gated below.
     if !client.render_paused {
@@ -2270,6 +2546,29 @@ fn run_multi_presenting<'wayland>(
                     println!("trace power-service state=available resume-support=true");
                 }
                 PowerAction::Ignored => {}
+            }
+        }
+        if let Some(applied_fps) = handle_ipc_requests(
+            client,
+            shared,
+            &mut presenters,
+            selection,
+            config,
+            schedulers,
+            civil_time,
+            weather,
+            diagnostics,
+        ) {
+            if applied_fps != fps {
+                fps = applied_fps;
+                interval = Duration::from_nanos(fps.interval_nanos());
+                if let Some(token) = frame_timer.take() {
+                    event_loop.handle().remove(token);
+                }
+                if !client.render_paused && !presenters.is_empty() {
+                    *frame_timer = Some(insert_multi_frame_timer(event_loop, interval)?);
+                }
+                println!("trace config-fps-reconfigured fps={:?}", fps);
             }
         }
         if let Some(generation) = power.begin_resume_if_ready(!client.ready_output_ids().is_empty())
@@ -2384,7 +2683,6 @@ fn run_multi_presenting<'wayland>(
                 RenderOutcome::Reconfigure | RenderOutcome::Fatal => {}
             }
         }
-        let _ = interval;
     }
 }
 
@@ -2393,6 +2691,8 @@ fn run_multi_session<'owners>(
     event_loop: &mut EventLoop<MultiWaylandClient>,
     client: &mut MultiWaylandClient,
     shared: &mut Option<SharedRenderer>,
+    selection: &mut Option<RegistrySelection>,
+    config: &mut AppConfig,
     connection: &'owners Connection,
     queue_handle: &QueueHandle<MultiWaylandClient>,
     compositor: &CompositorState,
@@ -2406,13 +2706,16 @@ fn run_multi_session<'owners>(
     clock_origin: Instant,
     animation_clock: &mut PausedAnimationClock,
     power: &mut PowerStateMachine,
-    fps: Fps,
+    _fps: Fps,
     frame_timer: &mut Option<RegistrationToken>,
     weather_timer: &mut Option<RegistrationToken>,
-    interval: Duration,
+    _interval: Duration,
     #[cfg(debug_assertions)] test_exit_deadline: Option<Instant>,
 ) -> Result<(), Box<dyn Error>> {
+    let mut diagnostics = DiagnosticRateLimiter::new();
     loop {
+        let configured_fps = config.fps;
+        let configured_interval = Duration::from_nanos(configured_fps.interval_nanos());
         if shared.is_none() {
             if let Some(first_ready) = client.ready_output_ids().into_iter().next() {
                 let first_layer = layers
@@ -2440,13 +2743,16 @@ fn run_multi_session<'owners>(
             }
             println!("trace outputs-zero frame-wakeup=false dispatch-idle=true");
         } else if frame_timer.is_none() {
-            *frame_timer = Some(insert_multi_frame_timer(event_loop, interval)?);
+            *frame_timer = Some(insert_multi_frame_timer(event_loop, configured_interval)?);
         }
         client.clear_topology_dirty();
         let topology_changed = run_multi_presenting(
             event_loop,
             client,
             presenters,
+            shared,
+            selection,
+            config,
             connection,
             queue_handle,
             layers,
@@ -2459,13 +2765,14 @@ fn run_multi_session<'owners>(
             power,
             frame_timer,
             weather_timer,
-            fps,
+            configured_fps,
             shared
                 .as_ref()
                 .map_or(0, SharedRenderer::scene_upload_count),
-            interval,
+            configured_interval,
             #[cfg(debug_assertions)]
             test_exit_deadline,
+            &mut diagnostics,
         )?;
         if !topology_changed {
             return Ok(());
@@ -2484,7 +2791,7 @@ fn run_multi_session<'owners>(
         for id in client.output_ids() {
             schedulers
                 .entry(id)
-                .or_insert_with(|| FrameScheduler::new(fps));
+                .or_insert_with(|| FrameScheduler::new(configured_fps));
             seen_generations.entry(id).or_insert(0);
         }
         continue;
@@ -2532,12 +2839,16 @@ pub fn run_multi() -> Result<(), Box<dyn Error>> {
     event_queue.roundtrip(&mut client)?;
     let civil_time = CivilTimeRuntime::startup()?;
     let mut weather = WeatherRuntime::startup()?;
-    let (scene, _selection) = load_scene(civil_time.snapshot(weather.weather()))?;
+    let mut config = AppConfig::from_environment()?;
+    let (scene, mut selection) = load_scene(
+        civil_time.snapshot(weather.weather()),
+        config.registry_dir.as_deref(),
+    )?;
     // A compositor may start with no complete outputs. Keep dispatching with
     // no timer and create the shared device only when the first layer reaches
     // a nonzero configure; a later output arrival reuses this device/scene.
     let mut shared: Option<SharedRenderer> = None;
-    let fps = configured_fps();
+    let fps = config.fps;
     let mut schedulers = client
         .output_ids()
         .map(|id| (id, FrameScheduler::new(fps)))
@@ -2553,6 +2864,21 @@ pub fn run_multi() -> Result<(), Box<dyn Error>> {
     let mut event_loop: EventLoop<MultiWaylandClient> = EventLoop::try_new()?;
     let interval = Duration::from_nanos(fps.interval_nanos());
     WaylandSource::new(connection.clone(), event_queue).insert(event_loop.handle())?;
+    let ipc_server = match IpcServer::start_default() {
+        Ok((server, source)) => {
+            event_loop
+                .handle()
+                .insert_source(source, |event, _, client| match event {
+                    ChannelEvent::Msg(request) => client.mark_ipc_request(request),
+                    ChannelEvent::Closed => {}
+                })?;
+            Some(server)
+        }
+        Err(error) => {
+            eprintln!("trace ipc state=degraded reason={error}");
+            None
+        }
+    };
     let power_events = PowerEventSource::start().into_event_source();
     event_loop
         .handle()
@@ -2572,6 +2898,8 @@ pub fn run_multi() -> Result<(), Box<dyn Error>> {
         &mut event_loop,
         &mut client,
         &mut shared,
+        &mut selection,
+        &mut config,
         &connection,
         &queue_handle,
         &compositor,
@@ -2595,6 +2923,7 @@ pub fn run_multi() -> Result<(), Box<dyn Error>> {
 
     drop(event_loop);
     drop(shared);
+    drop(ipc_server);
     layers.clear();
     client.outputs.clear();
     println!("trace shutdown multi-output=true");
@@ -2742,5 +3071,17 @@ mod tests {
         let second = output_sort_key(3, (0, 0), Some("DP-1"));
 
         assert_eq!(first.cmp(&second), Ordering::Greater);
+    }
+
+    #[test]
+    fn ipc_diagnostics_rate_limit_releases_suppressed_count() {
+        let mut limiter = DiagnosticRateLimiter::new();
+        limiter.record("selection_failed");
+        limiter.record("selection_failed");
+        assert_eq!(limiter.last_emitted.get("selection_failed").unwrap().1, 1);
+        limiter.last_emitted.get_mut("selection_failed").unwrap().0 =
+            Instant::now() - Duration::from_secs(2);
+        limiter.record("selection_failed");
+        assert_eq!(limiter.last_emitted.get("selection_failed").unwrap().1, 0);
     }
 }

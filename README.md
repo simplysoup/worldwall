@@ -72,7 +72,24 @@ phase = 0.0
 
 Run `cargo run --locked` only in the assigned Hyprland/Wayland session; it stays
 alive until the layer closes, its selected output is removed, or the compositor
-disconnects. For repeatable lifecycle testing without changing the outer desktop
+disconnects. S10 also builds `worldwallctl`, which controls a running instance
+through the same-user `$XDG_RUNTIME_DIR/worldwall.sock` socket:
+
+```sh
+worldwallctl status
+worldwallctl reload
+worldwallctl reload-config
+worldwallctl scene <id>
+worldwallctl next
+worldwallctl weather
+```
+
+Set `WORLDWALL_CONFIG` to a versioned config file when startup/config
+transactions should control `fps` and `registry_dir`; `reload-config` validates
+it atomically and never reselects a scene. See [IPC and configuration](docs/ipc.md)
+for the framed protocol, permission policy, stable semantics, and examples.
+
+For repeatable lifecycle testing without changing the outer desktop
 session, run the nested real-Hyprland harness:
 
 ```sh

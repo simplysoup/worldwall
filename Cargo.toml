@@ -9,6 +9,7 @@ description = "GPU-accelerated indexed pixel-art wallpaper engine for Hyprland/W
 [dependencies]
 calloop = "=0.14.4"
 calloop-wayland-source = "=0.4.1"
+libc = "=0.2.189"
 png = "=0.17.16"
 pollster = "=0.4.0"
 reqwest = { version = "=0.12.28", default-features = false, features = ["blocking", "json", "rustls-tls"] }

@@ -16,7 +16,7 @@
 | [S07](stages/07-weather.md) | Optional async weather cache | S06 | accepted | Pi coding agent | [S07 failure-path and acceptance evidence](updates/2026-09-22-s07-failure-gates.md) |
 | [S08](stages/08-suspend-resume.md) | Suspend/resume / M3 | S07 | accepted | Pi coding agent | [S08 implementation and acceptance](updates/2026-09-22-s08-suspend-resume.md) |
 | [S09](stages/09-multi-output.md) | Multi-output and hotplug | S08 | accepted | Pi coding agent | [S09 implementation and acceptance](updates/2026-09-22-s09-multi-output.md) |
-| [S10](stages/10-ipc-config.md) | Local IPC and config transactions | S09 | planned | unassigned | None |
+| [S10](stages/10-ipc-config.md) | Local IPC and config transactions | S09 | accepted | Pi coding agent | [S10 IPC/config implementation and acceptance](updates/2026-09-22-s10-ipc-config.md) |
 | [S11](stages/11-release-validation.md) | Recovery, performance, release / M4 | S10 | planned | unassigned | None |
 
 `ready` means dependencies/inputs permit starting work, **not** that approval or delivery is complete. S03 is accepted with ADR-0003 and recorded pure/GPU/live evidence; S04 is accepted with ADR-0004 and the recorded implementation evidence, with the additive CR-0001 byte-space BlendShift amendment applied and evidenced.

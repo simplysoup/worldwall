@@ -530,6 +530,12 @@ impl SelectionController {
     pub fn registry(&self) -> &SceneRegistry {
         &self.registry
     }
+
+    pub fn replace_registry(&mut self, registry: SceneRegistry) {
+        let active_id = self.active_id.clone();
+        self.registry = registry;
+        self.active_id = active_id.filter(|id| self.registry.get(id).is_some());
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

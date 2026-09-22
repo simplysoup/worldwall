@@ -56,6 +56,41 @@ The config may also contain a `scenes` string list to replace the registry
 matrix. Avoid putting secrets in `env`; explicit environment values are passed
 to Worldwall but only their names are recorded in `resolved-config.json`.
 
+## S10 IPC live runner
+
+`run_s10_ipc.py` starts the debug binary on the current Wayland session with a
+private runtime directory and exercises the versioned socket against the live
+service. It checks stale-socket replacement, `0600` permissions, malformed and
+oversized frames, stalled clients, 12 concurrent clients, rapid explicit scene
+commands, registry-path transitions in both directions, resident-scene
+retention when the registry is disabled, and repeated diagnostic rate limiting.
+It records the service log and JSON results under the requested output
+directory:
+
+```sh
+cargo build --locked
+python3 tools/run_s10_ipc.py \
+  --output-dir /home/soup/.local/state/worldwall/s10-ipc-live-$(date -u +%Y%m%dT%H%M%SZ)
+```
+
+To exercise the foreign-UID peer check, run the complete runner from the
+original desktop user's shell with the session environment preserved:
+
+```sh
+sudo -E python3 tools/run_s10_ipc.py \
+  --output-dir /home/soup/.local/state/worldwall/s10-ipc-live-root-$(date -u +%Y%m%dT%H%M%SZ)
+```
+
+When started as root, the runner launches Worldwall as `SUDO_UID`/`SUDO_GID`,
+keeps the runtime directory owned by that user, temporarily makes only the
+test socket reachable, probes it as the foreign root peer, drops the runner
+back to the desktop user for all ordinary client checks, and restores mode
+`0600` immediately afterward. Do not launch `worldwall` itself as root. If the
+host does not permit an unprivileged caller to switch users, the check is
+recorded as `not-run`; it must not be described as peer-credential acceptance
+evidence. The runner uses only local fixture packages and does not fetch
+weather or change compositor/session configuration.
+
 ## Checked conventions
 
 - Relative inline Markdown links/images, including percent-encoded paths, angle-bracket destinations, optional double-quoted titles, and heading fragments. Destinations must remain inside the project. Remote URLs are skipped.

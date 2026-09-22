@@ -10,6 +10,7 @@
 | How is a stage implemented and accepted? | [Stage files](stages/) linked from the roadmap |
 | Who owns resources and interfaces? | [Architecture](architecture.md) |
 | What do scene files mean? | [Scene format](scene-format.md) |
+| How do local controls and config reload work? | [IPC and configuration](ipc.md) |
 | What checks count? | [Validation](validation.md) and [evidence](evidence/README.md) |
 | Why was a decision made? | [Decisions](decisions/README.md) |
 | Why is work unable to proceed? | [Roadblocks](roadblocks/README.md) |

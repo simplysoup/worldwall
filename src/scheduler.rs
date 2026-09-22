@@ -41,7 +41,6 @@ impl FrameScheduler {
         }
     }
 
-    #[cfg(test)]
     pub fn set_fps(&mut self, fps: Fps, now_ns: u64) {
         self.fps = fps;
         if let Some(deadline) = self.next_deadline_ns {
