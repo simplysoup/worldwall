@@ -10,6 +10,9 @@
 
 S06 must produce an immutable environment snapshot for the existing S05 selector
 without coupling local civil time to the renderer's monotonic animation clock.
+CR-0002 additionally permits an explicit local civil-seconds value to feed an
+already selected scene's optional palette timeline; it does not make the
+renderer a selector or weather consumer.
 The snapshot must be deterministic in tests, must not infer location, and must
 make missing or physically unavailable astronomical events visible. The current
 repository has no timezone or astronomy database dependency, and the accepted
@@ -49,8 +52,11 @@ This decision defines the following v1 policy.
 - A wall-clock provider supplies UTC Unix seconds. Wall-clock values are used
   only to form civil snapshots. Frame deadlines and animation continue to use
   the existing monotonic scheduler and never use local-time arithmetic.
-- The environment provider returns a value snapshot. It performs no selection,
-  scene loading, renderer work, or Wayland dispatch.
+- The environment provider returns a value snapshot and, when explicitly
+  configured, a bounded local civil-seconds value for the resident renderer
+  resource. It performs no selection, scene loading, renderer work, or Wayland
+  dispatch. A civil-time tick changes only that uniform input; it does not
+  increment selection generation.
 
 ### Civil time and astronomy
 
@@ -86,7 +92,8 @@ This decision defines the following v1 policy.
 ### Refresh semantics
 
 A clock tick, midnight, sunrise/sunset crossing, resize, output hotplug, or
-weather completion may update an available status snapshot but never invokes
+weather completion may update an available status snapshot and the resident
+palette uniform, but never invokes
 the S05 selector. Startup and explicit `reload`, `scene`, `next`, or resume
 requests obtain one immutable snapshot and pass it to selection. A later S08
 decision owns suspend/resume coalescing.
@@ -101,9 +108,10 @@ at the declared UTC instant without changing monotonic scheduler behavior.
 Selection tests use the existing S05 trigger controller to prove that a changed
 snapshot is inert until an explicit trigger.
 
-This ADR is accepted by `simplysoup` on 2026-09-22. S06 acceptance is recorded
-separately in the stage evidence after review of the policy, implementation,
-and validation results. A later approved timezone or astronomy dependency must
+This ADR is accepted by `simplysoup` on 2026-09-22 and amended by approved
+CR-0002 on 2026-09-22. S06 acceptance is recorded separately in the stage
+evidence after review of the policy, implementation, and validation results. A
+later approved timezone or astronomy dependency must
 preserve explicit inputs, unknown/polar states, and the environment-to-selector
 boundary.
 

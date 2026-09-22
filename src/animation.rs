@@ -34,6 +34,7 @@ pub enum EffectKind {
     HueCycle,
     BrightnessPulse,
     PaletteCycle,
+    BlendShift,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -50,6 +51,13 @@ enum PaletteEffect {
         phase: f32,
     },
     Cycle {
+        offset: u32,
+        count: u32,
+        ordinal: u32,
+        speed: f32,
+        phase: f32,
+    },
+    BlendShift {
         offset: u32,
         count: u32,
         ordinal: u32,
@@ -212,9 +220,13 @@ impl Animation {
                     group.name
                 )));
             }
-            if group.effect == EffectKind::PaletteCycle && group.members.len() < 2 {
+            if matches!(
+                group.effect,
+                EffectKind::PaletteCycle | EffectKind::BlendShift
+            ) && group.members.len() < 2
+            {
                 return Err(AnimationError(format!(
-                    "palette-cycle group {:?} must contain at least two ordered indices",
+                    "palette-cycle/blend-shift group {:?} must contain at least two ordered indices",
                     group.name
                 )));
             }
@@ -227,7 +239,10 @@ impl Animation {
                 )));
             }
 
-            let offset = if group.effect == EffectKind::PaletteCycle {
+            let offset = if matches!(
+                group.effect,
+                EffectKind::PaletteCycle | EffectKind::BlendShift
+            ) {
                 let end = cycle_offset
                     .checked_add(group.members.len())
                     .ok_or_else(|| AnimationError("cycle metadata size overflow".into()))?;
@@ -267,6 +282,13 @@ impl Animation {
                         phase: group.phase,
                     },
                     EffectKind::PaletteCycle => PaletteEffect::Cycle {
+                        offset: offset as u32,
+                        count: group.members.len() as u32,
+                        ordinal: ordinal as u32,
+                        speed: group.speed_cycles_per_second,
+                        phase: group.phase,
+                    },
+                    EffectKind::BlendShift => PaletteEffect::BlendShift {
                         offset: offset as u32,
                         count: group.members.len() as u32,
                         ordinal: ordinal as u32,
@@ -320,6 +342,33 @@ impl Animation {
         let mut output = *palette;
         for index in 0..PALETTE_ENTRIES {
             let offset = index * 4;
+            if let PaletteEffect::BlendShift {
+                offset: group_offset,
+                count,
+                ordinal,
+                speed,
+                phase,
+            } = self.effects[index]
+            {
+                let [red, green, blue] = blend_shift_bytes(
+                    palette,
+                    &self.cycle_indices,
+                    GpuPaletteMetadata {
+                        group_offset,
+                        member_count: count,
+                        ordinal,
+                        speed,
+                        phase,
+                        ..GpuPaletteMetadata::static_entry()
+                    },
+                    time_seconds,
+                );
+                output[offset] = red;
+                output[offset + 1] = green;
+                output[offset + 2] = blue;
+                output[offset + 3] = 255;
+                continue;
+            }
             let color = [
                 srgb_to_linear(f32::from(palette[offset]) / 255.0),
                 srgb_to_linear(f32::from(palette[offset + 1]) / 255.0),
@@ -373,6 +422,7 @@ impl Animation {
                         lower_color[2] + (upper_color[2] - lower_color[2]) * t,
                     ]
                 }
+                PaletteEffect::BlendShift { .. } => unreachable!("handled above"),
             };
             output[offset] = linear_to_srgb_byte(animated[0]);
             output[offset + 1] = linear_to_srgb_byte(animated[1]);
@@ -381,6 +431,47 @@ impl Animation {
         }
         output
     }
+}
+
+#[cfg(test)]
+fn blend_shift_bytes(
+    palette: &[u8; 256 * 4],
+    cycle_indices: &[u32; PALETTE_ENTRIES],
+    metadata: GpuPaletteMetadata,
+    time_seconds: f32,
+) -> [u8; 3] {
+    let cycle = (metadata.phase + time_seconds * metadata.speed).rem_euclid(1.0);
+    let amount = cycle * metadata.member_count as f32;
+    let shift = amount.floor() as u32 % metadata.member_count;
+    // Classic BlendShift quantizes its fractional amount to 1/100 before
+    // flooring each byte-channel fade, matching Palette.PRECISION = 100.
+    let fraction = (amount.fract() * 100.0).floor() / 100.0;
+    let current = (metadata.ordinal + metadata.member_count - shift) % metadata.member_count;
+    let previous = (current + metadata.member_count - 1) % metadata.member_count;
+    let current_index = cycle_indices[(metadata.group_offset + current) as usize] as usize;
+    let previous_index = cycle_indices[(metadata.group_offset + previous) as usize] as usize;
+    let current_offset = current_index * 4;
+    let previous_offset = previous_index * 4;
+    [
+        blend_shift_channel(palette[current_offset], palette[previous_offset], fraction),
+        blend_shift_channel(
+            palette[current_offset + 1],
+            palette[previous_offset + 1],
+            fraction,
+        ),
+        blend_shift_channel(
+            palette[current_offset + 2],
+            palette[previous_offset + 2],
+            fraction,
+        ),
+    ]
+}
+
+#[cfg(test)]
+fn blend_shift_channel(source: u8, destination: u8, fraction: f32) -> u8 {
+    (f32::from(source) + (f32::from(destination) - f32::from(source)) * fraction)
+        .floor()
+        .clamp(0.0, 255.0) as u8
 }
 
 fn metadata_for(effect: PaletteEffect) -> GpuPaletteMetadata {
@@ -416,6 +507,21 @@ fn metadata_for(effect: PaletteEffect) -> GpuPaletteMetadata {
             phase,
         } => GpuPaletteMetadata {
             effect: 3,
+            group_offset: offset,
+            member_count: count,
+            ordinal,
+            speed,
+            phase,
+            ..GpuPaletteMetadata::static_entry()
+        },
+        PaletteEffect::BlendShift {
+            offset,
+            count,
+            ordinal,
+            speed,
+            phase,
+        } => GpuPaletteMetadata {
+            effect: 4,
             group_offset: offset,
             member_count: count,
             ordinal,
@@ -510,9 +616,10 @@ impl GroupBuilder {
             members,
             speed_cycles_per_second: self.speed.unwrap_or(0.0),
             amplitude: self.amplitude.unwrap_or(match effect {
-                EffectKind::HueCycle | EffectKind::BrightnessPulse | EffectKind::PaletteCycle => {
-                    1.0
-                }
+                EffectKind::HueCycle
+                | EffectKind::BrightnessPulse
+                | EffectKind::PaletteCycle
+                | EffectKind::BlendShift => 1.0,
                 EffectKind::Static => 0.0,
             }),
             phase: self.phase.unwrap_or(0.0),
@@ -552,6 +659,7 @@ fn parse_effect(value: &str, line: usize) -> Result<EffectKind, AnimationError> 
         "hue_cycle" => Ok(EffectKind::HueCycle),
         "brightness_pulse" => Ok(EffectKind::BrightnessPulse),
         "palette_cycle" => Ok(EffectKind::PaletteCycle),
+        "blend_shift" => Ok(EffectKind::BlendShift),
         other => Err(AnimationError(format!(
             "line {line}: unsupported effect {other:?}"
         ))),
@@ -822,6 +930,32 @@ mod tests {
         let output = animation.apply_palette(&palette, 0.0);
         assert!(output[4] > 150 && output[6] > 100);
         assert_eq!(output[3], 255);
+    }
+
+    #[test]
+    fn blend_shift_matches_byte_space_rotation_and_fractional_fade() {
+        let animation = Animation::from_toml(
+            r#"
+                schema_version = 1
+                [[group]]
+                name = "water"
+                effect = "blend_shift"
+                indices = [1, 2, 3]
+                speed = 1.0
+                phase = 0.5
+            "#,
+        )
+        .unwrap();
+        assert_eq!(animation.metadata[1].effect, 4);
+        let mut palette = [0u8; 256 * 4];
+        palette[4..8].copy_from_slice(&[10, 20, 30, 255]);
+        palette[8..12].copy_from_slice(&[100, 110, 120, 255]);
+        palette[12..16].copy_from_slice(&[200, 210, 220, 255]);
+        let output = animation.apply_palette(&palette, 0.0);
+        // At amount 1.5, entry 1 is halfway from original entry 3 to 2.
+        assert_eq!(&output[4..8], &[150, 160, 170, 255]);
+        assert_eq!(&output[8..12], &[105, 115, 125, 255]);
+        assert_eq!(&output[12..16], &[55, 65, 75, 255]);
     }
 
     #[test]

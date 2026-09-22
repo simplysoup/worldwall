@@ -1,6 +1,6 @@
 # ADR-0004 — S04 palette animation schema and GPU packing
 
-- Status: accepted
+- Status: accepted; amended by [CR-0001](../changes/CR-0001-s04-byte-blendshift.md) and [CR-0002](../changes/CR-0002-s06-time-of-day-palettes.md) on 2026-09-22
 - Owner / date: Pi coding agent / 2026-09-21
 - Approval identity / date: `simplysoup` / 2026-09-21
 - Affected stages / requirements: S04; WW-03, WW-04, WW-05
@@ -30,7 +30,7 @@ Each group has:
 
 ```toml
 name = "water"                    # unique, non-empty string
-effect = "hue_cycle"              # static | hue_cycle | brightness_pulse | palette_cycle
+effect = "hue_cycle"              # static | hue_cycle | brightness_pulse | palette_cycle | blend_shift
 range = [1, 3]                     # inclusive ordered range; or use indices below
 # indices = [9, 4, 11]             # mutually exclusive ordered list
 speed = 0.25                       # signed cycles per second
@@ -57,10 +57,22 @@ Effects operate on linear RGB values after the explicit S03 sRGB decode:
 - `palette_cycle`: for each ordered member, linearly interpolates in linear
   RGB between the current and next member, wrapping at the end. The
   interpolation amount is `fract(phase + time_seconds * speed)`.
+- `blend_shift`: matches the reference Classic BlendShift operation in
+  authored palette-byte space. The ordered range is rotated toward the
+  preceding member by `floor(amount)`, where `amount` is
+  `count * fract(phase + time_seconds * speed)`; `speed` remains complete
+  range cycles per second. Each byte channel is then faded toward that
+  preceding rotated value using
+  `floor(fract(amount) * 100) / 100`, with the resulting channel itself
+  floored like the reference implementation. The resulting authored sRGB
+  bytes are decoded for the sRGB presentation target.
 
-The shader receives only `time_seconds`, a monotonic phase bounded by a 1024
-second wrap. It does not receive civil time, weather, location, or selection
-state.
+The animation shader always receives `time_seconds`, a monotonic phase bounded
+by a 1024-second wrap. Scenes may additionally opt into a contained
+`time_of_day.toml` resource whose immutable 256×N RGBA8 atlas and ordered civil-
+second keyframes are supplied through a second bounded clock field. The shader
+receives no weather, location, or selection state; civil time only selects/fades
+rows of the already resident optional atlas.
 
 ### GPU layout
 
@@ -72,12 +84,14 @@ effect:u32, group_offset:u32, member_count:u32, ordinal:u32,
 speed:f32, amplitude:f32, phase:f32, reserved:f32
 ```
 
-`effect` values are 0 static, 1 hue, 2 pulse, and 3 palette cycle. A second
-immutable 256-element `u32` storage buffer stores the concatenated ordered
-cycle lists. A 16-byte uniform stores the bounded `time_seconds` in its first
-`f32`; the remaining bytes are reserved. Scene indices, palette, metadata,
-and cycle lists are uploaded once per scene. Each rendered frame writes only
-the 16-byte time uniform.
+`effect` values are 0 static, 1 hue, 2 pulse, 3 palette cycle, and 4 byte-space
+BlendShift. A second immutable 256-element `u32` storage buffer stores the
+concatenated ordered cycle lists. An optional immutable RGBA8 256×N atlas and
+16-byte-per-keyframe civil-seconds/row storage buffer hold time-of-day palettes.
+A 16-byte uniform stores monotonic `time_seconds`, civil seconds, keyframe count,
+and an enabled flag. Scene indices, base palette, metadata, cycle lists, atlas,
+and keyframes are uploaded once per scene. Each rendered frame writes only that
+bounded uniform.
 
 This layout is representable on the pinned device path and leaves ample room
 under ordinary storage/uniform limits. Runtime code still treats device
@@ -90,16 +104,21 @@ effect.
    list cannot be represented without an additional resource.
 2. CPU palette recoloring: rejected because it violates WW-03 and the S04
    steady-state upload invariant.
-3. Store authored sRGB and interpolate it directly: rejected because the S03
-   color path requires explicit linear-RGB effect operations.
-4. Civil-clock or weather inputs in WGSL: rejected; environment and selection
-   remain outside the renderer boundary.
+3. Store authored sRGB and interpolate it directly for the existing
+   `palette_cycle`: rejected because the S03 color path requires explicit
+   linear-RGB effect operations. CR-0001 adds the separate `blend_shift`
+   effect only for compatibility with the reference's byte-space algorithm.
+4. Civil-clock or weather-driven scene selection in WGSL: rejected. CR-0002
+   permits only an explicit civil-seconds value to address an immutable optional
+   palette atlas; weather, location, and selection remain outside the shader.
 
 ## Consequences and validation
 
 The parser and CPU reference vectors are pure and dependency-free. The GPU
-metadata is immutable, while `time_seconds` is the only normal animation
-update. Scheduler tests use integer fake-clock nanoseconds and cover bootstrap,
+metadata and optional time-of-day resources are immutable, while the two bounded
+clock values are the only normal animation updates. Civil timeline tests cover
+ordered keyframes, day wrap, authored-byte floor fading, atlas containment, and
+optional-resource fallback. Scheduler tests use integer fake-clock nanoseconds and cover bootstrap,
 15/30 FPS intervals, early callbacks, withheld callbacks, delayed callbacks,
 resize bootstrap, and no catch-up bursts. The implementation evidence records
 animated GPU readback, sustained bounded pacing, lifecycle traces, and an
@@ -131,11 +150,19 @@ inspection metadata is retained outside Git at
 
 ## Approval record
 
-`simplysoup` approved ADR-0004 on 2026-09-21. This approval covers the
-version-1 authoring fields, effect semantics, linear-RGB color space, metadata
-packing, bounded animation clock, and validation ranges recorded above. Stage acceptance is recorded separately in the S04 implementation and
-acceptance update after review of S04-AC1 through S04-AC5.
+`simplysoup` approved ADR-0004 on 2026-09-21. `simplysoup` approved CR-0001
+on 2026-09-22, adding `blend_shift` and the byte-space reference semantics
+recorded above without changing existing effect behavior. `simplysoup` approved
+CR-0002 on 2026-09-22. It adds the optional civil-time atlas/keyframe resource
+and bounded civil-seconds uniform without changing the base palette or selector
+contract. This approval covers
+the version-1 authoring fields, effect semantics, metadata packing, bounded
+animation clock, and validation ranges recorded above. Stage acceptance is
+recorded separately in the S04 implementation and acceptance updates after
+review of S04-AC1 through S04-AC5.
 
 ## Supersession
 
-None.
+None. CR-0001 and CR-0002 are approved additive amendments; the original
+linear-RGB `palette_cycle` behavior and packages without a timeline remain
+unchanged.

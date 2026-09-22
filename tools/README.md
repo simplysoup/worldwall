@@ -11,6 +11,51 @@ The checker exits `0` on success and `1` on findings. `--root PATH` checks a dif
 
 The S02 nested lifecycle harness is `run_nested_s01.sh`. On a Wayland host with Hyprland, it compiles the test-only `nested_wayland_connect.c` bridge with the available C compiler so the child compositor can publish a distinct socket while using the outer compositor as its backend. The harness rejects outer-socket reuse and waits for a GPU presentation before output-removal or disconnect teardown.
 
+## Effect Games matrix runner
+
+`run_effectgames_matrix.py` runs the local, untracked Effect Games registry
+sequentially. Each scene gets a fresh Worldwall process, a separate log, and a
+JSON manifest; the run also writes `summary.csv` and `summary.json`. The runner
+checks the clean debug deadline and owner-safe teardown markers, so a process
+that merely exits or times out is not reported as a pass. It does not run scenes
+in parallel because they share one Wayland output.
+
+Build first, then run the complete 21-package matrix for a short local check:
+
+```sh
+cargo build --locked
+python3 tools/run_effectgames_matrix.py \
+  --fps 30 \
+  --duration-seconds 3 \
+  --output-dir /home/soup/.local/state/worldwall/cr003-effectgames-$(date -u +%Y%m%dT%H%M%SZ)
+```
+
+The registry directory defaults to `fixtures/untracked/effectgames`; the
+executable defaults to `target/debug/worldwall` or `WORLDWALL_BIN`. Use
+`--dry-run` to inspect the resolved matrix without starting the application,
+`--scene ID` repeatedly for a subset, and `--fail-fast` to stop after the first
+failure. FPS remains limited to the approved 15/30 values.
+
+A JSON config can hold repeatable settings. CLI options override config values:
+
+```json
+{
+  "registry_dir": "fixtures/untracked/effectgames",
+  "binary": "target/debug/worldwall",
+  "fps": 30,
+  "duration_seconds": 3,
+  "timeout_grace_seconds": 10,
+  "utc_offset_minutes": 0,
+  "output_dir": "/home/soup/.local/state/worldwall/cr003-effectgames-rerun",
+  "env": {}
+}
+```
+
+Run it with `python3 tools/run_effectgames_matrix.py --config matrix.json`.
+The config may also contain a `scenes` string list to replace the registry
+matrix. Avoid putting secrets in `env`; explicit environment values are passed
+to Worldwall but only their names are recorded in `resolved-config.json`.
+
 ## Checked conventions
 
 - Relative inline Markdown links/images, including percent-encoded paths, angle-bracket destinations, optional double-quoted titles, and heading fragments. Destinations must remain inside the project. Remote URLs are skipped.

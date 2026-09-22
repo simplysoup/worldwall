@@ -10,11 +10,11 @@ S03 accepted. Approve exact version-1 animation authoring fields, units/ranges, 
 
 ## Deliverables
 
-Animation loader/validation, immutable GPU metadata, time uniform, hue/pulse/palette-cycle interpolation effects with groups, callback-plus-deadline scheduler, and first measured resource baseline.
+Animation loader/validation, immutable GPU metadata, optional immutable civil-time palette atlas/keyframes, bounded clock uniforms, hue/pulse/linear palette-cycle interpolation and authored-byte BlendShift effects with groups, callback-plus-deadline scheduler, and first measured resource baseline.
 
 ## Execution
 
-1. Define static defaults and reference vectors for each required effect. Palette interpolation must address an explicit ordered group/range, not merely alter hue and call it cycling.
+1. Define static defaults and reference vectors for each required effect. Palette interpolation must address an explicit ordered group/range, not merely alter hue and call it cycling. BlendShift vectors must cover integer rotation, 1/100 fractional byte fades, and wrap direction.
 2. Validate finite numbers, representability, group overlap/ranges, speeds, and amplitude bounds; convert authoring metadata once per load.
 3. Implement shader effects in the approved color space. Keep civil-clock/weather/location policy absent from shader behavior; only the monotonic animation phase is a shader input. Bound animation phase precision for long runtimes.
 4. Drive the monotonic animation clock and a small uniform update; keep all full scene/palette/metadata uploads out of the normal frame loop.
@@ -24,7 +24,7 @@ Animation loader/validation, immutable GPU metadata, time uniform, hue/pulse/pal
 
 ## Acceptance criteria
 
-- [ ] **S04-AC1:** Static/hue/pulse/palette-cycle interpolation/group fixtures match reference behavior; malformed/overlapping/unrepresentable metadata is rejected.
+- [ ] **S04-AC1:** Static/hue/pulse/linear palette-cycle, authored-byte BlendShift, and the CR-0002 civil-time byte-fade interpolation/group fixtures match their reference behavior; malformed/overlapping/unrepresentable metadata is rejected.
 - [ ] **S04-AC2:** At 15/30 FPS, timestamp evidence and fake-clock tests show callback AND deadline pacing, no busy spin, no catch-up burst, and a functioning bootstrap path.
 - [ ] **S04-AC3:** Steady state updates only bounded frame data; upload counters/code review confirm no CPU pixel recoloring or full texture regeneration.
 - [ ] **S04-AC4:** Long-running phase/wrap tests, delayed callbacks, resize, and paused/no-ready output paths remain responsive and visually valid.
@@ -32,8 +32,8 @@ Animation loader/validation, immutable GPU metadata, time uniform, hue/pulse/pal
 
 ## Failure and rollback
 
-Keep a static mode to isolate effects from presentation. If packing cannot represent the approved schema, stop and revise the layout decision rather than dropping effects silently. Timing bugs must be reduced with fake-clock traces before adjusting sleeps by trial and error.
+Keep a static mode and the no-timeline path to isolate effects from presentation. If packing cannot represent the approved schema, stop and revise the layout decision rather than dropping effects silently. Timeline resources remain immutable and optional; a failed timeline load rejects only the candidate package. Timing bugs must be reduced with fake-clock traces before adjusting sleeps by trial and error.
 
 ## Handoff
 
-Provide schema/layout ADR, shader vectors, scheduler state diagram/tests, counters, and raw benchmark artifacts. S05 must replace scenes without rebuilding this architecture or introducing CPU animation.
+Provide schema/layout ADR, shader vectors, scheduler state diagram/tests, counters, and raw benchmark artifacts. S05 must replace scenes without rebuilding this architecture or introducing CPU animation. CR-0003's complete reference inventory and local package derivation are recorded in the [follow-up evidence](../evidence/2026-09-22-cr003-scene-variants.md); it does not change the animation contract.

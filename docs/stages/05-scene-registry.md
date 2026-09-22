@@ -36,4 +36,4 @@ Keep the previous active scene until candidate success. A registry with no valid
 
 ## Handoff
 
-Publish manifest fixtures, selector API/ownership contract, trigger enumeration, generation semantics, and the M2 demo. S06 should supply environment snapshots without changing selection ownership.
+Publish manifest fixtures, selector API/ownership contract, trigger enumeration, generation semantics, and the M2 demo. CR-0003's catalog inventory/package-validation follow-up is recorded in the [CR-0003 evidence](../evidence/2026-09-22-cr003-scene-variants.md). S06 should supply environment snapshots without changing selection ownership.

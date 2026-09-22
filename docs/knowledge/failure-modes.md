@@ -16,5 +16,6 @@ These entries are **anticipated design risks**, not reproduced Worldwall inciden
 | FM-0010 | anticipated | Unsafe socket path/unbounded IPC or asset traversal crosses trust boundary | Ownership/peer checks, size/time limits, canonical path tests; reject unsafe input | S05, S10 |
 | FM-0011 | anticipated | Cache or logs expose location/credentials; error storm repeats requests/logs | Redaction tests, restrictive cache access, request/log limits, disabled-by-default weather | S07, S10 |
 | FM-0012 | anticipated | Green docs/unit tests are misreported as hardware acceptance | Evidence outcome/environment review; separate proposed, implemented, verified, accepted | All |
+| [FM-0013](failures/FM-0013-effectgames-cycle-rate.md) | reproduced | Effect Games cycle rate/range semantics are mapped to the wrong Worldwall effect or speed unit | Preserve the source formula: rate / 280 / range length, explicit speed adjustment, authored-byte BlendShift; validate pure vectors and live pacing separately | S04, S05 |
 
-Existing IDs reserve their mechanisms; use FM-0013 onward for genuinely new ones, or expand an existing ID into a linked detailed record. Record recovery, regression tests, and remaining limitations when an anticipated risk is actually encountered.
+Existing IDs reserve their mechanisms; use FM-0014 onward for genuinely new ones, or expand an existing ID into a linked detailed record. Record recovery, regression tests, and remaining limitations when an anticipated risk is actually encountered.

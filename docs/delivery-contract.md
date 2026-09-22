@@ -1,6 +1,6 @@
 # Worldwall delivery contract
 
-**Version:** 0.1 · **State:** approved · **Baseline date:** 2026-09-21  
+**Version:** 0.3 · **State:** approved · **Baseline date:** 2026-09-21 · **CR-0001 applied:** 2026-09-22 · **CR-0002 applied:** 2026-09-22
 **Accountable maintainer / acceptance authority:** GitHub account `simplysoup`; baseline ratified in ADR-0001 on 2026-09-21.  
 **Target:** Linux desktop with Hyprland, Wayland layer-shell, and a supported Vulkan adapter. Library/compositor versions and the tested device matrix are established by evidence, not assumed here.
 
@@ -26,12 +26,12 @@ No dates or percentage estimates are promised without an assigned team and measu
 | --- | --- | --- |
 | WW-01 | SCTK owns the Wayland connection and layer-shell lifecycle; each output uses a Background layer, all anchors, no keyboard or pointer/touch input, and deliberate exclusive-zone behavior. | S01, S09 |
 | WW-02 | wgpu presents through the same display and `wl_surface`. Wait for configure/ack and a valid nonzero physical extent. Wayland objects outlive the dependent GPU surface. Vulkan is the first supported backend. | S02, S09 |
-| WW-03 | Preserve exact 8-bit indices in `R8Uint`; resolve palette colors in the shader. Normal rendering does not regenerate image data or upload full scene textures per frame. | S03, S04 |
-| WW-04 | Support hue cycling, brightness pulsing, and bounded palette-cycle/interpolation effects with coherent groups under a versioned, tested animation schema. No time-of-day/weather logic in the shader. | S04 |
+| WW-03 | Preserve exact 8-bit indices in `R8Uint`; resolve palette colors in the shader. Optional immutable civil-time palette atlases are also sampled and faded on the GPU. Normal rendering does not regenerate image data or upload full scene textures per frame. | S03, S04, S06 |
+| WW-04 | Support hue cycling, brightness pulsing, bounded linear-RGB palette-cycle/interpolation effects, authored-byte BlendShift effects, and optional versioned civil-time palette timelines with coherent groups/resources. Time-of-day palette sampling is renderer input; weather/selection logic remains outside the shader. | S04, S06 |
 | WW-05 | Default ceiling is 30 FPS, configurable to 15 FPS. Use monotonic scheduling and compositor readiness; no spin loop or per-millisecond polling. Each output is independently paced. | S04, S09, S11 |
-| WW-06 | Selection occurs only on startup, resume, explicit `reload`, `scene <id>`, or `next`. A timer/weather result alone, midnight, resize, and hotplug do not change the scene. Selection failures preserve the last valid scene or a validated offline fallback. | S05–S08, S10 |
+| WW-06 | Selection occurs only on startup, resume, explicit `reload`, `scene <id>`, or `next`. A timer/weather result alone, midnight, resize, and hotplug do not change the scene; a civil-time tick may update only an optional resident palette timeline uniform. Selection failures preserve the last valid scene or a validated offline fallback. | S05–S08, S10 |
 | WW-07 | Weather is optional and disabled until explicitly configured. When enabled, poll no faster than approximately 15 minutes under normal operation, cache results, retain last known values on failure, and expose freshness. Network waits never block Wayland dispatch or frames. | S07, S08 |
-| WW-08 | Use local civil time and location-aware astronomy/season rules with explicit unknown/polar states. Sleep pauses rendering; resume refreshes environment and initiates exactly one coalesced selection. Missing power integration is visible, not a fabricated resume. | S06, S08 |
+| WW-08 | Use local civil time and location-aware astronomy/season rules with explicit unknown/polar states. An explicitly configured civil-seconds value may update the resident scene's optional palette timeline without reselecting it. Sleep pauses rendering; resume refreshes environment and initiates exactly one coalesced selection. Missing power integration is visible, not a fabricated resume. | S06, S08 |
 | WW-09 | Share one supported device/queue and selected-scene textures across outputs. Surfaces, dimensions, per-output uniform state, and pacing are output-local. Handle add/remove/scale/resize and zero outputs safely. | S09 |
 | WW-10 | Provide bounded same-user Unix-socket controls: `status`, `reload`, `reload-config`, `scene <id>`, `next`, `weather`. Invalid input or failed reload must not partially mutate live state. | S10 |
 | WW-11 | Gracefully handle asset errors, surface loss/outdated/timeout, unavailable weather, missing resume service, and shutdown. Unrecoverable device/OOM errors exit or enter a documented bounded recovery path, never an infinite retry loop. | S02–S11 |

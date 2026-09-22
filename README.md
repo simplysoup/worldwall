@@ -2,7 +2,7 @@
 
 A planned GPU-accelerated, weather- and time-aware pixel-art wallpaper engine for Hyprland/Wayland.
 
-**Current state:** S00 foundation, S01 single-output Wayland lifecycle, S02 safe GPU presentation, and S03 indexed-scene/M1 are accepted. S04 palette animation and pacing is implemented and accepted under ADR-0004; animated GPU, pacing, bounded live lifecycle, resize, and observational resource-baseline evidence are recorded. The binary path decodes bounded 8-bit index PNGs, uploads `R8Uint` indices and an opaque palette, and can animate an optional package palette on the retained Background layer.
+**Current state:** S00 foundation, S01 single-output Wayland lifecycle, S02 safe GPU presentation, S03 indexed-scene/M1, and S06 civil-time/astronomy policy are accepted. S04 palette animation and pacing and S05 registry selection are also accepted. S07 Open-Meteo weather support is implemented under accepted ADR-0006, with runtime use explicitly opt-in and one bounded live trace recorded.
 
 ## Start here
 
@@ -14,7 +14,7 @@ A planned GPU-accelerated, weather- and time-aware pixel-art wallpaper engine fo
 6. [S03 evidence](docs/evidence/2026-09-21-s03-indexed-scene.md) — accepted M1 decoder/resource/live evidence.
 7. [Contributor instructions](AGENTS.md) — how to work safely and leave a useful handoff.
 
-**Current action:** S06 is accepted under [ADR-0005](docs/decisions/ADR-0005-s06-time-astronomy-policy.md). The dependency-free environment slice provides explicit location/UTC-offset inputs, civil calendar conversion, injectable astronomy, polar/unknown states, hemispheric seasons, and boundary tests without changing the accepted S05 selection or renderer contracts. S07 remains planned pending its weather-provider policy.
+**Current action:** S07 is in review under accepted [ADR-0006](docs/decisions/ADR-0006-s07-open-meteo.md). Open-Meteo remains disabled unless explicitly configured with a provider name and latitude/longitude; cache reads are offline-first, network work stays off the Wayland thread, and weather completions never reselect a scene. The [authorized live trace](docs/updates/2026-09-22-s07-live.md) and [failure-path evidence](docs/updates/2026-09-22-s07-failure-gates.md) passed their recorded checks; `simplysoup` must record the final stage decision.
 
 ## Build and run the S03 indexed-scene path
 
@@ -22,7 +22,7 @@ S00 pins Rust 1.94.0 and exact dependency versions in `Cargo.toml`/`Cargo.lock`.
 The default binary connects to the current Wayland session, binds SCTK output
 and layer-shell globals, waits for configure, creates a Vulkan wgpu surface on
 the retained Background layer, and presents one static indexed synthetic scene. Set `WORLDWALL_SOLID_COLOR=1` to use the S02 solid-color diagnostic path.
-Set `WORLDWALL_LAYER_ONLY=1` to retain the S01 layer-only diagnostic path. Set `WORLDWALL_REGISTRY_DIR=/path/to/registry-root` to load and validate the explicit S05 registry, perform deterministic startup selection from an unknown snapshot (using the designated fallback when no environmental tag matches), and upload that candidate. The older `WORLDWALL_SCENE_DIR=/path/to/package` path remains available for one fixed package; add an optional strict S04 `animation.toml` beside it to enable GPU palette effects. With neither path, the original synthetic reference scene is used. If both paths are set, the validated registry is selected. Set `WORLDWALL_FPS=15` or `WORLDWALL_FPS=30` (the default) to select the pacing target.
+Set `WORLDWALL_LAYER_ONLY=1` to retain the S01 layer-only diagnostic path. Set `WORLDWALL_REGISTRY_DIR=/path/to/registry-root` to load and validate the explicit S05 registry, perform deterministic startup selection from an unknown snapshot (using the designated fallback when no environmental tag matches), and upload that candidate. The older `WORLDWALL_SCENE_DIR=/path/to/package` path remains available for one fixed package; add an optional strict S04 `animation.toml` beside it to enable GPU palette effects. With neither path, the original synthetic reference scene is used. If both paths are set, the validated registry is selected. Set `WORLDWALL_FPS=15` or `WORLDWALL_FPS=30` (the default) to select the pacing target. An optional package `time_of_day.toml` plus contained `time_of_day.png` 256×N atlas enables civil-time palette fades; set the explicit `WORLDWALL_UTC_OFFSET_MINUTES` to supply the configured civil offset. Without that offset, the timeline receives a visible zero/unknown-safe value and no host timezone is inferred. Clock updates only the resident palette uniform and never reselect a scene. To explicitly enable Open-Meteo, set `WORLDWALL_WEATHER=open-meteo`, `WORLDWALL_WEATHER_LATITUDE=<decimal>`, and `WORLDWALL_WEATHER_LONGITUDE=<decimal>`. With `WORLDWALL_WEATHER` unset, weather makes zero requests. Coordinates are sent to Open-Meteo over HTTPS and are not logged or cached.
 
 ```sh
 cargo fmt --check
@@ -33,9 +33,11 @@ cargo run --locked
 ```
 
 The accepted animation schema and GPU layout are recorded in
-[ADR-0004](docs/decisions/ADR-0004-s04-animation.md). The file is optional;
-unknown fields, overlapping groups, non-finite values, and out-of-range
-indices are rejected.
+[ADR-0004](docs/decisions/ADR-0004-s04-animation.md); the additive civil-time
+atlas contract is recorded in [CR-0002](docs/changes/CR-0002-s06-time-of-day-palettes.md).
+Both files are optional. Unknown fields, overlapping groups, non-finite values,
+out-of-range indices, malformed keyframes, and escaping timeline assets are
+rejected.
 
 Example `animation.toml`:
 
@@ -55,6 +57,14 @@ name = "flags"
 effect = "palette_cycle"
 indices = [9, 4, 11]
 speed = 0.1
+amplitude = 1.0
+phase = 0.0
+
+[[group]]
+name = "reference-water"
+effect = "blend_shift"
+range = [32, 47]
+speed = 0.25
 amplitude = 1.0
 phase = 0.0
 ```

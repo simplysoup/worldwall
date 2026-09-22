@@ -53,6 +53,7 @@ pub struct SceneManifest {
     pub image_path: PathBuf,
     pub palette_path: PathBuf,
     pub animation_path: Option<PathBuf>,
+    pub time_of_day_path: Option<PathBuf>,
     pub times: Vec<TimeOfDay>,
     pub weather: Vec<Weather>,
     pub seasons: Vec<Season>,
@@ -84,6 +85,10 @@ impl SceneManifest {
         image_bytes.hash(&mut hasher);
         palette_bytes.hash(&mut hasher);
 
+        let time_of_day_path = self.time_of_day_path.as_ref();
+        if let Some(path) = time_of_day_path {
+            read_bounded(path, MAX_REGISTRY_BYTES, "time-of-day manifest")?.hash(&mut hasher);
+        }
         let animation = match &self.animation_path {
             Some(path) => {
                 let bytes = read_bounded(path, MAX_ANIMATION_BYTES, "animation manifest")?;
@@ -98,10 +103,17 @@ impl SceneManifest {
             }
             None => Animation::static_default(),
         };
-        let scene = Scene::with_animation(
+        let time_of_day = self
+            .time_of_day_path
+            .as_ref()
+            .map(scene::load_time_of_day)
+            .transpose()
+            .map_err(|err| error(err.to_string()))?;
+        let scene = Scene::with_resources(
             scene::decode_index_png(&image_bytes).map_err(|err| error(err.to_string()))?,
             scene::decode_palette_png(&palette_bytes).map_err(|err| error(err.to_string()))?,
             animation,
+            time_of_day,
         )
         .map_err(|err| error(err.to_string()))?;
 
@@ -137,6 +149,10 @@ impl SceneManifest {
             .animation
             .map(|path| contained_asset(&package_dir, &path, "animation"))
             .transpose()?;
+        let time_of_day_path = values
+            .time_of_day
+            .map(|path| contained_asset(&package_dir, &path, "time_of_day"))
+            .transpose()?;
         reject_duplicates(&values.times, "time")?;
         reject_duplicates(&values.weather, "weather")?;
         reject_duplicates(&values.seasons, "season")?;
@@ -147,6 +163,7 @@ impl SceneManifest {
             image_path,
             palette_path,
             animation_path,
+            time_of_day_path,
             times: values.times,
             weather: values.weather,
             seasons: values.seasons,
@@ -633,6 +650,7 @@ struct ManifestValues {
     image: Option<String>,
     palette: Option<String>,
     animation: Option<String>,
+    time_of_day: Option<String>,
     times: Vec<TimeOfDay>,
     weather: Vec<Weather>,
     seasons: Vec<Season>,
@@ -685,6 +703,12 @@ fn parse_manifest(input: &str) -> Result<ManifestValues, RegistryError> {
             )?,
             "animation" => assign_once(
                 &mut values.animation,
+                parse_string(value, line_number, key)?,
+                key,
+                line_number,
+            )?,
+            "time_of_day" => assign_once(
+                &mut values.time_of_day,
                 parse_string(value, line_number, key)?,
                 key,
                 line_number,

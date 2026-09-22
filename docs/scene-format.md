@@ -11,7 +11,8 @@ S03's exact decoder limits and color path are fixed by accepted [ADR-0003](decis
 ├── scene.toml
 ├── scene.png
 ├── palette.png
-└── animation.toml       # optional; absent means static
+├── animation.toml       # optional; absent means static
+└── time_of_day.toml     # optional; contained civil-time palette timeline
 ```
 
 ```toml
@@ -20,12 +21,25 @@ id = "village"
 image = "scene.png"
 palette = "palette.png"
 animation = "animation.toml"
+time_of_day = "time_of_day.toml"
 times = ["day", "dusk"]
 weather = ["clear", "cloudy"]
 seasons = ["spring", "summer"]
 ```
 
 Example paths are proposed, not supplied files. S05 adds validated tags around the S03 decoding contract. Relative paths must remain within the scene package after canonical resolution; reject traversal and escaping symlinks. Reject duplicate IDs, unsupported versions/tags, missing required files, and excessive dimensions before allocating GPU memory. Enforce documented encoded-size and decoded-size limits established in S03.
+
+CR-0003 records the complete Effect Games reference inventory in
+[`fixtures/effectgames-reference-manifest.toml`](../fixtures/effectgames-reference-manifest.toml).
+It is metadata/provenance only: stable family and variant IDs are not renderer
+selection triggers, and catalog names/months/scripts/weather labels do not
+become automatic selection inputs. The 21 available catalog-listed variants
+can be derived into local ignored packages with
+`python3 tools/generate_effectgames_fixtures.py`; the December V12 entry is
+explicitly `source-unavailable` and is not synthesized. Source-specific
+palette remaps are applied by that derivation tool, not by hidden renderer
+behavior. See the [CR-0003 evidence](evidence/2026-09-22-cr003-scene-variants.md)
+for parser/registry results and licensing limitations.
 
 Empty/missing tag lists mean wildcard compatibility. The enumerations are `dawn/day/dusk/night`, `clear/cloudy/rain/snow/storm/fog/unknown`, and `spring/summer/autumn/winter/unknown`. Unknown environment values do not pretend to match a specific tag. Registry-level fallback is an explicitly designated, valid scene that works offline; invalid or empty registries produce a clear error, never an unchecked index/panic.
 
@@ -53,15 +67,39 @@ interface; it does not add public IPC or environment refresh behavior.
 - `scene.png` must be 8-bit grayscale used as raw index bytes, or 8-bit indexed-color PNG whose raw indices are preserved. Reject other bit depths/color types in v1 rather than silently quantizing. The current S03 proposal caps encoded input at 16 MiB and decoded image size at 16,777,216 pixels.
 - The separate palette is authoritative. An embedded indexed-PNG palette is not a second live palette. Reject transparency metadata for index images; indices are labels, not grayscale colors or alpha.
 - `palette.png` must decode losslessly to 256 × 1 opaque RGBA8 entries. Validate alpha is 255. v1 wallpapers are opaque; transparent entries are rejected.
+- `time_of_day.toml` and its optional `time_of_day.png` atlas are contained immutable resources. The atlas is 256 × N opaque RGBA8 rows (N 1..=256); the manifest has `schema_version = 1`, `atlas = "time_of_day.png"`, and at least two strictly ordered `[[keyframe]]` entries with `civil_seconds` in `[0, 86_400)` and an in-range `row`. Repeated rows are allowed. Adjacent keyframes, including the day-wrap segment, fade each authored byte channel with a floor operation. Omission preserves the existing one-palette behavior.
 - Upload indices as `R8Uint`; use integer `textureLoad`, not filtering or normalized reconstruction. Values 0 and 255 are explicit test fixtures.
 - Palette byte values are sRGB-authored. ADR-0003 fixes the path: upload them as `Rgba8Unorm`, convert sRGB to linear explicitly in WGSL, and require an sRGB presentation target for output encoding. Capture color reference/readback evidence for S03.
 - Cover scaling preserves aspect ratio, centers the crop, and calculates clamped integer source coordinates. Test odd sizes, both aspect directions, downscaling, edges, and scale changes. Pixel replication need not be integral at arbitrary output sizes; interpolation is still forbidden.
+
+## Time-of-day palette authoring and GPU encoding
+
+A timeline is optional and does not select a scene. Its example shape is:
+
+```toml
+schema_version = 1
+atlas = "time_of_day.png"
+
+[[keyframe]]
+civil_seconds = 22500
+row = 0
+
+[[keyframe]]
+civil_seconds = 23400
+row = 1
+```
+
+The environment owner supplies explicit local civil seconds to the resident
+renderer. The GPU locates the surrounding rows, wraps at 86,400 seconds, fades
+RGBA byte channels with the reference floor rule, and then decodes the result
+through the existing color path. Clock ticks and weather completion do not
+invoke selection or upload the atlas again.
 
 ## Animation authoring versus GPU encoding
 
 The original `animation.png → RGBA16Float` mapping was unspecified. Proposed authoring uses finite numeric TOML fields, converted once on scene load. The GPU representation is not a file-format promise.
 
-Required effects: static, hue cycle, brightness pulse, and palette-cycle interpolation. A group assigns a shared effect, speed, amplitude, and phase to a specified palette range or index list. Palette cycling additionally needs an explicit ordered range/list and wrap/interpolation semantics. Reject ambiguous overlapping groups, out-of-range indices, non-finite numbers, and values that cannot be represented by the selected GPU encoding.
+Required effects: static, hue cycle, brightness pulse, linear-RGB palette-cycle interpolation, and authored-byte BlendShift. A group assigns a shared effect, speed, amplitude, and phase to a specified palette range or index list. Palette cycling and BlendShift additionally need an explicit ordered range/list and wrap/interpolation semantics. BlendShift uses the reference integer rotation plus 1/100 fractional byte-channel fade before the result is decoded for the sRGB presentation target. Reject ambiguous overlapping groups, out-of-range indices, non-finite numbers, and values that cannot be represented by the selected GPU encoding.
 
 Before S04, an ADR must define:
 

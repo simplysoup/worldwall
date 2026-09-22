@@ -1,0 +1,2410 @@
+   Compiling worldwall v0.1.0 (/home/soup/Documents/worldwall)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 1.20s
+     Running `target/debug/worldwall`
+trace output-added id=wl_output@5
+trace output-added id=wl_output@6
+trace globals-ready selected-output=92 name=HDMI-A-2 logical-size=Some((1920, 1080)) scale=1 transform=Normal
+trace role-settings layer=background anchors=top|bottom|left|right size=0x0 keyboard=none input-region=empty exclusive-zone=-1
+trace initial-commit buffer=none awaiting-configure=true
+trace configure serial=817010 suggested=1920x1080 logical=1920x1080 physical=Some(PhysicalExtent { width: 1920, height: 1080 }) state=Ready ack=toolkit-before-handler
+trace scene-source=package image=640x480
+trace gpu-adapter backend=Vulkan name="NVIDIA GeForce RTX 3070 Ti" device=9346
+trace gpu-surface configured extent=1920x1080 format=Rgba8UnormSrgb alpha=Opaque present-mode=fifo max-frame-latency=2
+trace scene-upload generation=1 image=640x480 index-bytes=307200 palette-bytes=1024 uploads=1
+trace scene-upload-count=1 steady-state-reuploads=false
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-bootstrap fps=30 phase-seconds=0 animation-uniform-updates=1
+trace frame-callback ready=true time=359690958
+trace surface-enter selected=true
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=0.035169 scene-upload-count=1 animation-uniform-updates=2
+trace frame-callback ready=true time=359691001
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=0.068554 scene-upload-count=1 animation-uniform-updates=3
+trace frame-callback ready=true time=359691034
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=0.102036 scene-upload-count=1 animation-uniform-updates=4
+trace frame-callback ready=true time=359691068
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=0.135391 scene-upload-count=1 animation-uniform-updates=5
+trace frame-callback ready=true time=359691101
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=0.168795 scene-upload-count=1 animation-uniform-updates=6
+trace frame-callback ready=true time=359691134
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=0.202170 scene-upload-count=1 animation-uniform-updates=7
+trace frame-callback ready=true time=359691168
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=0.235579 scene-upload-count=1 animation-uniform-updates=8
+trace frame-callback ready=true time=359691201
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=0.268926 scene-upload-count=1 animation-uniform-updates=9
+trace frame-callback ready=true time=359691235
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=0.302335 scene-upload-count=1 animation-uniform-updates=10
+trace frame-callback ready=true time=359691268
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=0.335752 scene-upload-count=1 animation-uniform-updates=11
+trace frame-callback ready=true time=359691301
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=0.369092 scene-upload-count=1 animation-uniform-updates=12
+trace frame-callback ready=true time=359691335
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=0.402491 scene-upload-count=1 animation-uniform-updates=13
+trace frame-callback ready=true time=359691368
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=0.435855 scene-upload-count=1 animation-uniform-updates=14
+trace frame-callback ready=true time=359691401
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=0.469257 scene-upload-count=1 animation-uniform-updates=15
+trace frame-callback ready=true time=359691435
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=0.502623 scene-upload-count=1 animation-uniform-updates=16
+trace frame-callback ready=true time=359691468
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=0.535998 scene-upload-count=1 animation-uniform-updates=17
+trace frame-callback ready=true time=359691501
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=0.569369 scene-upload-count=1 animation-uniform-updates=18
+trace frame-callback ready=true time=359691535
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=0.602749 scene-upload-count=1 animation-uniform-updates=19
+trace frame-callback ready=true time=359691568
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=0.636110 scene-upload-count=1 animation-uniform-updates=20
+trace frame-callback ready=true time=359691601
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=0.669492 scene-upload-count=1 animation-uniform-updates=21
+trace frame-callback ready=true time=359691635
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=0.702968 scene-upload-count=1 animation-uniform-updates=22
+trace frame-callback ready=true time=359691668
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=0.736360 scene-upload-count=1 animation-uniform-updates=23
+trace frame-callback ready=true time=359691701
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=0.769731 scene-upload-count=1 animation-uniform-updates=24
+trace frame-callback ready=true time=359691735
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=0.803132 scene-upload-count=1 animation-uniform-updates=25
+trace frame-callback ready=true time=359691768
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=0.836514 scene-upload-count=1 animation-uniform-updates=26
+trace frame-callback ready=true time=359691801
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=0.869892 scene-upload-count=1 animation-uniform-updates=27
+trace frame-callback ready=true time=359691835
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=0.903262 scene-upload-count=1 animation-uniform-updates=28
+trace frame-callback ready=true time=359691868
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=0.936645 scene-upload-count=1 animation-uniform-updates=29
+trace frame-callback ready=true time=359691901
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=0.970015 scene-upload-count=1 animation-uniform-updates=30
+trace frame-callback ready=true time=359691935
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=1.003361 scene-upload-count=1 animation-uniform-updates=31
+trace frame-callback ready=true time=359691968
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=1.036785 scene-upload-count=1 animation-uniform-updates=32
+trace frame-callback ready=true time=359692001
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=1.070143 scene-upload-count=1 animation-uniform-updates=33
+trace frame-callback ready=true time=359692035
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=1.103545 scene-upload-count=1 animation-uniform-updates=34
+trace frame-callback ready=true time=359692068
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=1.136945 scene-upload-count=1 animation-uniform-updates=35
+trace frame-callback ready=true time=359692101
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=1.170305 scene-upload-count=1 animation-uniform-updates=36
+trace frame-callback ready=true time=359692135
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=1.203676 scene-upload-count=1 animation-uniform-updates=37
+trace frame-callback ready=true time=359692168
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=1.237085 scene-upload-count=1 animation-uniform-updates=38
+trace frame-callback ready=true time=359692201
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=1.270466 scene-upload-count=1 animation-uniform-updates=39
+trace frame-callback ready=true time=359692235
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=1.303852 scene-upload-count=1 animation-uniform-updates=40
+trace frame-callback ready=true time=359692268
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=1.337250 scene-upload-count=1 animation-uniform-updates=41
+trace frame-callback ready=true time=359692301
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=1.370638 scene-upload-count=1 animation-uniform-updates=42
+trace frame-callback ready=true time=359692335
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=1.404054 scene-upload-count=1 animation-uniform-updates=43
+trace frame-callback ready=true time=359692368
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=1.437474 scene-upload-count=1 animation-uniform-updates=44
+trace frame-callback ready=true time=359692401
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=1.470882 scene-upload-count=1 animation-uniform-updates=45
+trace frame-callback ready=true time=359692434
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=1.504265 scene-upload-count=1 animation-uniform-updates=46
+trace frame-callback ready=true time=359692468
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=1.537639 scene-upload-count=1 animation-uniform-updates=47
+trace frame-callback ready=true time=359692501
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=1.571014 scene-upload-count=1 animation-uniform-updates=48
+trace frame-callback ready=true time=359692535
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=1.604430 scene-upload-count=1 animation-uniform-updates=49
+trace frame-callback ready=true time=359692568
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=1.637802 scene-upload-count=1 animation-uniform-updates=50
+trace frame-callback ready=true time=359692601
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=1.671184 scene-upload-count=1 animation-uniform-updates=51
+trace frame-callback ready=true time=359692635
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=1.704597 scene-upload-count=1 animation-uniform-updates=52
+trace frame-callback ready=true time=359692668
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=1.738009 scene-upload-count=1 animation-uniform-updates=53
+trace frame-callback ready=true time=359692701
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=1.771390 scene-upload-count=1 animation-uniform-updates=54
+trace frame-callback ready=true time=359692735
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=1.804761 scene-upload-count=1 animation-uniform-updates=55
+trace frame-callback ready=true time=359692768
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=1.838174 scene-upload-count=1 animation-uniform-updates=56
+trace frame-callback ready=true time=359692801
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=1.871597 scene-upload-count=1 animation-uniform-updates=57
+trace frame-callback ready=true time=359692835
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=1.904963 scene-upload-count=1 animation-uniform-updates=58
+trace frame-callback ready=true time=359692868
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=1.938368 scene-upload-count=1 animation-uniform-updates=59
+trace frame-callback ready=true time=359692901
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=1.971776 scene-upload-count=1 animation-uniform-updates=60
+trace frame-callback ready=true time=359692935
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=2.005133 scene-upload-count=1 animation-uniform-updates=61
+trace frame-callback ready=true time=359692968
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=2.038536 scene-upload-count=1 animation-uniform-updates=62
+trace frame-callback ready=true time=359693001
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=2.071938 scene-upload-count=1 animation-uniform-updates=63
+trace frame-callback ready=true time=359693035
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=2.105305 scene-upload-count=1 animation-uniform-updates=64
+trace frame-callback ready=true time=359693068
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=2.138705 scene-upload-count=1 animation-uniform-updates=65
+trace frame-callback ready=true time=359693101
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=2.172063 scene-upload-count=1 animation-uniform-updates=66
+trace frame-callback ready=true time=359693135
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=2.205477 scene-upload-count=1 animation-uniform-updates=67
+trace frame-callback ready=true time=359693168
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=2.238892 scene-upload-count=1 animation-uniform-updates=68
+trace frame-callback ready=true time=359693201
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=2.272332 scene-upload-count=1 animation-uniform-updates=69
+trace frame-callback ready=true time=359693235
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=2.305661 scene-upload-count=1 animation-uniform-updates=70
+trace frame-callback ready=true time=359693268
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=2.339034 scene-upload-count=1 animation-uniform-updates=71
+trace frame-callback ready=true time=359693301
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=2.372443 scene-upload-count=1 animation-uniform-updates=72
+trace frame-callback ready=true time=359693335
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=2.405859 scene-upload-count=1 animation-uniform-updates=73
+trace frame-callback ready=true time=359693368
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=2.439238 scene-upload-count=1 animation-uniform-updates=74
+trace frame-callback ready=true time=359693401
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=2.472614 scene-upload-count=1 animation-uniform-updates=75
+trace frame-callback ready=true time=359693434
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=2.505990 scene-upload-count=1 animation-uniform-updates=76
+trace frame-callback ready=true time=359693468
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=2.539369 scene-upload-count=1 animation-uniform-updates=77
+trace frame-callback ready=true time=359693501
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=2.572771 scene-upload-count=1 animation-uniform-updates=78
+trace frame-callback ready=true time=359693535
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=2.606158 scene-upload-count=1 animation-uniform-updates=79
+trace frame-callback ready=true time=359693568
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=2.639536 scene-upload-count=1 animation-uniform-updates=80
+trace frame-callback ready=true time=359693601
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=2.672930 scene-upload-count=1 animation-uniform-updates=81
+trace frame-callback ready=true time=359693635
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=2.706354 scene-upload-count=1 animation-uniform-updates=82
+trace frame-callback ready=true time=359693668
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=2.739712 scene-upload-count=1 animation-uniform-updates=83
+trace frame-callback ready=true time=359693701
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=2.773095 scene-upload-count=1 animation-uniform-updates=84
+trace frame-callback ready=true time=359693735
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=2.806494 scene-upload-count=1 animation-uniform-updates=85
+trace frame-callback ready=true time=359693768
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=2.839913 scene-upload-count=1 animation-uniform-updates=86
+trace frame-callback ready=true time=359693801
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=2.873289 scene-upload-count=1 animation-uniform-updates=87
+trace frame-callback ready=true time=359693835
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=2.906701 scene-upload-count=1 animation-uniform-updates=88
+trace frame-callback ready=true time=359693868
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=2.940114 scene-upload-count=1 animation-uniform-updates=89
+trace frame-callback ready=true time=359693901
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=2.973505 scene-upload-count=1 animation-uniform-updates=90
+trace frame-callback ready=true time=359693935
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=3.006896 scene-upload-count=1 animation-uniform-updates=91
+trace frame-callback ready=true time=359693968
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=3.040333 scene-upload-count=1 animation-uniform-updates=92
+trace frame-callback ready=true time=359694001
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=3.073690 scene-upload-count=1 animation-uniform-updates=93
+trace frame-callback ready=true time=359694034
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=3.107100 scene-upload-count=1 animation-uniform-updates=94
+trace frame-callback ready=true time=359694067
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=3.140520 scene-upload-count=1 animation-uniform-updates=95
+trace frame-callback ready=true time=359694101
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=3.173887 scene-upload-count=1 animation-uniform-updates=96
+trace frame-callback ready=true time=359694134
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=3.207297 scene-upload-count=1 animation-uniform-updates=97
+trace frame-callback ready=true time=359694168
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=3.240714 scene-upload-count=1 animation-uniform-updates=98
+trace frame-callback ready=true time=359694201
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=3.274071 scene-upload-count=1 animation-uniform-updates=99
+trace frame-callback ready=true time=359694235
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=3.307497 scene-upload-count=1 animation-uniform-updates=100
+trace frame-callback ready=true time=359694268
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=3.340928 scene-upload-count=1 animation-uniform-updates=101
+trace frame-callback ready=true time=359694301
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=3.374305 scene-upload-count=1 animation-uniform-updates=102
+trace frame-callback ready=true time=359694334
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=3.407669 scene-upload-count=1 animation-uniform-updates=103
+trace frame-callback ready=true time=359694368
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=3.441087 scene-upload-count=1 animation-uniform-updates=104
+trace frame-callback ready=true time=359694401
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=3.474504 scene-upload-count=1 animation-uniform-updates=105
+trace frame-callback ready=true time=359694434
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=3.507878 scene-upload-count=1 animation-uniform-updates=106
+trace frame-callback ready=true time=359694467
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=3.541288 scene-upload-count=1 animation-uniform-updates=107
+trace frame-callback ready=true time=359694501
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=3.574661 scene-upload-count=1 animation-uniform-updates=108
+trace frame-callback ready=true time=359694534
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=3.608041 scene-upload-count=1 animation-uniform-updates=109
+trace frame-callback ready=true time=359694567
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=3.641455 scene-upload-count=1 animation-uniform-updates=110
+trace frame-callback ready=true time=359694601
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=3.674829 scene-upload-count=1 animation-uniform-updates=111
+trace frame-callback ready=true time=359694634
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=3.708244 scene-upload-count=1 animation-uniform-updates=112
+trace frame-callback ready=true time=359694667
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=3.741643 scene-upload-count=1 animation-uniform-updates=113
+trace frame-callback ready=true time=359694701
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=3.775022 scene-upload-count=1 animation-uniform-updates=114
+trace frame-callback ready=true time=359694734
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=3.808440 scene-upload-count=1 animation-uniform-updates=115
+trace frame-callback ready=true time=359694767
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=3.841820 scene-upload-count=1 animation-uniform-updates=116
+trace frame-callback ready=true time=359694801
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=3.875197 scene-upload-count=1 animation-uniform-updates=117
+trace frame-callback ready=true time=359694835
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=3.908573 scene-upload-count=1 animation-uniform-updates=118
+trace frame-callback ready=true time=359694868
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=3.941949 scene-upload-count=1 animation-uniform-updates=119
+trace frame-callback ready=true time=359694901
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=3.975361 scene-upload-count=1 animation-uniform-updates=120
+trace frame-callback ready=true time=359694934
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=4.008759 scene-upload-count=1 animation-uniform-updates=121
+trace frame-callback ready=true time=359694967
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=4.042178 scene-upload-count=1 animation-uniform-updates=122
+trace frame-callback ready=true time=359695001
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=4.075543 scene-upload-count=1 animation-uniform-updates=123
+trace frame-callback ready=true time=359695034
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=4.108916 scene-upload-count=1 animation-uniform-updates=124
+trace frame-callback ready=true time=359695068
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=4.142328 scene-upload-count=1 animation-uniform-updates=125
+trace frame-callback ready=true time=359695101
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=4.175725 scene-upload-count=1 animation-uniform-updates=126
+trace frame-callback ready=true time=359695134
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=4.209135 scene-upload-count=1 animation-uniform-updates=127
+trace frame-callback ready=true time=359695167
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=4.242509 scene-upload-count=1 animation-uniform-updates=128
+trace frame-callback ready=true time=359695201
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=4.275889 scene-upload-count=1 animation-uniform-updates=129
+trace frame-callback ready=true time=359695234
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=4.309276 scene-upload-count=1 animation-uniform-updates=130
+trace frame-callback ready=true time=359695267
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=4.342652 scene-upload-count=1 animation-uniform-updates=131
+trace frame-callback ready=true time=359695301
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=4.376030 scene-upload-count=1 animation-uniform-updates=132
+trace frame-callback ready=true time=359695334
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=4.409415 scene-upload-count=1 animation-uniform-updates=133
+trace frame-callback ready=true time=359695367
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=4.442791 scene-upload-count=1 animation-uniform-updates=134
+trace frame-callback ready=true time=359695401
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=4.476209 scene-upload-count=1 animation-uniform-updates=135
+trace frame-callback ready=true time=359695434
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=4.509617 scene-upload-count=1 animation-uniform-updates=136
+trace frame-callback ready=true time=359695467
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=4.542998 scene-upload-count=1 animation-uniform-updates=137
+trace frame-callback ready=true time=359695501
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=4.576440 scene-upload-count=1 animation-uniform-updates=138
+trace frame-callback ready=true time=359695534
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=4.609791 scene-upload-count=1 animation-uniform-updates=139
+trace frame-callback ready=true time=359695568
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=4.643174 scene-upload-count=1 animation-uniform-updates=140
+trace frame-callback ready=true time=359695601
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=4.676547 scene-upload-count=1 animation-uniform-updates=141
+trace frame-callback ready=true time=359695634
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=4.709960 scene-upload-count=1 animation-uniform-updates=142
+trace frame-callback ready=true time=359695667
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=4.743350 scene-upload-count=1 animation-uniform-updates=143
+trace frame-callback ready=true time=359695701
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=4.776754 scene-upload-count=1 animation-uniform-updates=144
+trace frame-callback ready=true time=359695734
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=4.810130 scene-upload-count=1 animation-uniform-updates=145
+trace frame-callback ready=true time=359695767
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=4.843591 scene-upload-count=1 animation-uniform-updates=146
+trace frame-callback ready=true time=359695802
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=4.876936 scene-upload-count=1 animation-uniform-updates=147
+trace frame-callback ready=true time=359695834
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=4.910316 scene-upload-count=1 animation-uniform-updates=148
+trace frame-callback ready=true time=359695868
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=4.943789 scene-upload-count=1 animation-uniform-updates=149
+trace frame-callback ready=true time=359695902
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=4.977142 scene-upload-count=1 animation-uniform-updates=150
+trace frame-callback ready=true time=359695935
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=5.010552 scene-upload-count=1 animation-uniform-updates=151
+trace frame-callback ready=true time=359695968
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=5.043979 scene-upload-count=1 animation-uniform-updates=152
+trace frame-callback ready=true time=359696002
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=5.077396 scene-upload-count=1 animation-uniform-updates=153
+trace frame-callback ready=true time=359696035
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=5.110764 scene-upload-count=1 animation-uniform-updates=154
+trace frame-callback ready=true time=359696068
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=5.144179 scene-upload-count=1 animation-uniform-updates=155
+trace frame-callback ready=true time=359696102
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=5.177534 scene-upload-count=1 animation-uniform-updates=156
+trace frame-callback ready=true time=359696135
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=5.210909 scene-upload-count=1 animation-uniform-updates=157
+trace frame-callback ready=true time=359696168
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=5.244287 scene-upload-count=1 animation-uniform-updates=158
+trace frame-callback ready=true time=359696202
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=5.277704 scene-upload-count=1 animation-uniform-updates=159
+trace frame-callback ready=true time=359696235
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=5.311111 scene-upload-count=1 animation-uniform-updates=160
+trace frame-callback ready=true time=359696269
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=5.344485 scene-upload-count=1 animation-uniform-updates=161
+trace frame-callback ready=true time=359696302
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=5.377874 scene-upload-count=1 animation-uniform-updates=162
+trace frame-callback ready=true time=359696335
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=5.411244 scene-upload-count=1 animation-uniform-updates=163
+trace frame-callback ready=true time=359696369
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=5.444622 scene-upload-count=1 animation-uniform-updates=164
+trace frame-callback ready=true time=359696402
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=5.478003 scene-upload-count=1 animation-uniform-updates=165
+trace frame-callback ready=true time=359696435
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=5.511374 scene-upload-count=1 animation-uniform-updates=166
+trace frame-callback ready=true time=359696469
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=5.544757 scene-upload-count=1 animation-uniform-updates=167
+trace frame-callback ready=true time=359696503
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=5.578140 scene-upload-count=1 animation-uniform-updates=168
+trace frame-callback ready=true time=359696536
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=5.611512 scene-upload-count=1 animation-uniform-updates=169
+trace frame-callback ready=true time=359696569
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=5.644889 scene-upload-count=1 animation-uniform-updates=170
+trace frame-callback ready=true time=359696602
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=5.678265 scene-upload-count=1 animation-uniform-updates=171
+trace frame-callback ready=true time=359696636
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=5.711639 scene-upload-count=1 animation-uniform-updates=172
+trace frame-callback ready=true time=359696669
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=5.745013 scene-upload-count=1 animation-uniform-updates=173
+trace frame-callback ready=true time=359696702
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=5.778396 scene-upload-count=1 animation-uniform-updates=174
+trace frame-callback ready=true time=359696736
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=5.811810 scene-upload-count=1 animation-uniform-updates=175
+trace frame-callback ready=true time=359696769
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=5.845187 scene-upload-count=1 animation-uniform-updates=176
+trace frame-callback ready=true time=359696803
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=5.878575 scene-upload-count=1 animation-uniform-updates=177
+trace frame-callback ready=true time=359696836
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=5.911962 scene-upload-count=1 animation-uniform-updates=178
+trace frame-callback ready=true time=359696869
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=5.945349 scene-upload-count=1 animation-uniform-updates=179
+trace frame-callback ready=true time=359696904
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=5.978730 scene-upload-count=1 animation-uniform-updates=180
+trace frame-callback ready=true time=359696936
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=6.012103 scene-upload-count=1 animation-uniform-updates=181
+trace frame-callback ready=true time=359696971
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=6.045492 scene-upload-count=1 animation-uniform-updates=182
+trace frame-callback ready=true time=359697003
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=6.078901 scene-upload-count=1 animation-uniform-updates=183
+trace frame-callback ready=true time=359697037
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=6.112349 scene-upload-count=1 animation-uniform-updates=184
+trace frame-callback ready=true time=359697070
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=6.145662 scene-upload-count=1 animation-uniform-updates=185
+trace frame-callback ready=true time=359697103
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=6.179036 scene-upload-count=1 animation-uniform-updates=186
+trace frame-callback ready=true time=359697136
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=6.212476 scene-upload-count=1 animation-uniform-updates=187
+trace frame-callback ready=true time=359697170
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=6.245835 scene-upload-count=1 animation-uniform-updates=188
+trace frame-callback ready=true time=359697204
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=6.279224 scene-upload-count=1 animation-uniform-updates=189
+trace frame-callback ready=true time=359697237
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=6.312640 scene-upload-count=1 animation-uniform-updates=190
+trace frame-callback ready=true time=359697270
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=6.346022 scene-upload-count=1 animation-uniform-updates=191
+trace frame-callback ready=true time=359697303
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=6.379455 scene-upload-count=1 animation-uniform-updates=192
+trace frame-callback ready=true time=359697338
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=6.412799 scene-upload-count=1 animation-uniform-updates=193
+trace frame-callback ready=true time=359697370
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=6.446175 scene-upload-count=1 animation-uniform-updates=194
+trace frame-callback ready=true time=359697404
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=6.479552 scene-upload-count=1 animation-uniform-updates=195
+trace frame-callback ready=true time=359697437
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=6.512928 scene-upload-count=1 animation-uniform-updates=196
+trace frame-callback ready=true time=359697470
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=6.546344 scene-upload-count=1 animation-uniform-updates=197
+trace frame-callback ready=true time=359697504
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=6.579758 scene-upload-count=1 animation-uniform-updates=198
+trace frame-callback ready=true time=359697537
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=6.613169 scene-upload-count=1 animation-uniform-updates=199
+trace frame-callback ready=true time=359697571
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=6.646578 scene-upload-count=1 animation-uniform-updates=200
+trace frame-callback ready=true time=359697605
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=6.679937 scene-upload-count=1 animation-uniform-updates=201
+trace frame-callback ready=true time=359697637
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=6.713312 scene-upload-count=1 animation-uniform-updates=202
+trace frame-callback ready=true time=359697671
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=6.746756 scene-upload-count=1 animation-uniform-updates=203
+trace frame-callback ready=true time=359697706
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=6.780150 scene-upload-count=1 animation-uniform-updates=204
+trace frame-callback ready=true time=359697737
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=6.813532 scene-upload-count=1 animation-uniform-updates=205
+trace frame-callback ready=true time=359697771
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=6.846975 scene-upload-count=1 animation-uniform-updates=206
+trace frame-callback ready=true time=359697806
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=6.880383 scene-upload-count=1 animation-uniform-updates=207
+trace frame-callback ready=true time=359697838
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=6.913795 scene-upload-count=1 animation-uniform-updates=208
+trace frame-callback ready=true time=359697871
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=6.947243 scene-upload-count=1 animation-uniform-updates=209
+trace frame-callback ready=true time=359697905
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=6.980593 scene-upload-count=1 animation-uniform-updates=210
+trace frame-callback ready=true time=359697938
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=7.014024 scene-upload-count=1 animation-uniform-updates=211
+trace frame-callback ready=true time=359697971
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=7.047403 scene-upload-count=1 animation-uniform-updates=212
+trace frame-callback ready=true time=359698005
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=7.080774 scene-upload-count=1 animation-uniform-updates=213
+trace frame-callback ready=true time=359698038
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=7.114149 scene-upload-count=1 animation-uniform-updates=214
+trace frame-callback ready=true time=359698071
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=7.147563 scene-upload-count=1 animation-uniform-updates=215
+trace frame-callback ready=true time=359698105
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=7.180922 scene-upload-count=1 animation-uniform-updates=216
+trace frame-callback ready=true time=359698138
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=7.214297 scene-upload-count=1 animation-uniform-updates=217
+trace frame-callback ready=true time=359698172
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=7.247741 scene-upload-count=1 animation-uniform-updates=218
+trace frame-callback ready=true time=359698207
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=7.281135 scene-upload-count=1 animation-uniform-updates=219
+trace frame-callback ready=true time=359698239
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=7.314513 scene-upload-count=1 animation-uniform-updates=220
+trace frame-callback ready=true time=359698272
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=7.347977 scene-upload-count=1 animation-uniform-updates=221
+trace frame-callback ready=true time=359698306
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=7.381364 scene-upload-count=1 animation-uniform-updates=222
+trace frame-callback ready=true time=359698339
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=7.414740 scene-upload-count=1 animation-uniform-updates=223
+trace frame-callback ready=true time=359698372
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=7.448122 scene-upload-count=1 animation-uniform-updates=224
+trace frame-callback ready=true time=359698406
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=7.481516 scene-upload-count=1 animation-uniform-updates=225
+trace frame-callback ready=true time=359698439
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=7.514923 scene-upload-count=1 animation-uniform-updates=226
+trace frame-callback ready=true time=359698473
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=7.548327 scene-upload-count=1 animation-uniform-updates=227
+trace frame-callback ready=true time=359698506
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=7.581741 scene-upload-count=1 animation-uniform-updates=228
+trace frame-callback ready=true time=359698539
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=7.615154 scene-upload-count=1 animation-uniform-updates=229
+trace frame-callback ready=true time=359698573
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=7.648533 scene-upload-count=1 animation-uniform-updates=230
+trace frame-callback ready=true time=359698606
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=7.681950 scene-upload-count=1 animation-uniform-updates=231
+trace frame-callback ready=true time=359698639
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=7.715359 scene-upload-count=1 animation-uniform-updates=232
+trace frame-callback ready=true time=359698673
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=7.748745 scene-upload-count=1 animation-uniform-updates=233
+trace frame-callback ready=true time=359698706
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=7.782156 scene-upload-count=1 animation-uniform-updates=234
+trace frame-callback ready=true time=359698740
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=7.815566 scene-upload-count=1 animation-uniform-updates=235
+trace frame-callback ready=true time=359698773
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=7.848946 scene-upload-count=1 animation-uniform-updates=236
+trace frame-callback ready=true time=359698806
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=7.882507 scene-upload-count=1 animation-uniform-updates=237
+trace frame-callback ready=true time=359698841
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=7.915846 scene-upload-count=1 animation-uniform-updates=238
+trace frame-callback ready=true time=359698873
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=7.949230 scene-upload-count=1 animation-uniform-updates=239
+trace frame-callback ready=true time=359698907
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=7.982686 scene-upload-count=1 animation-uniform-updates=240
+trace frame-callback ready=true time=359698941
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=8.016080 scene-upload-count=1 animation-uniform-updates=241
+trace frame-callback ready=true time=359698974
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=8.049510 scene-upload-count=1 animation-uniform-updates=242
+trace frame-callback ready=true time=359699007
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=8.082938 scene-upload-count=1 animation-uniform-updates=243
+trace frame-callback ready=true time=359699041
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=8.116343 scene-upload-count=1 animation-uniform-updates=244
+trace frame-callback ready=true time=359699074
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=8.149781 scene-upload-count=1 animation-uniform-updates=245
+trace frame-callback ready=true time=359699108
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=8.183188 scene-upload-count=1 animation-uniform-updates=246
+trace frame-callback ready=true time=359699141
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=8.216567 scene-upload-count=1 animation-uniform-updates=247
+trace frame-callback ready=true time=359699175
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=8.249987 scene-upload-count=1 animation-uniform-updates=248
+trace frame-callback ready=true time=359699208
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=8.283413 scene-upload-count=1 animation-uniform-updates=249
+trace frame-callback ready=true time=359699241
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=8.316783 scene-upload-count=1 animation-uniform-updates=250
+trace frame-callback ready=true time=359699276
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=8.350204 scene-upload-count=1 animation-uniform-updates=251
+trace frame-callback ready=true time=359699308
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=8.383588 scene-upload-count=1 animation-uniform-updates=252
+trace frame-callback ready=true time=359699341
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=8.416952 scene-upload-count=1 animation-uniform-updates=253
+trace frame-callback ready=true time=359699375
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=8.450361 scene-upload-count=1 animation-uniform-updates=254
+trace frame-callback ready=true time=359699409
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=8.483731 scene-upload-count=1 animation-uniform-updates=255
+trace frame-callback ready=true time=359699441
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=8.517142 scene-upload-count=1 animation-uniform-updates=256
+trace frame-callback ready=true time=359699475
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=8.550549 scene-upload-count=1 animation-uniform-updates=257
+trace frame-callback ready=true time=359699509
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=8.583910 scene-upload-count=1 animation-uniform-updates=258
+trace frame-callback ready=true time=359699541
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=8.617327 scene-upload-count=1 animation-uniform-updates=259
+trace frame-callback ready=true time=359699575
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=8.650723 scene-upload-count=1 animation-uniform-updates=260
+trace frame-callback ready=true time=359699609
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=8.684092 scene-upload-count=1 animation-uniform-updates=261
+trace frame-callback ready=true time=359699641
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=8.717466 scene-upload-count=1 animation-uniform-updates=262
+trace frame-callback ready=true time=359699676
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=8.750842 scene-upload-count=1 animation-uniform-updates=263
+trace frame-callback ready=true time=359699708
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=8.784254 scene-upload-count=1 animation-uniform-updates=264
+trace frame-callback ready=true time=359699742
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=8.817631 scene-upload-count=1 animation-uniform-updates=265
+trace frame-callback ready=true time=359699776
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=8.851008 scene-upload-count=1 animation-uniform-updates=266
+trace frame-callback ready=true time=359699808
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=8.884427 scene-upload-count=1 animation-uniform-updates=267
+trace frame-callback ready=true time=359699842
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=8.917901 scene-upload-count=1 animation-uniform-updates=268
+trace frame-callback ready=true time=359699876
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=8.951220 scene-upload-count=1 animation-uniform-updates=269
+trace frame-callback ready=true time=359699909
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=8.984593 scene-upload-count=1 animation-uniform-updates=270
+trace frame-callback ready=true time=359699942
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=9.017999 scene-upload-count=1 animation-uniform-updates=271
+trace frame-callback ready=true time=359699977
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=9.051365 scene-upload-count=1 animation-uniform-updates=272
+trace frame-callback ready=true time=359700009
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=9.084784 scene-upload-count=1 animation-uniform-updates=273
+trace frame-callback ready=true time=359700042
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=9.118196 scene-upload-count=1 animation-uniform-updates=274
+trace frame-callback ready=true time=359700076
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=9.151575 scene-upload-count=1 animation-uniform-updates=275
+trace frame-callback ready=true time=359700109
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=9.184955 scene-upload-count=1 animation-uniform-updates=276
+trace frame-callback ready=true time=359700142
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=9.218334 scene-upload-count=1 animation-uniform-updates=277
+trace frame-callback ready=true time=359700176
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=9.251711 scene-upload-count=1 animation-uniform-updates=278
+trace frame-callback ready=true time=359700209
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=9.285123 scene-upload-count=1 animation-uniform-updates=279
+trace frame-callback ready=true time=359700244
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=9.318486 scene-upload-count=1 animation-uniform-updates=280
+trace frame-callback ready=true time=359700276
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=9.351865 scene-upload-count=1 animation-uniform-updates=281
+trace frame-callback ready=true time=359700309
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=9.385279 scene-upload-count=1 animation-uniform-updates=282
+trace frame-callback ready=true time=359700343
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=9.418679 scene-upload-count=1 animation-uniform-updates=283
+trace frame-callback ready=true time=359700376
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=9.452061 scene-upload-count=1 animation-uniform-updates=284
+trace frame-callback ready=true time=359700409
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=9.485476 scene-upload-count=1 animation-uniform-updates=285
+trace frame-callback ready=true time=359700444
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=9.518825 scene-upload-count=1 animation-uniform-updates=286
+trace frame-callback ready=true time=359700476
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=9.552198 scene-upload-count=1 animation-uniform-updates=287
+trace frame-callback ready=true time=359700510
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=9.585579 scene-upload-count=1 animation-uniform-updates=288
+trace frame-callback ready=true time=359700543
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=9.618998 scene-upload-count=1 animation-uniform-updates=289
+trace frame-callback ready=true time=359700576
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=9.652413 scene-upload-count=1 animation-uniform-updates=290
+trace frame-callback ready=true time=359700610
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=9.685812 scene-upload-count=1 animation-uniform-updates=291
+trace frame-callback ready=true time=359700643
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=9.719173 scene-upload-count=1 animation-uniform-updates=292
+trace frame-callback ready=true time=359700677
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=9.752557 scene-upload-count=1 animation-uniform-updates=293
+trace frame-callback ready=true time=359700710
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=9.785933 scene-upload-count=1 animation-uniform-updates=294
+trace frame-callback ready=true time=359700743
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=9.819311 scene-upload-count=1 animation-uniform-updates=295
+trace frame-callback ready=true time=359700777
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=9.852695 scene-upload-count=1 animation-uniform-updates=296
+trace frame-callback ready=true time=359700811
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=9.886072 scene-upload-count=1 animation-uniform-updates=297
+trace frame-callback ready=true time=359700843
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=9.919485 scene-upload-count=1 animation-uniform-updates=298
+trace frame-callback ready=true time=359700877
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=9.952900 scene-upload-count=1 animation-uniform-updates=299
+trace frame-callback ready=true time=359700911
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=9.986257 scene-upload-count=1 animation-uniform-updates=300
+trace frame-callback ready=true time=359700944
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=10.019635 scene-upload-count=1 animation-uniform-updates=301
+trace frame-callback ready=true time=359700977
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=10.053053 scene-upload-count=1 animation-uniform-updates=302
+trace frame-callback ready=true time=359701011
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=10.086452 scene-upload-count=1 animation-uniform-updates=303
+trace frame-callback ready=true time=359701044
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=10.119826 scene-upload-count=1 animation-uniform-updates=304
+trace frame-callback ready=true time=359701077
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=10.153242 scene-upload-count=1 animation-uniform-updates=305
+trace frame-callback ready=true time=359701111
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=10.186605 scene-upload-count=1 animation-uniform-updates=306
+trace frame-callback ready=true time=359701144
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=10.219980 scene-upload-count=1 animation-uniform-updates=307
+trace frame-callback ready=true time=359701177
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=10.253400 scene-upload-count=1 animation-uniform-updates=308
+trace frame-callback ready=true time=359701212
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=10.286754 scene-upload-count=1 animation-uniform-updates=309
+trace frame-callback ready=true time=359701244
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=10.320131 scene-upload-count=1 animation-uniform-updates=310
+trace frame-callback ready=true time=359701277
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=10.353559 scene-upload-count=1 animation-uniform-updates=311
+trace frame-callback ready=true time=359701312
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=10.386914 scene-upload-count=1 animation-uniform-updates=312
+trace frame-callback ready=true time=359701344
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=10.420327 scene-upload-count=1 animation-uniform-updates=313
+trace frame-callback ready=true time=359701378
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=10.453815 scene-upload-count=1 animation-uniform-updates=314
+trace frame-callback ready=true time=359701412
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=10.487164 scene-upload-count=1 animation-uniform-updates=315
+trace frame-callback ready=true time=359701445
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=10.520548 scene-upload-count=1 animation-uniform-updates=316
+trace frame-callback ready=true time=359701479
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=10.553929 scene-upload-count=1 animation-uniform-updates=317
+trace frame-callback ready=true time=359701511
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=10.587304 scene-upload-count=1 animation-uniform-updates=318
+trace frame-callback ready=true time=359701546
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=10.620731 scene-upload-count=1 animation-uniform-updates=319
+trace frame-callback ready=true time=359701579
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=10.654111 scene-upload-count=1 animation-uniform-updates=320
+trace frame-callback ready=true time=359701612
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=10.687493 scene-upload-count=1 animation-uniform-updates=321
+trace frame-callback ready=true time=359701646
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=10.720864 scene-upload-count=1 animation-uniform-updates=322
+trace frame-callback ready=true time=359701679
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=10.754243 scene-upload-count=1 animation-uniform-updates=323
+trace frame-callback ready=true time=359701712
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=10.787621 scene-upload-count=1 animation-uniform-updates=324
+trace frame-callback ready=true time=359701745
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=10.821069 scene-upload-count=1 animation-uniform-updates=325
+trace frame-callback ready=true time=359701780
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=10.854465 scene-upload-count=1 animation-uniform-updates=326
+trace frame-callback ready=true time=359701812
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=10.887845 scene-upload-count=1 animation-uniform-updates=327
+trace frame-callback ready=true time=359701846
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=10.921261 scene-upload-count=1 animation-uniform-updates=328
+trace frame-callback ready=true time=359701880
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=10.954623 scene-upload-count=1 animation-uniform-updates=329
+trace frame-callback ready=true time=359701912
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=10.988042 scene-upload-count=1 animation-uniform-updates=330
+trace frame-callback ready=true time=359701946
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=11.021401 scene-upload-count=1 animation-uniform-updates=331
+trace frame-callback ready=true time=359701979
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=11.054776 scene-upload-count=1 animation-uniform-updates=332
+trace frame-callback ready=true time=359702012
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=11.088192 scene-upload-count=1 animation-uniform-updates=333
+trace frame-callback ready=true time=359702046
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=11.121543 scene-upload-count=1 animation-uniform-updates=334
+trace frame-callback ready=true time=359702079
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=11.154920 scene-upload-count=1 animation-uniform-updates=335
+trace frame-callback ready=true time=359702112
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=11.188375 scene-upload-count=1 animation-uniform-updates=336
+trace frame-callback ready=true time=359702146
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=11.221733 scene-upload-count=1 animation-uniform-updates=337
+trace frame-callback ready=true time=359702179
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=11.255140 scene-upload-count=1 animation-uniform-updates=338
+trace frame-callback ready=true time=359702212
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=11.288529 scene-upload-count=1 animation-uniform-updates=339
+trace frame-callback ready=true time=359702246
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=11.321904 scene-upload-count=1 animation-uniform-updates=340
+trace frame-callback ready=true time=359702279
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=11.355286 scene-upload-count=1 animation-uniform-updates=341
+trace frame-callback ready=true time=359702313
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=11.388694 scene-upload-count=1 animation-uniform-updates=342
+trace frame-callback ready=true time=359702347
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=11.422062 scene-upload-count=1 animation-uniform-updates=343
+trace frame-callback ready=true time=359702379
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=11.455438 scene-upload-count=1 animation-uniform-updates=344
+trace frame-callback ready=true time=359702413
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=11.488814 scene-upload-count=1 animation-uniform-updates=345
+trace frame-callback ready=true time=359702446
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=11.522187 scene-upload-count=1 animation-uniform-updates=346
+trace frame-callback ready=true time=359702479
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=11.555567 scene-upload-count=1 animation-uniform-updates=347
+trace frame-callback ready=true time=359702514
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=11.588943 scene-upload-count=1 animation-uniform-updates=348
+trace frame-callback ready=true time=359702546
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=11.622326 scene-upload-count=1 animation-uniform-updates=349
+trace frame-callback ready=true time=359702580
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=11.655706 scene-upload-count=1 animation-uniform-updates=350
+trace frame-callback ready=true time=359702614
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=11.689086 scene-upload-count=1 animation-uniform-updates=351
+trace frame-callback ready=true time=359702646
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=11.722492 scene-upload-count=1 animation-uniform-updates=352
+trace frame-callback ready=true time=359702680
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=11.755870 scene-upload-count=1 animation-uniform-updates=353
+trace frame-callback ready=true time=359702714
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=11.789248 scene-upload-count=1 animation-uniform-updates=354
+trace frame-callback ready=true time=359702747
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=11.822664 scene-upload-count=1 animation-uniform-updates=355
+trace frame-callback ready=true time=359702780
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=11.856051 scene-upload-count=1 animation-uniform-updates=356
+trace frame-callback ready=true time=359702814
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=11.889461 scene-upload-count=1 animation-uniform-updates=357
+trace frame-callback ready=true time=359702847
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=11.922832 scene-upload-count=1 animation-uniform-updates=358
+trace frame-callback ready=true time=359702880
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=11.956247 scene-upload-count=1 animation-uniform-updates=359
+trace frame-callback ready=true time=359702914
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=11.989615 scene-upload-count=1 animation-uniform-updates=360
+trace frame-callback ready=true time=359702947
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=12.022988 scene-upload-count=1 animation-uniform-updates=361
+trace frame-callback ready=true time=359702980
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=12.056408 scene-upload-count=1 animation-uniform-updates=362
+trace frame-callback ready=true time=359703015
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=12.089767 scene-upload-count=1 animation-uniform-updates=363
+trace frame-callback ready=true time=359703047
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=12.123144 scene-upload-count=1 animation-uniform-updates=364
+trace frame-callback ready=true time=359703080
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=12.156600 scene-upload-count=1 animation-uniform-updates=365
+trace frame-callback ready=true time=359703114
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=12.189962 scene-upload-count=1 animation-uniform-updates=366
+trace frame-callback ready=true time=359703147
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=12.223369 scene-upload-count=1 animation-uniform-updates=367
+trace frame-callback ready=true time=359703181
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=12.256784 scene-upload-count=1 animation-uniform-updates=368
+trace frame-callback ready=true time=359703215
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=12.290161 scene-upload-count=1 animation-uniform-updates=369
+trace frame-callback ready=true time=359703248
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=12.323540 scene-upload-count=1 animation-uniform-updates=370
+trace frame-callback ready=true time=359703281
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=12.356965 scene-upload-count=1 animation-uniform-updates=371
+trace frame-callback ready=true time=359703315
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=12.390322 scene-upload-count=1 animation-uniform-updates=372
+trace frame-callback ready=true time=359703348
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=12.423732 scene-upload-count=1 animation-uniform-updates=373
+trace frame-callback ready=true time=359703381
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=12.457147 scene-upload-count=1 animation-uniform-updates=374
+trace frame-callback ready=true time=359703416
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=12.490520 scene-upload-count=1 animation-uniform-updates=375
+trace frame-callback ready=true time=359703448
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=12.523897 scene-upload-count=1 animation-uniform-updates=376
+trace frame-callback ready=true time=359703481
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=12.557334 scene-upload-count=1 animation-uniform-updates=377
+trace frame-callback ready=true time=359703515
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=12.590693 scene-upload-count=1 animation-uniform-updates=378
+trace frame-callback ready=true time=359703548
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=12.624063 scene-upload-count=1 animation-uniform-updates=379
+trace frame-callback ready=true time=359703581
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=12.657474 scene-upload-count=1 animation-uniform-updates=380
+trace frame-callback ready=true time=359703615
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=12.690844 scene-upload-count=1 animation-uniform-updates=381
+trace frame-callback ready=true time=359703648
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=12.724223 scene-upload-count=1 animation-uniform-updates=382
+trace frame-callback ready=true time=359703682
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=12.757645 scene-upload-count=1 animation-uniform-updates=383
+trace frame-callback ready=true time=359703715
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=12.790974 scene-upload-count=1 animation-uniform-updates=384
+trace frame-callback ready=true time=359703748
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=12.824348 scene-upload-count=1 animation-uniform-updates=385
+trace frame-callback ready=true time=359703782
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=12.857727 scene-upload-count=1 animation-uniform-updates=386
+trace frame-callback ready=true time=359703815
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=12.891104 scene-upload-count=1 animation-uniform-updates=387
+trace frame-callback ready=true time=359703848
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=12.924485 scene-upload-count=1 animation-uniform-updates=388
+trace frame-callback ready=true time=359703883
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=12.957948 scene-upload-count=1 animation-uniform-updates=389
+trace frame-callback ready=true time=359703918
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=12.991306 scene-upload-count=1 animation-uniform-updates=390
+trace frame-callback ready=true time=359703951
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=13.024684 scene-upload-count=1 animation-uniform-updates=391
+trace frame-callback ready=true time=359703984
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=13.058066 scene-upload-count=1 animation-uniform-updates=392
+trace frame-callback ready=true time=359704018
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=13.091475 scene-upload-count=1 animation-uniform-updates=393
+trace frame-callback ready=true time=359704051
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=13.124855 scene-upload-count=1 animation-uniform-updates=394
+trace frame-callback ready=true time=359704084
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=13.158261 scene-upload-count=1 animation-uniform-updates=395
+trace frame-callback ready=true time=359704118
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=13.191627 scene-upload-count=1 animation-uniform-updates=396
+trace frame-callback ready=true time=359704151
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=13.225005 scene-upload-count=1 animation-uniform-updates=397
+trace frame-callback ready=true time=359704184
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=13.258423 scene-upload-count=1 animation-uniform-updates=398
+trace frame-callback ready=true time=359704218
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=13.291786 scene-upload-count=1 animation-uniform-updates=399
+trace frame-callback ready=true time=359704251
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=13.325162 scene-upload-count=1 animation-uniform-updates=400
+trace frame-callback ready=true time=359704285
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=13.358596 scene-upload-count=1 animation-uniform-updates=401
+trace frame-callback ready=true time=359704318
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=13.391964 scene-upload-count=1 animation-uniform-updates=402
+trace frame-callback ready=true time=359704351
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=13.425333 scene-upload-count=1 animation-uniform-updates=403
+trace frame-callback ready=true time=359704384
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=13.458713 scene-upload-count=1 animation-uniform-updates=404
+trace frame-callback ready=true time=359704418
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=13.492102 scene-upload-count=1 animation-uniform-updates=405
+trace frame-callback ready=true time=359704451
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=13.525468 scene-upload-count=1 animation-uniform-updates=406
+trace frame-callback ready=true time=359704484
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=13.558848 scene-upload-count=1 animation-uniform-updates=407
+trace frame-callback ready=true time=359704518
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=13.592244 scene-upload-count=1 animation-uniform-updates=408
+trace frame-callback ready=true time=359704551
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=13.625611 scene-upload-count=1 animation-uniform-updates=409
+trace frame-callback ready=true time=359704584
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=13.659002 scene-upload-count=1 animation-uniform-updates=410
+trace frame-callback ready=true time=359704618
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=13.692414 scene-upload-count=1 animation-uniform-updates=411
+trace frame-callback ready=true time=359704651
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=13.725800 scene-upload-count=1 animation-uniform-updates=412
+trace frame-callback ready=true time=359704684
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=13.759180 scene-upload-count=1 animation-uniform-updates=413
+trace frame-callback ready=true time=359704718
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=13.792582 scene-upload-count=1 animation-uniform-updates=414
+trace frame-callback ready=true time=359704751
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=13.825948 scene-upload-count=1 animation-uniform-updates=415
+trace frame-callback ready=true time=359704784
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=13.859326 scene-upload-count=1 animation-uniform-updates=416
+trace frame-callback ready=true time=359704817
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=13.892787 scene-upload-count=1 animation-uniform-updates=417
+trace frame-callback ready=true time=359704851
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=13.926133 scene-upload-count=1 animation-uniform-updates=418
+trace frame-callback ready=true time=359704884
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=13.959545 scene-upload-count=1 animation-uniform-updates=419
+trace frame-callback ready=true time=359704918
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=13.992962 scene-upload-count=1 animation-uniform-updates=420
+trace frame-callback ready=true time=359704951
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=14.026341 scene-upload-count=1 animation-uniform-updates=421
+trace frame-callback ready=true time=359704984
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=14.059719 scene-upload-count=1 animation-uniform-updates=422
+trace frame-callback ready=true time=359705017
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=14.093113 scene-upload-count=1 animation-uniform-updates=423
+trace frame-callback ready=true time=359705051
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=14.126495 scene-upload-count=1 animation-uniform-updates=424
+trace frame-callback ready=true time=359705084
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=14.159878 scene-upload-count=1 animation-uniform-updates=425
+trace frame-callback ready=true time=359705118
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=14.193254 scene-upload-count=1 animation-uniform-updates=426
+trace frame-callback ready=true time=359705152
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=14.226665 scene-upload-count=1 animation-uniform-updates=427
+trace frame-callback ready=true time=359705184
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=14.260038 scene-upload-count=1 animation-uniform-updates=428
+trace frame-callback ready=true time=359705217
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=14.293466 scene-upload-count=1 animation-uniform-updates=429
+trace frame-callback ready=true time=359705251
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=14.326913 scene-upload-count=1 animation-uniform-updates=430
+trace frame-callback ready=true time=359705285
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=14.360310 scene-upload-count=1 animation-uniform-updates=431
+trace frame-callback ready=true time=359705318
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=14.393667 scene-upload-count=1 animation-uniform-updates=432
+trace frame-callback ready=true time=359705351
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=14.427052 scene-upload-count=1 animation-uniform-updates=433
+trace frame-callback ready=true time=359705384
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=14.460431 scene-upload-count=1 animation-uniform-updates=434
+trace frame-callback ready=true time=359705418
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=14.493811 scene-upload-count=1 animation-uniform-updates=435
+trace frame-callback ready=true time=359705451
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=14.527218 scene-upload-count=1 animation-uniform-updates=436
+trace frame-callback ready=true time=359705485
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=14.560632 scene-upload-count=1 animation-uniform-updates=437
+trace frame-callback ready=true time=359705518
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=14.594010 scene-upload-count=1 animation-uniform-updates=438
+trace frame-callback ready=true time=359705551
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=14.627422 scene-upload-count=1 animation-uniform-updates=439
+trace frame-callback ready=true time=359705585
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=14.660797 scene-upload-count=1 animation-uniform-updates=440
+trace frame-callback ready=true time=359705618
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=14.694178 scene-upload-count=1 animation-uniform-updates=441
+trace frame-callback ready=true time=359705651
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=14.727559 scene-upload-count=1 animation-uniform-updates=442
+trace frame-callback ready=true time=359705685
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=14.760936 scene-upload-count=1 animation-uniform-updates=443
+trace frame-callback ready=true time=359705718
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=14.794312 scene-upload-count=1 animation-uniform-updates=444
+trace frame-callback ready=true time=359705752
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=14.827712 scene-upload-count=1 animation-uniform-updates=445
+trace frame-callback ready=true time=359705785
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=14.861078 scene-upload-count=1 animation-uniform-updates=446
+trace frame-callback ready=true time=359705818
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=14.894480 scene-upload-count=1 animation-uniform-updates=447
+trace frame-callback ready=true time=359705852
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=14.927848 scene-upload-count=1 animation-uniform-updates=448
+trace frame-callback ready=true time=359705885
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=14.961225 scene-upload-count=1 animation-uniform-updates=449
+trace frame-callback ready=true time=359705919
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=14.994633 scene-upload-count=1 animation-uniform-updates=450
+trace frame-callback ready=true time=359705952
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=15.028014 scene-upload-count=1 animation-uniform-updates=451
+trace frame-callback ready=true time=359705986
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=15.061431 scene-upload-count=1 animation-uniform-updates=452
+trace frame-callback ready=true time=359706019
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=15.094837 scene-upload-count=1 animation-uniform-updates=453
+trace frame-callback ready=true time=359706052
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=15.128212 scene-upload-count=1 animation-uniform-updates=454
+trace frame-callback ready=true time=359706086
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=15.161591 scene-upload-count=1 animation-uniform-updates=455
+trace frame-callback ready=true time=359706119
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=15.194970 scene-upload-count=1 animation-uniform-updates=456
+trace frame-callback ready=true time=359706152
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=15.228351 scene-upload-count=1 animation-uniform-updates=457
+trace frame-callback ready=true time=359706186
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=15.261848 scene-upload-count=1 animation-uniform-updates=458
+trace frame-callback ready=true time=359706219
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=15.295167 scene-upload-count=1 animation-uniform-updates=459
+trace frame-callback ready=true time=359706253
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=15.328550 scene-upload-count=1 animation-uniform-updates=460
+trace frame-callback ready=true time=359706286
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=15.361927 scene-upload-count=1 animation-uniform-updates=461
+trace frame-callback ready=true time=359706320
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=15.395318 scene-upload-count=1 animation-uniform-updates=462
+trace frame-callback ready=true time=359706353
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=15.428692 scene-upload-count=1 animation-uniform-updates=463
+trace frame-callback ready=true time=359706386
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=15.462070 scene-upload-count=1 animation-uniform-updates=464
+trace frame-callback ready=true time=359706420
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=15.495450 scene-upload-count=1 animation-uniform-updates=465
+trace frame-callback ready=true time=359706453
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=15.528820 scene-upload-count=1 animation-uniform-updates=466
+trace frame-callback ready=true time=359706486
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=15.562200 scene-upload-count=1 animation-uniform-updates=467
+trace frame-callback ready=true time=359706521
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=15.595599 scene-upload-count=1 animation-uniform-updates=468
+trace frame-callback ready=true time=359706553
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=15.628987 scene-upload-count=1 animation-uniform-updates=469
+trace frame-callback ready=true time=359706586
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=15.662374 scene-upload-count=1 animation-uniform-updates=470
+trace frame-callback ready=true time=359706621
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=15.695743 scene-upload-count=1 animation-uniform-updates=471
+trace frame-callback ready=true time=359706653
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=15.729119 scene-upload-count=1 animation-uniform-updates=472
+trace frame-callback ready=true time=359706686
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=15.762499 scene-upload-count=1 animation-uniform-updates=473
+trace frame-callback ready=true time=359706720
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=15.795883 scene-upload-count=1 animation-uniform-updates=474
+trace frame-callback ready=true time=359706753
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=15.829259 scene-upload-count=1 animation-uniform-updates=475
+trace frame-callback ready=true time=359706787
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=15.862632 scene-upload-count=1 animation-uniform-updates=476
+trace frame-callback ready=true time=359706820
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=15.896008 scene-upload-count=1 animation-uniform-updates=477
+trace frame-callback ready=true time=359706853
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=15.929391 scene-upload-count=1 animation-uniform-updates=478
+trace frame-callback ready=true time=359706887
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=15.962825 scene-upload-count=1 animation-uniform-updates=479
+trace frame-callback ready=true time=359706920
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=15.996223 scene-upload-count=1 animation-uniform-updates=480
+trace frame-callback ready=true time=359706954
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=16.029604 scene-upload-count=1 animation-uniform-updates=481
+trace frame-callback ready=true time=359706987
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=16.062983 scene-upload-count=1 animation-uniform-updates=482
+trace frame-callback ready=true time=359707020
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=16.096359 scene-upload-count=1 animation-uniform-updates=483
+trace frame-callback ready=true time=359707054
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=16.129772 scene-upload-count=1 animation-uniform-updates=484
+trace frame-callback ready=true time=359707087
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=16.163179 scene-upload-count=1 animation-uniform-updates=485
+trace frame-callback ready=true time=359707120
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=16.196590 scene-upload-count=1 animation-uniform-updates=486
+trace frame-callback ready=true time=359707154
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=16.229952 scene-upload-count=1 animation-uniform-updates=487
+trace frame-callback ready=true time=359707187
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=16.263363 scene-upload-count=1 animation-uniform-updates=488
+trace frame-callback ready=true time=359707221
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=16.296776 scene-upload-count=1 animation-uniform-updates=489
+trace frame-callback ready=true time=359707255
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=16.330181 scene-upload-count=1 animation-uniform-updates=490
+trace frame-callback ready=true time=359707288
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=16.363594 scene-upload-count=1 animation-uniform-updates=491
+trace frame-callback ready=true time=359707321
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=16.397009 scene-upload-count=1 animation-uniform-updates=492
+trace frame-callback ready=true time=359707355
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=16.430424 scene-upload-count=1 animation-uniform-updates=493
+trace frame-callback ready=true time=359707388
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=16.463837 scene-upload-count=1 animation-uniform-updates=494
+trace frame-callback ready=true time=359707421
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=16.497255 scene-upload-count=1 animation-uniform-updates=495
+trace frame-callback ready=true time=359707455
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=16.530611 scene-upload-count=1 animation-uniform-updates=496
+trace frame-callback ready=true time=359707488
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=16.563988 scene-upload-count=1 animation-uniform-updates=497
+trace frame-callback ready=true time=359707521
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=16.597414 scene-upload-count=1 animation-uniform-updates=498
+trace frame-callback ready=true time=359707555
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=16.630768 scene-upload-count=1 animation-uniform-updates=499
+trace frame-callback ready=true time=359707588
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=16.664141 scene-upload-count=1 animation-uniform-updates=500
+trace frame-callback ready=true time=359707621
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=16.697519 scene-upload-count=1 animation-uniform-updates=501
+trace frame-callback ready=true time=359707655
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=16.730907 scene-upload-count=1 animation-uniform-updates=502
+trace frame-callback ready=true time=359707688
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=16.764273 scene-upload-count=1 animation-uniform-updates=503
+trace frame-callback ready=true time=359707722
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=16.797653 scene-upload-count=1 animation-uniform-updates=504
+trace frame-callback ready=true time=359707755
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=16.831030 scene-upload-count=1 animation-uniform-updates=505
+trace frame-callback ready=true time=359707788
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=16.864456 scene-upload-count=1 animation-uniform-updates=506
+trace frame-callback ready=true time=359707822
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=16.897825 scene-upload-count=1 animation-uniform-updates=507
+trace frame-callback ready=true time=359707855
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=16.931242 scene-upload-count=1 animation-uniform-updates=508
+trace frame-callback ready=true time=359707889
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=16.964600 scene-upload-count=1 animation-uniform-updates=509
+trace frame-callback ready=true time=359707922
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=16.997972 scene-upload-count=1 animation-uniform-updates=510
+trace frame-callback ready=true time=359707955
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=17.031353 scene-upload-count=1 animation-uniform-updates=511
+trace frame-callback ready=true time=359707989
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=17.064766 scene-upload-count=1 animation-uniform-updates=512
+trace frame-callback ready=true time=359708022
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=17.098145 scene-upload-count=1 animation-uniform-updates=513
+trace frame-callback ready=true time=359708056
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=17.131550 scene-upload-count=1 animation-uniform-updates=514
+trace frame-callback ready=true time=359708089
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=17.164925 scene-upload-count=1 animation-uniform-updates=515
+trace frame-callback ready=true time=359708122
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=17.198303 scene-upload-count=1 animation-uniform-updates=516
+trace frame-callback ready=true time=359708156
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=17.231682 scene-upload-count=1 animation-uniform-updates=517
+trace frame-callback ready=true time=359708189
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=17.265095 scene-upload-count=1 animation-uniform-updates=518
+trace frame-callback ready=true time=359708222
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=17.298504 scene-upload-count=1 animation-uniform-updates=519
+trace frame-callback ready=true time=359708256
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=17.331932 scene-upload-count=1 animation-uniform-updates=520
+trace frame-callback ready=true time=359708289
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=17.365303 scene-upload-count=1 animation-uniform-updates=521
+trace frame-callback ready=true time=359708323
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=17.398682 scene-upload-count=1 animation-uniform-updates=522
+trace frame-callback ready=true time=359708356
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=17.432056 scene-upload-count=1 animation-uniform-updates=523
+trace frame-callback ready=true time=359708389
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=17.465483 scene-upload-count=1 animation-uniform-updates=524
+trace frame-callback ready=true time=359708423
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=17.498880 scene-upload-count=1 animation-uniform-updates=525
+trace frame-callback ready=true time=359708456
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=17.532301 scene-upload-count=1 animation-uniform-updates=526
+trace frame-callback ready=true time=359708490
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=17.565714 scene-upload-count=1 animation-uniform-updates=527
+trace frame-callback ready=true time=359708523
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=17.599127 scene-upload-count=1 animation-uniform-updates=528
+trace frame-callback ready=true time=359708557
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=17.632532 scene-upload-count=1 animation-uniform-updates=529
+trace frame-callback ready=true time=359708590
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=17.665920 scene-upload-count=1 animation-uniform-updates=530
+trace frame-callback ready=true time=359708623
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=17.699295 scene-upload-count=1 animation-uniform-updates=531
+trace frame-callback ready=true time=359708658
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=17.732708 scene-upload-count=1 animation-uniform-updates=532
+trace frame-callback ready=true time=359708691
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=17.766136 scene-upload-count=1 animation-uniform-updates=533
+trace frame-callback ready=true time=359708724
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=17.799520 scene-upload-count=1 animation-uniform-updates=534
+trace frame-callback ready=true time=359708757
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=17.833033 scene-upload-count=1 animation-uniform-updates=535
+trace frame-callback ready=true time=359708792
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=17.866428 scene-upload-count=1 animation-uniform-updates=536
+trace frame-callback ready=true time=359708824
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=17.899796 scene-upload-count=1 animation-uniform-updates=537
+trace frame-callback ready=true time=359708857
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=17.933243 scene-upload-count=1 animation-uniform-updates=538
+trace frame-callback ready=true time=359708891
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=17.966623 scene-upload-count=1 animation-uniform-updates=539
+trace frame-callback ready=true time=359708924
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=18.000044 scene-upload-count=1 animation-uniform-updates=540
+trace frame-callback ready=true time=359708957
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=18.033424 scene-upload-count=1 animation-uniform-updates=541
+trace frame-callback ready=true time=359708991
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=18.066805 scene-upload-count=1 animation-uniform-updates=542
+trace frame-callback ready=true time=359709024
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=18.100222 scene-upload-count=1 animation-uniform-updates=543
+trace frame-callback ready=true time=359709058
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=18.133966 scene-upload-count=1 animation-uniform-updates=544
+trace frame-callback ready=true time=359709092
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=18.200466 scene-upload-count=1 animation-uniform-updates=545
+trace frame-callback ready=true time=359709158
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=18.233885 scene-upload-count=1 animation-uniform-updates=546
+trace frame-callback ready=true time=359709192
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=18.267248 scene-upload-count=1 animation-uniform-updates=547
+trace frame-callback ready=true time=359709225
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=18.300663 scene-upload-count=1 animation-uniform-updates=548
+trace frame-callback ready=true time=359709258
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=18.334057 scene-upload-count=1 animation-uniform-updates=549
+trace frame-callback ready=true time=359709293
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=18.367464 scene-upload-count=1 animation-uniform-updates=550
+trace frame-callback ready=true time=359709325
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=18.400835 scene-upload-count=1 animation-uniform-updates=551
+trace frame-callback ready=true time=359709358
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=18.434246 scene-upload-count=1 animation-uniform-updates=552
+trace frame-callback ready=true time=359709392
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=18.467604 scene-upload-count=1 animation-uniform-updates=553
+trace frame-callback ready=true time=359709425
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=18.500994 scene-upload-count=1 animation-uniform-updates=554
+trace frame-callback ready=true time=359709458
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=18.534416 scene-upload-count=1 animation-uniform-updates=555
+trace frame-callback ready=true time=359709494
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=18.567764 scene-upload-count=1 animation-uniform-updates=556
+trace frame-callback ready=true time=359709525
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=18.601183 scene-upload-count=1 animation-uniform-updates=557
+trace frame-callback ready=true time=359709559
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=18.634617 scene-upload-count=1 animation-uniform-updates=558
+trace frame-callback ready=true time=359709593
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=18.667961 scene-upload-count=1 animation-uniform-updates=559
+trace frame-callback ready=true time=359709625
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=18.701336 scene-upload-count=1 animation-uniform-updates=560
+trace frame-callback ready=true time=359709659
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=18.734724 scene-upload-count=1 animation-uniform-updates=561
+trace frame-callback ready=true time=359709693
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=18.768089 scene-upload-count=1 animation-uniform-updates=562
+trace frame-callback ready=true time=359709725
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=18.801464 scene-upload-count=1 animation-uniform-updates=563
+trace frame-callback ready=true time=359709759
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=18.834921 scene-upload-count=1 animation-uniform-updates=564
+trace frame-callback ready=true time=359709793
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=18.868315 scene-upload-count=1 animation-uniform-updates=565
+trace frame-callback ready=true time=359709826
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=18.901737 scene-upload-count=1 animation-uniform-updates=566
+trace frame-callback ready=true time=359709859
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=18.935144 scene-upload-count=1 animation-uniform-updates=567
+trace frame-callback ready=true time=359709893
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=18.968508 scene-upload-count=1 animation-uniform-updates=568
+trace frame-callback ready=true time=359709926
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=19.001886 scene-upload-count=1 animation-uniform-updates=569
+trace frame-callback ready=true time=359709959
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=19.035265 scene-upload-count=1 animation-uniform-updates=570
+trace frame-callback ready=true time=359709993
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=19.068642 scene-upload-count=1 animation-uniform-updates=571
+trace frame-callback ready=true time=359710026
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=19.102051 scene-upload-count=1 animation-uniform-updates=572
+trace frame-callback ready=true time=359710059
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=19.135483 scene-upload-count=1 animation-uniform-updates=573
+trace frame-callback ready=true time=359710093
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=19.168852 scene-upload-count=1 animation-uniform-updates=574
+trace frame-callback ready=true time=359710126
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=19.202259 scene-upload-count=1 animation-uniform-updates=575
+trace frame-callback ready=true time=359710160
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=19.235636 scene-upload-count=1 animation-uniform-updates=576
+trace frame-callback ready=true time=359710194
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=19.269056 scene-upload-count=1 animation-uniform-updates=577
+trace frame-callback ready=true time=359710226
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=19.302469 scene-upload-count=1 animation-uniform-updates=578
+trace frame-callback ready=true time=359710260
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=19.335852 scene-upload-count=1 animation-uniform-updates=579
+trace frame-callback ready=true time=359710294
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=19.369226 scene-upload-count=1 animation-uniform-updates=580
+trace frame-callback ready=true time=359710327
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=19.402647 scene-upload-count=1 animation-uniform-updates=581
+trace frame-callback ready=true time=359710360
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=19.436026 scene-upload-count=1 animation-uniform-updates=582
+trace frame-callback ready=true time=359710393
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=19.469448 scene-upload-count=1 animation-uniform-updates=583
+trace frame-callback ready=true time=359710427
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=19.502827 scene-upload-count=1 animation-uniform-updates=584
+trace frame-callback ready=true time=359710460
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=19.536243 scene-upload-count=1 animation-uniform-updates=585
+trace frame-callback ready=true time=359710494
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=19.569628 scene-upload-count=1 animation-uniform-updates=586
+trace frame-callback ready=true time=359710527
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=19.603039 scene-upload-count=1 animation-uniform-updates=587
+trace frame-callback ready=true time=359710560
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=19.636436 scene-upload-count=1 animation-uniform-updates=588
+trace frame-callback ready=true time=359710594
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=19.669842 scene-upload-count=1 animation-uniform-updates=589
+trace frame-callback ready=true time=359710627
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=19.703249 scene-upload-count=1 animation-uniform-updates=590
+trace frame-callback ready=true time=359710661
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=19.736628 scene-upload-count=1 animation-uniform-updates=591
+trace frame-callback ready=true time=359710694
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=19.770041 scene-upload-count=1 animation-uniform-updates=592
+trace frame-callback ready=true time=359710727
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=19.803457 scene-upload-count=1 animation-uniform-updates=593
+trace frame-callback ready=true time=359710761
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=19.836872 scene-upload-count=1 animation-uniform-updates=594
+trace frame-callback ready=true time=359710794
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=19.870283 scene-upload-count=1 animation-uniform-updates=595
+trace frame-callback ready=true time=359710828
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=19.903698 scene-upload-count=1 animation-uniform-updates=596
+trace frame-callback ready=true time=359710861
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=19.937075 scene-upload-count=1 animation-uniform-updates=597
+trace frame-callback ready=true time=359710894
+trace frame-requested before-present=true
+trace gpu-frame presented extent=1920x1080 format=Rgba8UnormSrgb
+trace animation-frame fps=30 phase-seconds=19.970478 scene-upload-count=1 animation-uniform-updates=598
+trace frame-callback ready=true time=359710928
+trace test-exit clean=true reason=deadline
+trace owners-dropped gpu-before-layer-before-selected-output=true
+trace shutdown state=Ready

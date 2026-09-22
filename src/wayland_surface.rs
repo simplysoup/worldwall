@@ -20,6 +20,7 @@ use calloop_wayland_source::WaylandSource;
 use std::cmp::Ordering;
 
 use crate::{
+    environment::{Location, SystemWallClock, WallClock},
     renderer::{RenderOutcome, Renderer},
     scene::Scene,
     scene_registry::{
@@ -28,6 +29,7 @@ use crate::{
         SelectionTrigger,
     },
     scheduler::{Fps, FrameScheduler},
+    weather::{CacheStore, OpenMeteoProvider, RefreshKind, WeatherConfig, WeatherService},
 };
 use smithay_client_toolkit::{
     compositor::{CompositorHandler, CompositorState, FrameCallbackData, Region},
@@ -143,11 +145,16 @@ pub fn run() -> Result<(), Box<dyn Error>> {
         return Ok(());
     }
 
+    // Weather is optional and starts only after explicit provider/location
+    // configuration. Its startup request is asynchronous; selection uses the
+    // cache snapshot available at this boundary and never waits on network I/O.
+    let mut weather = WeatherRuntime::startup()?;
+    let civil_time = CivilTimeRuntime::startup()?;
     // Keep the validated selection transaction alive with the renderer. S05
     // has no public control source yet, so only startup is invoked here; a
     // later explicit request must use the begin/complete handoff below rather
     // than letting output/config/weather callbacks select implicitly.
-    let (scene, _registry_selection) = load_scene()?;
+    let (scene, _registry_selection) = load_scene(weather.snapshot())?;
     let mut renderer = Renderer::new_with_scene(&connection, layer.wl_surface(), extent, &scene)?;
     println!(
         "trace scene-upload-count={} steady-state-reuploads=false",
@@ -163,7 +170,13 @@ pub fn run() -> Result<(), Box<dyn Error>> {
     // wl_surface.frame is queued before wgpu's present, which performs the
     // actual commit. There is no speculative duplicate wl_surface.commit.
     client.request_frame(&queue_handle);
-    match render_renderer(&connection, &mut renderer, extent, 0.0)? {
+    match render_renderer(
+        &connection,
+        &mut renderer,
+        extent,
+        0.0,
+        civil_time.seconds(),
+    )? {
         RenderOutcome::Presented => {
             let _ = scheduler.submit_if_due(0);
             println!(
@@ -194,6 +207,16 @@ pub fn run() -> Result<(), Box<dyn Error>> {
             client.mark_timer_fired();
             TimeoutAction::ToDuration(interval)
         })?;
+    // This low-frequency wakeup is separate from the animation timer. Weather
+    // completion/deadline checks are therefore not performed per frame.
+    let weather_poll_interval = Duration::from_secs(1);
+    event_loop.handle().insert_source(
+        Timer::from_duration(weather_poll_interval),
+        move |_, _, client| {
+            client.mark_weather_timer_fired();
+            TimeoutAction::ToDuration(weather_poll_interval)
+        },
+    )?;
     WaylandSource::new(connection.clone(), event_queue).insert(event_loop.handle())?;
 
     let mut seen_reconfigure_generation = client.reconfigure_generation;
@@ -220,6 +243,10 @@ pub fn run() -> Result<(), Box<dyn Error>> {
             scheduler.on_reconfigure();
             seen_reconfigure_generation = client.reconfigure_generation;
         }
+        if client.weather_timer_fired {
+            client.weather_timer_fired = false;
+            weather.poll();
+        }
         client.timer_fired = false;
         if client.frame_pending || !scheduler.is_due(now_ns) {
             continue;
@@ -229,7 +256,13 @@ pub fn run() -> Result<(), Box<dyn Error>> {
         };
         client.request_frame(&queue_handle);
         let animation_time_seconds = (clock_origin.elapsed().as_secs_f64() % 1024.0) as f32;
-        match render_renderer(&connection, &mut renderer, extent, animation_time_seconds)? {
+        match render_renderer(
+            &connection,
+            &mut renderer,
+            extent,
+            animation_time_seconds,
+            civil_time.seconds(),
+        )? {
             RenderOutcome::Presented => {
                 let _ = scheduler.submit_if_due(now_ns);
                 println!(
@@ -265,13 +298,148 @@ pub fn run() -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
+struct CivilTimeRuntime {
+    offset_minutes: Option<i32>,
+    clock: SystemWallClock,
+}
+
+impl CivilTimeRuntime {
+    fn startup() -> Result<Self, Box<dyn Error>> {
+        let offset_minutes = match std::env::var("WORLDWALL_UTC_OFFSET_MINUTES") {
+            Ok(value) => Some(value.parse::<i32>().map_err(
+                |_| "WORLDWALL_UTC_OFFSET_MINUTES must be a finite whole-minute offset",
+            )?),
+            Err(std::env::VarError::NotPresent) => None,
+            Err(error) => {
+                return Err(format!("reading WORLDWALL_UTC_OFFSET_MINUTES failed: {error}").into());
+            }
+        };
+        if let Some(offset) = offset_minutes {
+            if !(-14 * 60..=14 * 60).contains(&offset) {
+                return Err("WORLDWALL_UTC_OFFSET_MINUTES must be between -840 and 840".into());
+            }
+            println!("trace civil-time configured=true offset-minutes={offset}");
+        } else {
+            println!("trace civil-time configured=false state=unknown");
+        }
+        Ok(Self {
+            offset_minutes,
+            clock: SystemWallClock,
+        })
+    }
+
+    fn seconds(&self) -> u32 {
+        let Ok(utc_seconds) = self.clock.now_utc_seconds() else {
+            return 0;
+        };
+        let Some(offset_minutes) = self.offset_minutes else {
+            return 0;
+        };
+        let offset = i64::from(offset_minutes) * 60;
+        utc_seconds
+            .saturating_add(offset)
+            .rem_euclid(crate::scene::CIVIL_SECONDS_PER_DAY as i64) as u32
+    }
+}
+
+struct WeatherRuntime {
+    service: Option<WeatherService>,
+    clock: SystemWallClock,
+    reported_epoch: u64,
+}
+
+impl WeatherRuntime {
+    fn startup() -> Result<Self, Box<dyn Error>> {
+        let clock = SystemWallClock;
+        let Some(provider) = std::env::var_os("WORLDWALL_WEATHER") else {
+            return Ok(Self {
+                service: None,
+                clock,
+                reported_epoch: 0,
+            });
+        };
+        let provider = provider
+            .to_str()
+            .ok_or("WORLDWALL_WEATHER must be valid UTF-8 and equal open-meteo when enabled")?;
+        if provider != "open-meteo" {
+            return Err(format!(
+                "unsupported WORLDWALL_WEATHER provider {provider:?}; expected open-meteo"
+            )
+            .into());
+        }
+        let latitude = required_weather_coordinate("WORLDWALL_WEATHER_LATITUDE")?;
+        let longitude = required_weather_coordinate("WORLDWALL_WEATHER_LONGITUDE")?;
+        let location = Location::new(latitude, longitude)
+            .map_err(|_| "configured weather coordinates are invalid")?;
+        let config = WeatherConfig::open_meteo(location)?;
+        let request_deadline = config.request_deadline;
+        let mut service = WeatherService::new(config, OpenMeteoProvider::new(request_deadline)?)?;
+        let now_utc = clock.now_utc_seconds()?;
+        if let Ok(path) = CacheStore::default_path() {
+            service.attach_cache_best_effort(CacheStore::new(path), now_utc)?;
+            if service.snapshot(now_utc).state == crate::weather::WeatherState::Error {
+                eprintln!("trace weather-cache state=error fallback=unknown");
+            }
+        }
+        let refresh = service.request_refresh(now_utc, Instant::now(), RefreshKind::Startup);
+        println!("trace weather-enabled provider=open-meteo refresh={refresh:?}");
+        Ok(Self {
+            service: Some(service),
+            clock,
+            reported_epoch: 0,
+        })
+    }
+
+    fn snapshot(&self) -> EnvironmentSnapshot {
+        let Some(service) = &self.service else {
+            return EnvironmentSnapshot::unknown();
+        };
+        let Ok(now_utc) = self.clock.now_utc_seconds() else {
+            return EnvironmentSnapshot::unknown();
+        };
+        let weather = service.snapshot(now_utc).weather();
+        EnvironmentSnapshot {
+            time: crate::scene_registry::TimeOfDay::Unknown,
+            weather,
+            season: crate::scene_registry::Season::Unknown,
+        }
+    }
+
+    fn poll(&mut self) {
+        let Some(service) = &mut self.service else {
+            return;
+        };
+        let Ok(now_utc) = self.clock.now_utc_seconds() else {
+            return;
+        };
+        service.poll(now_utc, Instant::now());
+        let epoch = service.cache_epoch();
+        if epoch != self.reported_epoch {
+            self.reported_epoch = epoch;
+            let state = service.snapshot(now_utc).state;
+            println!("trace weather-cache epoch={epoch} state={state:?}");
+        }
+    }
+}
+
+fn required_weather_coordinate(name: &str) -> Result<f64, Box<dyn Error>> {
+    let value = std::env::var(name)
+        .map_err(|_| format!("{name} is required when WORLDWALL_WEATHER=open-meteo"))?;
+    value
+        .parse::<f64>()
+        .map_err(|_| format!("{name} is not a valid finite decimal coordinate").into())
+}
+
 struct RegistrySelection {
     controller: SelectionController,
     transaction: SceneTransaction,
 }
 
 impl RegistrySelection {
-    fn startup(root: std::path::PathBuf) -> Result<(Self, Scene), Box<dyn Error>> {
+    fn startup(
+        root: std::path::PathBuf,
+        snapshot: EnvironmentSnapshot,
+    ) -> Result<(Self, Scene), Box<dyn Error>> {
         let registry = SceneRegistry::load(root)?;
         let mut selection = Self {
             controller: SelectionController::new(registry),
@@ -279,7 +447,7 @@ impl RegistrySelection {
         };
         let request = selection
             .controller
-            .request(EnvironmentSnapshot::unknown(), 0, SelectionTrigger::Startup)
+            .request(snapshot, 0, SelectionTrigger::Startup)
             .map_err(|result| format!("startup registry selection failed: {result:?}"))?;
         let token = selection.transaction.begin(&request);
         let manifest = selection
@@ -362,9 +530,12 @@ impl RegistrySelection {
     }
 }
 
-fn load_scene() -> Result<(Scene, Option<RegistrySelection>), Box<dyn Error>> {
+fn load_scene(
+    snapshot: EnvironmentSnapshot,
+) -> Result<(Scene, Option<RegistrySelection>), Box<dyn Error>> {
     if let Some(root) = std::env::var_os("WORLDWALL_REGISTRY_DIR") {
-        let (selection, scene) = RegistrySelection::startup(std::path::PathBuf::from(root))?;
+        let (selection, scene) =
+            RegistrySelection::startup(std::path::PathBuf::from(root), snapshot)?;
         return Ok((scene, Some(selection)));
     }
 
@@ -373,10 +544,13 @@ fn load_scene() -> Result<(Scene, Option<RegistrySelection>), Box<dyn Error>> {
             let directory = std::path::PathBuf::from(directory);
             let animation_path = directory.join("animation.toml");
             let animation_path = animation_path.is_file().then_some(animation_path);
-            let scene = crate::scene::load_png_pair_with_animation(
+            let time_of_day_path = directory.join("time_of_day.toml");
+            let time_of_day_path = time_of_day_path.is_file().then_some(time_of_day_path);
+            let scene = crate::scene::load_png_pair_with_resources(
                 directory.join("scene.png"),
                 directory.join("palette.png"),
                 animation_path,
+                time_of_day_path,
             )?;
             println!(
                 "trace scene-source=package image={}x{}",
@@ -417,16 +591,17 @@ fn render_renderer<'wayland>(
     renderer: &mut Renderer<'wayland>,
     extent: (u32, u32),
     animation_time_seconds: f32,
+    civil_seconds: u32,
 ) -> Result<RenderOutcome, Box<dyn Error>> {
     renderer.reconfigure(extent)?;
-    let outcome = renderer.render_at(animation_time_seconds)?;
+    let outcome = renderer.render_at_with_civil_seconds(animation_time_seconds, civil_seconds)?;
     match outcome {
         RenderOutcome::Presented | RenderOutcome::Timeout | RenderOutcome::Occluded => Ok(outcome),
         RenderOutcome::Reconfigure => {
             eprintln!("trace gpu-frame recovery=surface-recreate attempt=1");
             renderer.recreate_surface(connection)?;
             renderer.reconfigure(extent)?;
-            match renderer.render_at(animation_time_seconds)? {
+            match renderer.render_at_with_civil_seconds(animation_time_seconds, civil_seconds)? {
                 RenderOutcome::Presented => Ok(RenderOutcome::Presented),
                 outcome => Err(format!(
                     "surface recovery did not present one bounded retry: {outcome:?}"
@@ -612,6 +787,7 @@ struct WaylandClient {
     frame_pending: bool,
     callback_ready: bool,
     timer_fired: bool,
+    weather_timer_fired: bool,
     reconfigure_generation: u64,
     #[cfg(debug_assertions)]
     withhold_callbacks: bool,
@@ -629,6 +805,7 @@ impl WaylandClient {
             frame_pending: false,
             callback_ready: false,
             timer_fired: false,
+            weather_timer_fired: false,
             reconfigure_generation: 0,
             #[cfg(debug_assertions)]
             withhold_callbacks: std::env::var_os("WORLDWALL_TEST_WITHHOLD_CALLBACK").is_some(),
@@ -706,6 +883,10 @@ impl WaylandClient {
 
     fn mark_timer_fired(&mut self) {
         self.timer_fired = true;
+    }
+
+    fn mark_weather_timer_fired(&mut self) {
+        self.weather_timer_fired = true;
     }
 }
 

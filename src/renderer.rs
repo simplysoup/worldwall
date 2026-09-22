@@ -282,9 +282,21 @@ impl<'wayland> Renderer<'wayland> {
     /// Render with a bounded monotonic animation phase in seconds.  Only the
     /// 16-byte clock buffer changes per frame; scene textures and metadata are
     /// immutable after upload.
+    #[allow(dead_code)]
     pub fn render_at(
         &mut self,
         animation_time_seconds: f32,
+    ) -> Result<RenderOutcome, Box<dyn Error>> {
+        self.render_at_with_civil_seconds(animation_time_seconds, 0)
+    }
+
+    /// Render with independent bounded monotonic animation time and local
+    /// civil seconds. The latter only affects an optional scene palette atlas;
+    /// it never participates in scene selection.
+    pub fn render_at_with_civil_seconds(
+        &mut self,
+        animation_time_seconds: f32,
+        civil_seconds: u32,
     ) -> Result<RenderOutcome, Box<dyn Error>> {
         #[cfg(debug_assertions)]
         if let Some(outcome) = self.test_surface_error.take() {
@@ -295,7 +307,12 @@ impl<'wayland> Renderer<'wayland> {
         self.queue.write_buffer(
             &self.scene.animation_clock_buffer,
             0,
-            &animation_clock_bytes(animation_time_seconds),
+            &animation_clock_bytes(
+                animation_time_seconds,
+                civil_seconds.min(crate::scene::CIVIL_SECONDS_PER_DAY - 1),
+                self.scene.time_of_day_keyframe_count,
+                self.scene.time_of_day_enabled,
+            ),
         );
         self.animation_uniform_update_count = self.animation_uniform_update_count.saturating_add(1);
 
@@ -357,6 +374,8 @@ impl<'wayland> Renderer<'wayland> {
             &self.scene.palette_texture,
             &self.scene.animation_metadata_buffer,
             &self.scene.cycle_indices_buffer,
+            &self.scene.time_of_day_atlas,
+            &self.scene.time_of_day_keyframes,
         );
         self.scene_upload_count
     }
@@ -428,9 +447,17 @@ fn mapping_bytes(source: (u32, u32), output: (u32, u32)) -> [u8; 16] {
     bytes
 }
 
-fn animation_clock_bytes(seconds: f32) -> [u8; 16] {
+fn animation_clock_bytes(
+    seconds: f32,
+    civil_seconds: u32,
+    keyframe_count: u32,
+    enabled: bool,
+) -> [u8; 16] {
     let mut bytes = [0u8; 16];
     bytes[0..4].copy_from_slice(&seconds.to_ne_bytes());
+    bytes[4..8].copy_from_slice(&(civil_seconds as f32).to_ne_bytes());
+    bytes[8..12].copy_from_slice(&(keyframe_count as f32).to_ne_bytes());
+    bytes[12..16].copy_from_slice(&(if enabled { 1.0 } else { 0.0_f32 }).to_ne_bytes());
     bytes
 }
 
@@ -442,6 +469,10 @@ struct UploadedScene {
     mapping_buffer: wgpu::Buffer,
     animation_metadata_buffer: wgpu::Buffer,
     cycle_indices_buffer: wgpu::Buffer,
+    time_of_day_atlas: wgpu::Texture,
+    time_of_day_keyframes: wgpu::Buffer,
+    time_of_day_keyframe_count: u32,
+    time_of_day_enabled: bool,
     animation_clock_buffer: wgpu::Buffer,
     indexed_layout: wgpu::BindGroupLayout,
 }
@@ -572,13 +603,74 @@ fn upload_scene_with_layout(
     });
     queue.write_buffer(&cycle_indices_buffer, 0, &cycle_index_bytes);
 
+    let (
+        time_of_day_rows,
+        time_of_day_rgba,
+        time_of_day_keyframe_bytes,
+        time_of_day_keyframe_count,
+        time_of_day_enabled,
+    ) = match scene.time_of_day.as_ref() {
+        Some(timeline) => (
+            timeline.rows,
+            timeline.rgba.clone(),
+            timeline.keyframe_bytes(),
+            timeline.keyframes.len() as u32,
+            true,
+        ),
+        None => (1, scene.palette.rgba.to_vec(), vec![0u8; 32], 0, false),
+    };
+    let time_of_day_atlas = device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("worldwall-time-of-day-atlas"),
+        size: wgpu::Extent3d {
+            width: 256,
+            height: time_of_day_rows,
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: wgpu::TextureFormat::Rgba8Unorm,
+        usage: wgpu::TextureUsages::COPY_DST | wgpu::TextureUsages::TEXTURE_BINDING,
+        view_formats: &[],
+    });
+    queue.write_texture(
+        wgpu::TexelCopyTextureInfo {
+            texture: &time_of_day_atlas,
+            mip_level: 0,
+            origin: wgpu::Origin3d::ZERO,
+            aspect: wgpu::TextureAspect::All,
+        },
+        &time_of_day_rgba,
+        wgpu::TexelCopyBufferLayout {
+            offset: 0,
+            bytes_per_row: Some(256 * 4),
+            rows_per_image: Some(time_of_day_rows),
+        },
+        wgpu::Extent3d {
+            width: 256,
+            height: time_of_day_rows,
+            depth_or_array_layers: 1,
+        },
+    );
+    let time_of_day_keyframes = device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("worldwall-time-of-day-keyframes"),
+        size: time_of_day_keyframe_bytes.len() as u64,
+        usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::STORAGE,
+        mapped_at_creation: false,
+    });
+    queue.write_buffer(&time_of_day_keyframes, 0, &time_of_day_keyframe_bytes);
+
     let animation_clock_buffer = device.create_buffer(&wgpu::BufferDescriptor {
         label: Some("worldwall-animation-clock"),
         size: 16,
         usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::UNIFORM,
         mapped_at_creation: false,
     });
-    queue.write_buffer(&animation_clock_buffer, 0, &animation_clock_bytes(0.0));
+    queue.write_buffer(
+        &animation_clock_buffer,
+        0,
+        &animation_clock_bytes(0.0, 0, time_of_day_keyframe_count, time_of_day_enabled),
+    );
 
     // Reuse the renderer's layout during a replacement. A standalone upload
     // creates its own layout so the readback tests can construct a pipeline
@@ -647,11 +739,32 @@ fn upload_scene_with_layout(
                     },
                     count: None,
                 },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 6,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: false },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 7,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: NonZeroU64::new(32),
+                    },
+                    count: None,
+                },
             ],
         })
     });
     let index_view = index_texture.create_view(&wgpu::TextureViewDescriptor::default());
     let palette_view = palette_texture.create_view(&wgpu::TextureViewDescriptor::default());
+    let time_of_day_view = time_of_day_atlas.create_view(&wgpu::TextureViewDescriptor::default());
     let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
         label: Some("worldwall-indexed-bind-group-upload"),
         layout: &layout,
@@ -680,6 +793,14 @@ fn upload_scene_with_layout(
                 binding: 5,
                 resource: animation_clock_buffer.as_entire_binding(),
             },
+            wgpu::BindGroupEntry {
+                binding: 6,
+                resource: wgpu::BindingResource::TextureView(&time_of_day_view),
+            },
+            wgpu::BindGroupEntry {
+                binding: 7,
+                resource: time_of_day_keyframes.as_entire_binding(),
+            },
         ],
     });
     Ok(UploadedScene {
@@ -689,6 +810,10 @@ fn upload_scene_with_layout(
         mapping_buffer,
         animation_metadata_buffer,
         cycle_indices_buffer,
+        time_of_day_atlas,
+        time_of_day_keyframes,
+        time_of_day_keyframe_count,
+        time_of_day_enabled,
         animation_clock_buffer,
         indexed_layout: layout,
     })
@@ -796,6 +921,16 @@ struct AnimationClock {
 @group(0) @binding(4) var<storage, read> cycle_indices: array<u32>;
 @group(0) @binding(5) var<uniform> animation_clock: AnimationClock;
 
+struct TimeOfDayKeyframe {
+    civil_seconds: u32,
+    row: u32,
+    reserved_a: u32,
+    reserved_b: u32,
+};
+
+@group(0) @binding(6) var time_of_day_atlas: texture_2d<f32>;
+@group(0) @binding(7) var<storage, read> time_of_day_keyframes: array<TimeOfDayKeyframe>;
+
 @vertex
 fn vs_main(@builtin(vertex_index) vertex_index: u32) -> @builtin(position) vec4f {
     let positions = array<vec2f, 3>(
@@ -819,6 +954,73 @@ fn palette_linear(index: u32) -> vec3f {
         srgb_to_linear(authored.r),
         srgb_to_linear(authored.g),
         srgb_to_linear(authored.b),
+    );
+}
+
+fn palette_bytes(index: u32) -> vec3f {
+    // The palette texture is authoritative RGBA8. Reconstruct the authored
+    // bytes before BlendShift interpolation; the half-unit compensates for
+    // normalized texture sampling.
+    return floor(textureLoad(palette, vec2<i32>(i32(index), 0), 0).rgb * 255.0 + vec3f(0.5));
+}
+
+fn time_of_day_bytes(index: u32) -> vec3f {
+    if animation_clock.values.w < 0.5 {
+        return palette_bytes(index);
+    }
+    let count = u32(animation_clock.values.z);
+    if count < 2u {
+        return palette_bytes(index);
+    }
+    let civil = min(animation_clock.values.y, 86399.0);
+    let civil_u = u32(civil);
+    var lower = count - 1u;
+    for (var i = 0u; i < 256u; i = i + 1u) {
+        if i >= count {
+            break;
+        }
+        if time_of_day_keyframes[i].civil_seconds <= civil_u {
+            lower = i;
+        }
+    }
+    let upper = (lower + 1u) % count;
+    let lower_seconds = time_of_day_keyframes[lower].civil_seconds;
+    var upper_seconds = time_of_day_keyframes[upper].civil_seconds;
+    var sample_seconds = civil_u;
+    if upper_seconds <= lower_seconds {
+        upper_seconds = upper_seconds + 86400u;
+    }
+    if sample_seconds < lower_seconds {
+        sample_seconds = sample_seconds + 86400u;
+    }
+    let duration = f32(upper_seconds - lower_seconds);
+    let amount = clamp(f32(sample_seconds - lower_seconds) / duration, 0.0, 1.0);
+    let lower_color = floor(textureLoad(
+        time_of_day_atlas,
+        vec2<i32>(i32(index), i32(time_of_day_keyframes[lower].row)),
+        0,
+    ).rgb * 255.0 + vec3f(0.5));
+    let upper_color = floor(textureLoad(
+        time_of_day_atlas,
+        vec2<i32>(i32(index), i32(time_of_day_keyframes[upper].row)),
+        0,
+    ).rgb * 255.0 + vec3f(0.5));
+    return floor(lower_color + (upper_color - lower_color) * vec3f(amount));
+}
+
+fn palette_at_time(index: u32) -> vec3f {
+    if animation_clock.values.w < 0.5 {
+        return palette_linear(index);
+    }
+    return byte_space_to_linear(time_of_day_bytes(index));
+}
+
+fn byte_space_to_linear(color: vec3f) -> vec3f {
+    let normalized = color / vec3f(255.0);
+    return vec3f(
+        srgb_to_linear(normalized.r),
+        srgb_to_linear(normalized.g),
+        srgb_to_linear(normalized.b),
     );
 }
 
@@ -865,7 +1067,7 @@ fn hsv_to_rgb(hsv: vec3f) -> vec3f {
 
 fn animated_palette(index: u32) -> vec3f {
     let metadata = animation_metadata[index];
-    let base = palette_linear(index);
+    let base = palette_at_time(index);
     let phase = fract(metadata.phase + animation_clock.values.x * metadata.speed);
     switch metadata.effect {
         case 1u: {
@@ -881,9 +1083,23 @@ fn animated_palette(index: u32) -> vec3f {
             let lower = u32(floor(position)) % metadata.member_count;
             let upper = (lower + 1u) % metadata.member_count;
             let fraction = fract(position);
-            let lower_color = palette_linear(cycle_indices[metadata.group_offset + lower]);
-            let upper_color = palette_linear(cycle_indices[metadata.group_offset + upper]);
+            let lower_color = palette_at_time(cycle_indices[metadata.group_offset + lower]);
+            let upper_color = palette_at_time(cycle_indices[metadata.group_offset + upper]);
             return mix(lower_color, upper_color, vec3f(fraction));
+        }
+        case 4u: {
+            // Match the reference Palette.blendShiftColors implementation:
+            // integer rotation toward the preceding member, then a
+            // 1/100-precision floor fade in authored byte space.
+            let amount = phase * f32(metadata.member_count);
+            let shift = u32(floor(amount)) % metadata.member_count;
+            let fraction = floor(fract(amount) * 100.0) / 100.0;
+            let current = (metadata.ordinal + metadata.member_count - shift) % metadata.member_count;
+            let previous = (current + metadata.member_count - 1u) % metadata.member_count;
+            let current_color = time_of_day_bytes(cycle_indices[metadata.group_offset + current]);
+            let previous_color = time_of_day_bytes(cycle_indices[metadata.group_offset + previous]);
+            let blended = floor(current_color + (previous_color - current_color) * vec3f(fraction));
+            return byte_space_to_linear(blended);
         }
         default: { return base; }
     }
@@ -1139,6 +1355,7 @@ mod tests {
         scene: &Scene,
         output_extent: (u32, u32),
         animation_time_seconds: f32,
+        civil_seconds: u32,
     ) -> Vec<u8> {
         use std::{sync::mpsc, time::Duration};
 
@@ -1146,7 +1363,12 @@ mod tests {
         queue.write_buffer(
             &uploaded.animation_clock_buffer,
             0,
-            &animation_clock_bytes(animation_time_seconds),
+            &animation_clock_bytes(
+                animation_time_seconds,
+                civil_seconds,
+                uploaded.time_of_day_keyframe_count,
+                uploaded.time_of_day_enabled,
+            ),
         );
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("worldwall-s04-readback-shader"),
@@ -1302,6 +1524,13 @@ mod tests {
                 speed = -0.2
                 amplitude = 1.0
                 phase = 0.1
+                [[group]]
+                name = "blend"
+                effect = "blend_shift"
+                indices = [6, 7, 8]
+                speed = 0.375
+                amplitude = 1.0
+                phase = 0.25
             "#,
         )
         .unwrap();
@@ -1315,14 +1544,17 @@ mod tests {
             (3, [255, 0, 0]),
             (4, [0, 255, 0]),
             (5, [0, 0, 255]),
+            (6, [15, 40, 200]),
+            (7, [120, 80, 20]),
+            (8, [220, 180, 60]),
         ] {
             rgba[index * 4..index * 4 + 4].copy_from_slice(&[color[0], color[1], color[2], 255]);
         }
         let scene = Scene::with_animation(
             crate::scene::IndexedImage {
-                width: 5,
+                width: 8,
                 height: 1,
-                indices: vec![1, 2, 3, 4, 5],
+                indices: vec![1, 2, 3, 4, 5, 6, 7, 8],
             },
             crate::scene::Palette { rgba },
             animation,
@@ -1330,7 +1562,7 @@ mod tests {
         .unwrap();
 
         for time in [0.0, 0.375, 1.25, 1023.75] {
-            let actual = readback_scene(&device, &queue, &scene, (5, 1), time);
+            let actual = readback_scene(&device, &queue, &scene, (8, 1), time, 0);
             let expected_palette = scene.animation.apply_palette(&scene.palette.rgba, time);
             for (x, index) in scene.image.indices.iter().copied().enumerate() {
                 let expected =
@@ -1347,6 +1579,70 @@ mod tests {
                     );
                 }
             }
+        }
+    }
+
+    #[test]
+    #[ignore = "requires a Vulkan adapter; run explicitly for CR-0002 GPU evidence"]
+    fn gpu_time_of_day_palette_readback_matches_byte_floor_reference() {
+        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
+            backends: wgpu::Backends::VULKAN,
+            ..wgpu::InstanceDescriptor::new_without_display_handle()
+        });
+        let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
+            power_preference: wgpu::PowerPreference::HighPerformance,
+            force_fallback_adapter: false,
+            compatible_surface: None,
+            apply_limit_buckets: false,
+        }))
+        .expect("assigned GPU evidence requires a Vulkan adapter");
+        let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
+            label: Some("worldwall-cr002-time-of-day-readback-device"),
+            ..wgpu::DeviceDescriptor::default()
+        }))
+        .expect("assigned GPU evidence requires a Vulkan device");
+
+        let mut rgba = vec![0u8; 2 * 256 * 4];
+        for entry in rgba.chunks_exact_mut(4) {
+            entry[3] = 255;
+        }
+        rgba[0..4].copy_from_slice(&[10, 20, 30, 255]);
+        rgba[256 * 4..256 * 4 + 4].copy_from_slice(&[20, 10, 40, 255]);
+        let timeline = crate::scene::TimeOfDayPalette::new(
+            2,
+            rgba,
+            vec![
+                crate::scene::TimeOfDayKeyframe {
+                    civil_seconds: 10,
+                    row: 0,
+                },
+                crate::scene::TimeOfDayKeyframe {
+                    civil_seconds: 20,
+                    row: 1,
+                },
+            ],
+        )
+        .unwrap();
+        let mut palette = [0u8; 256 * 4];
+        for entry in palette.chunks_exact_mut(4) {
+            entry[3] = 255;
+        }
+        let scene = Scene::with_resources(
+            crate::scene::IndexedImage {
+                width: 1,
+                height: 1,
+                indices: vec![0],
+            },
+            crate::scene::Palette { rgba: palette },
+            crate::animation::Animation::static_default(),
+            Some(timeline.clone()),
+        )
+        .unwrap();
+        for civil_seconds in [10, 15, 20, 86_399] {
+            let actual = readback_scene(&device, &queue, &scene, (1, 1), 0.0, civil_seconds);
+            let expected = timeline.sample_rgb(0, civil_seconds);
+            assert_eq!(&actual[..3], &expected);
+            assert_eq!(actual[3], 255);
         }
     }
 }

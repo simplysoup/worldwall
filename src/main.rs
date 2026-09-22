@@ -7,6 +7,7 @@ mod scene;
 mod scene_registry;
 mod scheduler;
 mod wayland_surface;
+mod weather;
 
 fn main() {
     if let Err(error) = wayland_surface::run() {
