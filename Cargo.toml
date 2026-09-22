@@ -19,6 +19,7 @@ zbus_macros = "=5.14.0"
 raw-window-handle = "=0.6.2"
 smithay-client-toolkit = { version = "=0.21.1", default-features = false, features = ["calloop"] }
 wayland-client = { version = "=0.31.15", default-features = false, features = ["system"] }
+wayland-protocols = { version = "=0.32.13", default-features = false, features = ["client", "staging"] }
 wgpu = { version = "=30.0.1", default-features = false, features = ["std", "vulkan", "wgsl"] }
 
 [lints.rust]

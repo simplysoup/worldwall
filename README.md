@@ -2,7 +2,7 @@
 
 A planned GPU-accelerated, weather- and time-aware pixel-art wallpaper engine for Hyprland/Wayland.
 
-**Current state:** S00 foundation, S01 single-output Wayland lifecycle, S02 safe GPU presentation, S03 indexed-scene/M1, and S06 civil-time/astronomy policy are accepted. S04 palette animation and pacing and S05 registry selection are also accepted. S07 Open-Meteo weather support is implemented under accepted ADR-0006, with runtime use explicitly opt-in and one bounded live trace recorded.
+**Current state:** S00–S09 are accepted, including the S09 multi-output/hotplug milestone. CR-0004 records the physical incompatible-capability output result as explicit future work and `not-run`; no universal hardware-compatibility claim is made. Fractional-scale/viewport protocol handling and an assigned-host non-integer scale trace are implemented. Application-level allocation-event counters are instrumented; they do not measure driver allocator or VRAM statistics.
 
 ## Start here
 
@@ -14,7 +14,7 @@ A planned GPU-accelerated, weather- and time-aware pixel-art wallpaper engine fo
 6. [S03 evidence](docs/evidence/2026-09-21-s03-indexed-scene.md) — accepted M1 decoder/resource/live evidence.
 7. [Contributor instructions](AGENTS.md) — how to work safely and leave a useful handoff.
 
-**Current action:** S08 suspend/resume orchestration is accepted. The system-bus adapter subscribes to systemd-logind without blocking Wayland, coalesces duplicate signals, pauses animation/deadline/weather timers, and performs one bounded resume refresh/selection when output configuration is valid. Three operator-authorized suspend/resume cycles, offline-weather behavior, failed-candidate retention, and the corrected topology-change-during-sleep subcase are recorded. `simplysoup` approved ADR-0007 and S08 on 2026-09-22; the next planned stage is S09 multi-output and hotplug. See the [S08 implementation and acceptance update](docs/updates/2026-09-22-s08-suspend-resume.md). Open-Meteo remains disabled unless explicitly configured with a provider name and latitude/longitude; weather completions never reselect a scene.
+**Current action:** Proceed to the planned S10 IPC/config stage while retaining S09's renderer and pacing boundaries. S09's assigned-host integer/fractional scale, mixed-output, resize, hotplug, zero-output/reconnect, topology-during-sleep, and bounded pacing evidence is recorded as accepted by `simplysoup` on 2026-09-22. Physical incompatible-capability output evidence is explicitly future work and `not-run` under CR-0004; no universal hardware-compatibility claim is made. See the [S09 implementation and acceptance update](docs/updates/2026-09-22-s09-multi-output.md) and [current status](docs/status.md). Open-Meteo remains disabled unless explicitly configured with a provider name and latitude/longitude; weather completions never reselect a scene.
 
 ## Build and run the S03 indexed-scene path
 

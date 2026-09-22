@@ -3,8 +3,10 @@
 //! SCTK owns protocol dispatch and layer configuration. Once a nonzero
 //! configure is acknowledged, the retained layer surface is handed to the
 //! renderer for one event-driven bootstrap frame and later resize frames.
+#![allow(dead_code)]
 
 use std::{
+    collections::{BTreeMap, BTreeSet},
     error::Error,
     fmt,
     time::{Duration, Instant},
@@ -26,7 +28,7 @@ use crate::{
         WallClock, Weather,
     },
     power::{PausedAnimationClock, PowerAction, PowerEvent, PowerEventSource, PowerStateMachine},
-    renderer::{RenderOutcome, Renderer},
+    renderer::{AllocationCounters, OutputRenderer, RenderOutcome, Renderer, SharedRenderer},
     scene::Scene,
     scene_registry::{
         CommitOutcome, EnvironmentSnapshot, LoadedScene, RegistryError, SceneLoadToken,
@@ -40,7 +42,7 @@ use smithay_client_toolkit::{
     compositor::{CompositorHandler, CompositorState, FrameCallbackData, Region},
     delegate_registry,
     output::{OutputHandler, OutputInfo, OutputState},
-    registry::{ProvidesRegistryState, RegistryState},
+    registry::{ProvidesRegistryState, RegistryState, SimpleGlobal},
     registry_handlers,
     shell::{
         WaylandSurface,
@@ -51,9 +53,16 @@ use smithay_client_toolkit::{
     },
 };
 use wayland_client::{
-    Connection, Proxy, QueueHandle,
+    Connection, Dispatch, Proxy, QueueHandle,
     globals::registry_queue_init,
     protocol::{wl_output, wl_surface},
+};
+use wayland_protocols::wp::{
+    fractional_scale::v1::client::{
+        wp_fractional_scale_manager_v1::WpFractionalScaleManagerV1,
+        wp_fractional_scale_v1::{self, WpFractionalScaleV1},
+    },
+    viewporter::client::{wp_viewport::WpViewport, wp_viewporter::WpViewporter},
 };
 
 /// Run the S01 layer-only client until the compositor or selected output asks
@@ -715,6 +724,36 @@ impl RegistrySelection {
         );
         Ok(outcome)
     }
+
+    /// Shared-renderer variant used by the S09 event loop. A scene swap keeps
+    /// the device and textures authoritative, then rebuilds only the output
+    /// bind groups so old per-output dimensions cannot survive the swap.
+    #[allow(dead_code)]
+    fn complete_loaded_shared<'wayland>(
+        &mut self,
+        renderer: &mut SharedRenderer,
+        presenters: &mut BTreeMap<u32, OutputRenderer<'wayland>>,
+        request: &SelectionRequest,
+        token: SceneLoadToken,
+        candidate: Result<LoadedScene, RegistryError>,
+    ) -> Result<CommitOutcome, Box<dyn Error>> {
+        let outcome = self
+            .transaction
+            .complete_with_swap(token, candidate, |scene| {
+                renderer.upload_and_swap_scene(scene)
+            });
+        if let CommitOutcome::Applied { ref id, .. } = outcome {
+            self.controller.mark_active(id)?;
+            for presenter in presenters.values_mut() {
+                presenter.refresh_scene_binding(renderer);
+            }
+        }
+        println!(
+            "trace scene-selection generation={} id={} trigger={:?} outcome={outcome:?} shared=true",
+            request.generation, request.id, request.trigger
+        );
+        Ok(outcome)
+    }
 }
 
 fn load_scene(
@@ -858,17 +897,29 @@ struct OutputLifecycle {
     state: LifecycleState,
     scale_factor: u32,
     fallback_logical_size: Option<(u32, u32)>,
+    fractional_scale_enabled: bool,
+    preferred_scale_120: Option<u32>,
     last_configure: Option<ConfigureRecord>,
 }
 
 impl OutputLifecycle {
     fn new(scale_factor: i32, fallback_logical_size: Option<(i32, i32)>) -> Self {
+        Self::new_with_fractional(scale_factor, fallback_logical_size, false)
+    }
+
+    fn new_with_fractional(
+        scale_factor: i32,
+        fallback_logical_size: Option<(i32, i32)>,
+        fractional_scale_enabled: bool,
+    ) -> Self {
         Self {
             state: LifecycleState::Discovered,
             // wl_output scale is positive. Keep invalid metadata visible but
             // prevent it from becoming a zero physical extent.
             scale_factor: scale_factor.max(1) as u32,
             fallback_logical_size: positive_size(fallback_logical_size),
+            fractional_scale_enabled,
+            preferred_scale_120: None,
             last_configure: None,
         }
     }
@@ -911,13 +962,9 @@ impl OutputLifecycle {
             suggested_size.1,
             self.fallback_logical_size.map(|size| size.1),
         );
-        let physical_extent = match (logical_width, logical_height) {
-            (Some(width), Some(height)) => width
-                .checked_mul(self.scale_factor)
-                .zip(height.checked_mul(self.scale_factor))
-                .map(|(width, height)| PhysicalExtent { width, height }),
-            _ => None,
-        };
+        let physical_extent = logical_width
+            .zip(logical_height)
+            .and_then(|(width, height)| self.physical_extent(width, height));
 
         self.last_configure = Some(ConfigureRecord {
             serial,
@@ -935,19 +982,48 @@ impl OutputLifecycle {
     fn scale_changed(&mut self, scale_factor: i32) {
         if scale_factor > 0 {
             self.scale_factor = scale_factor as u32;
-            if let Some(configure) = &mut self.last_configure {
-                configure.physical_extent = configure
-                    .logical_width
-                    .checked_mul(self.scale_factor)
-                    .zip(configure.logical_height.checked_mul(self.scale_factor))
-                    .map(|(width, height)| PhysicalExtent { width, height });
-                if configure.physical_extent.is_none() {
-                    self.state = LifecycleState::AwaitingConfigure;
-                } else if self.state == LifecycleState::AwaitingConfigure {
-                    self.state = LifecycleState::Ready;
-                }
+            if !self.fractional_scale_enabled {
+                self.recompute_physical_extent();
             }
         }
+    }
+
+    fn preferred_scale_changed(&mut self, scale_120: u32) {
+        if self.fractional_scale_enabled && scale_120 > 0 {
+            self.preferred_scale_120 = Some(scale_120);
+            self.recompute_physical_extent();
+        }
+    }
+
+    fn physical_extent(&self, logical_width: u32, logical_height: u32) -> Option<PhysicalExtent> {
+        if self.fractional_scale_enabled {
+            let scale_120 = self.preferred_scale_120?;
+            Some(PhysicalExtent {
+                width: scaled_dimension(logical_width, scale_120)?,
+                height: scaled_dimension(logical_height, scale_120)?,
+            })
+        } else {
+            logical_width
+                .checked_mul(self.scale_factor)
+                .zip(logical_height.checked_mul(self.scale_factor))
+                .map(|(width, height)| PhysicalExtent { width, height })
+        }
+    }
+
+    fn recompute_physical_extent(&mut self) {
+        let Some(configure) = self.last_configure else {
+            return;
+        };
+        let physical_extent =
+            self.physical_extent(configure.logical_width, configure.logical_height);
+        if let Some(current) = &mut self.last_configure {
+            current.physical_extent = physical_extent;
+        }
+        self.state = if physical_extent.is_some() {
+            LifecycleState::Ready
+        } else {
+            LifecycleState::AwaitingConfigure
+        };
     }
 
     fn close(&mut self) {
@@ -983,6 +1059,13 @@ fn nonzero_or(value: u32, fallback: Option<u32>) -> Option<u32> {
     (value > 0)
         .then_some(value)
         .or(fallback.filter(|value| *value > 0))
+}
+
+fn scaled_dimension(logical: u32, scale_120: u32) -> Option<u32> {
+    let numerator = u64::from(logical).checked_mul(u64::from(scale_120))?;
+    u32::try_from(numerator.div_ceil(120))
+        .ok()
+        .filter(|value| *value > 0)
 }
 
 /// Application state. Wayland protocol owners are kept together so that the
@@ -1353,6 +1436,1171 @@ impl fmt::Display for LifecycleState {
     }
 }
 
+/// Optional protocol globals used to turn logical layer sizes into fractional
+/// buffer sizes. Integer wl_output scaling remains the fallback when either
+/// protocol is unavailable.
+struct FractionalGlobals {
+    viewporter: Option<SimpleGlobal<WpViewporter, 1>>,
+    fractional_scale_manager: Option<SimpleGlobal<WpFractionalScaleManagerV1, 1>>,
+}
+
+impl FractionalGlobals {
+    fn supported(&self) -> bool {
+        self.viewporter.is_some() && self.fractional_scale_manager.is_some()
+    }
+}
+
+/// S09 keyed multi-output client. It stores only protocol proxies and output
+/// state; the owning LayerSurface values remain in `run_multi`, so output GPU
+/// presenters can be dropped before those owners during every topology rebuild.
+struct MultiOutputRecord {
+    output: wl_output::WlOutput,
+    info: OutputInfo,
+    lifecycle: OutputLifecycle,
+    surface_id: Option<u32>,
+    frame_pending: bool,
+    callback_ready: bool,
+    reconfigure_generation: u64,
+    viewport: Option<WpViewport>,
+    fractional_scale: Option<WpFractionalScaleV1>,
+}
+
+struct MultiWaylandClient {
+    registry_state: RegistryState,
+    output_state: OutputState,
+    outputs: BTreeMap<u32, MultiOutputRecord>,
+    topology_dirty: bool,
+    timer_fired: bool,
+    power_events: Vec<PowerEvent>,
+    weather_timer_fired: bool,
+    render_paused: bool,
+    /// Outputs that failed capability validation remain degraded until their
+    /// Wayland identity is removed or rediscovered. This prevents a missing
+    /// compatible presenter from causing a retry loop while other outputs
+    /// continue rendering.
+    degraded_outputs: BTreeSet<u32>,
+    fractional_globals: FractionalGlobals,
+    #[cfg(debug_assertions)]
+    withhold_output_callbacks: Option<u32>,
+}
+
+impl MultiWaylandClient {
+    fn new(
+        registry_state: RegistryState,
+        output_state: OutputState,
+        fractional_globals: FractionalGlobals,
+    ) -> Self {
+        Self {
+            registry_state,
+            output_state,
+            outputs: BTreeMap::new(),
+            topology_dirty: false,
+            timer_fired: false,
+            power_events: Vec::new(),
+            weather_timer_fired: false,
+            render_paused: false,
+            degraded_outputs: BTreeSet::new(),
+            fractional_globals,
+            #[cfg(debug_assertions)]
+            withhold_output_callbacks: std::env::var("WORLDWALL_TEST_WITHHOLD_OUTPUT")
+                .ok()
+                .and_then(|value| value.parse::<u32>().ok()),
+        }
+    }
+
+    fn output_ids(&self) -> impl Iterator<Item = u32> + '_ {
+        self.outputs.keys().copied()
+    }
+
+    fn missing_outputs(&self) -> Vec<(wl_output::WlOutput, OutputInfo)> {
+        let mut outputs = self
+            .output_state
+            .outputs()
+            .filter_map(|output| {
+                let info = self.output_state.info(&output)?;
+                let record = self.outputs.get(&info.id);
+                (record.is_none_or(|record| {
+                    record.surface_id.is_none()
+                        && !matches!(
+                            record.lifecycle.state(),
+                            LifecycleState::Removed | LifecycleState::Closing
+                        )
+                }))
+                .then_some((output, info))
+            })
+            .collect::<Vec<_>>();
+        outputs.sort_by(|(_, left), (_, right)| {
+            output_sort_key(left.id, left.location, left.name.as_deref()).cmp(&output_sort_key(
+                right.id,
+                right.location,
+                right.name.as_deref(),
+            ))
+        });
+        outputs
+    }
+
+    fn install_layer(
+        &mut self,
+        surface: &LayerSurface,
+        output: wl_output::WlOutput,
+        info: OutputInfo,
+        viewport: Option<WpViewport>,
+        fractional_scale: Option<WpFractionalScaleV1>,
+    ) {
+        let id = info.id;
+        let fractional_supported = self.fractional_globals.supported();
+        let record = self.outputs.entry(id).or_insert_with(|| MultiOutputRecord {
+            output: output.clone(),
+            info: info.clone(),
+            lifecycle: OutputLifecycle::new_with_fractional(
+                info.scale_factor,
+                info.logical_size,
+                fractional_supported,
+            ),
+            surface_id: None,
+            frame_pending: false,
+            callback_ready: false,
+            reconfigure_generation: 0,
+            viewport: None,
+            fractional_scale: None,
+        });
+        record.output = output;
+        record.info = info.clone();
+        record.lifecycle = OutputLifecycle::new_with_fractional(
+            info.scale_factor,
+            info.logical_size,
+            fractional_supported,
+        );
+        record.lifecycle.role_created();
+        record.lifecycle.initial_commit();
+        record.surface_id = Some(surface.wl_surface().id().protocol_id());
+        record.frame_pending = false;
+        record.callback_ready = false;
+        record.viewport = viewport;
+        record.fractional_scale = fractional_scale;
+        self.topology_dirty = true;
+    }
+
+    fn record_for_surface(&self, surface: &wl_surface::WlSurface) -> Option<u32> {
+        let id = surface.id().protocol_id();
+        self.outputs
+            .iter()
+            .find_map(|(output_id, record)| (record.surface_id == Some(id)).then_some(*output_id))
+    }
+
+    fn physical_extent(&self, output_id: u32) -> Option<(u32, u32)> {
+        self.outputs
+            .get(&output_id)
+            .and_then(|record| record.lifecycle.last_configure)
+            .and_then(|configure| configure.physical_extent)
+            .map(|extent| (extent.width, extent.height))
+    }
+
+    fn update_viewport(output_id: u32, record: &MultiOutputRecord) {
+        let Some(viewport) = record.viewport.as_ref() else {
+            return;
+        };
+        let Some(configure) = record.lifecycle.last_configure else {
+            return;
+        };
+        viewport.set_destination(
+            configure.logical_width as i32,
+            configure.logical_height as i32,
+        );
+        if let Some(physical) = configure.physical_extent {
+            viewport.set_source(0.0, 0.0, physical.width as f64, physical.height as f64);
+            println!(
+                "trace viewport-configured output={} source={}x{} destination={}x{}",
+                output_id,
+                physical.width,
+                physical.height,
+                configure.logical_width,
+                configure.logical_height,
+            );
+        }
+    }
+
+    fn ready_output_ids(&self) -> Vec<u32> {
+        self.outputs
+            .iter()
+            .filter_map(|(id, record)| {
+                (record.lifecycle.state() == LifecycleState::Ready).then_some(*id)
+            })
+            .collect()
+    }
+
+    fn frame_pending(&self, output_id: u32) -> bool {
+        self.outputs
+            .get(&output_id)
+            .is_some_and(|record| record.frame_pending)
+    }
+
+    fn callback_ready(&mut self, output_id: u32) -> bool {
+        self.outputs.get_mut(&output_id).is_some_and(|record| {
+            let ready = record.callback_ready;
+            record.callback_ready = false;
+            ready
+        })
+    }
+
+    fn request_frame_for_surface(
+        &mut self,
+        output_id: u32,
+        surface: &wl_surface::WlSurface,
+        queue_handle: &QueueHandle<Self>,
+    ) {
+        let Some(record) = self.outputs.get_mut(&output_id) else {
+            return;
+        };
+        if record.surface_id == Some(surface.id().protocol_id()) && !record.frame_pending {
+            surface.frame(queue_handle, FrameCallbackData(surface.clone()));
+            record.frame_pending = true;
+            record.callback_ready = false;
+            println!(
+                "trace frame-requested output={} before-present=true",
+                output_id
+            );
+        }
+    }
+
+    fn topology_dirty(&self) -> bool {
+        self.topology_dirty
+    }
+
+    fn clear_topology_dirty(&mut self) {
+        self.topology_dirty = false;
+    }
+
+    fn removed_output_ids(&self) -> Vec<u32> {
+        self.outputs
+            .iter()
+            .filter_map(|(id, record)| {
+                matches!(
+                    record.lifecycle.state(),
+                    LifecycleState::Removed | LifecycleState::Closing
+                )
+                .then_some(*id)
+            })
+            .collect()
+    }
+
+    fn forget_output(&mut self, output_id: u32) {
+        self.outputs.remove(&output_id);
+        self.degraded_outputs.remove(&output_id);
+    }
+
+    fn mark_timer_fired(&mut self) {
+        self.timer_fired = true;
+    }
+
+    fn mark_power_event(&mut self, event: PowerEvent) {
+        self.power_events.push(event);
+    }
+
+    fn mark_weather_timer_fired(&mut self) {
+        self.weather_timer_fired = true;
+    }
+
+    fn take_power_events(&mut self) -> Vec<PowerEvent> {
+        std::mem::take(&mut self.power_events)
+    }
+
+    fn pause_rendering(&mut self) {
+        self.render_paused = true;
+        self.timer_fired = false;
+        for record in self.outputs.values_mut() {
+            record.frame_pending = false;
+            record.callback_ready = false;
+        }
+    }
+
+    fn resume_rendering(&mut self) {
+        self.render_paused = false;
+        self.timer_fired = false;
+        for record in self.outputs.values_mut() {
+            record.frame_pending = false;
+            record.callback_ready = false;
+        }
+    }
+}
+
+impl CompositorHandler for MultiWaylandClient {
+    fn scale_factor_changed(
+        &mut self,
+        _connection: &Connection,
+        _queue_handle: &QueueHandle<Self>,
+        surface: &wl_surface::WlSurface,
+        new_factor: i32,
+    ) {
+        if let Some(output_id) = self.record_for_surface(surface) {
+            if let Some(record) = self.outputs.get_mut(&output_id) {
+                record.lifecycle.scale_changed(new_factor);
+                record.reconfigure_generation = record.reconfigure_generation.saturating_add(1);
+                println!(
+                    "trace output-scale output={} factor={} state={:?}",
+                    output_id,
+                    new_factor,
+                    record.lifecycle.state()
+                );
+            }
+        }
+    }
+
+    fn transform_changed(
+        &mut self,
+        _connection: &Connection,
+        _queue_handle: &QueueHandle<Self>,
+        surface: &wl_surface::WlSurface,
+        new_transform: wl_output::Transform,
+    ) {
+        if let Some(output_id) = self.record_for_surface(surface) {
+            if let Some(record) = self.outputs.get_mut(&output_id) {
+                record.info.transform = new_transform;
+                record.reconfigure_generation = record.reconfigure_generation.saturating_add(1);
+            }
+            println!(
+                "trace output-transform output={} transform={new_transform:?}",
+                output_id
+            );
+        }
+    }
+
+    fn frame(
+        &mut self,
+        _connection: &Connection,
+        _queue_handle: &QueueHandle<Self>,
+        surface: &wl_surface::WlSurface,
+        time: u32,
+    ) {
+        let Some(output_id) = self.record_for_surface(surface) else {
+            return;
+        };
+        if let Some(record) = self.outputs.get_mut(&output_id) {
+            if matches!(
+                record.lifecycle.state(),
+                LifecycleState::Closing | LifecycleState::Removed | LifecycleState::Disconnected
+            ) {
+                return;
+            }
+            #[cfg(debug_assertions)]
+            if self.withhold_output_callbacks == Some(output_id) {
+                // Debug-only evidence seam: keep one output's readiness gate
+                // closed while other output schedulers continue independently.
+                record.frame_pending = true;
+                record.callback_ready = false;
+                println!(
+                    "trace frame-callback output={} withheld=true time={time}",
+                    output_id
+                );
+                return;
+            }
+            record.frame_pending = false;
+            record.callback_ready = true;
+            println!(
+                "trace frame-callback output={} ready=true time={time}",
+                output_id
+            );
+        }
+    }
+
+    fn surface_enter(
+        &mut self,
+        _connection: &Connection,
+        _queue_handle: &QueueHandle<Self>,
+        surface: &wl_surface::WlSurface,
+        output: &wl_output::WlOutput,
+    ) {
+        if let Some(output_id) = self.record_for_surface(surface) {
+            println!(
+                "trace surface-enter output={} entered-output={}",
+                output_id,
+                output.id()
+            );
+        }
+    }
+
+    fn surface_leave(
+        &mut self,
+        _connection: &Connection,
+        _queue_handle: &QueueHandle<Self>,
+        surface: &wl_surface::WlSurface,
+        output: &wl_output::WlOutput,
+    ) {
+        if let Some(output_id) = self.record_for_surface(surface) {
+            println!(
+                "trace surface-leave output={} left-output={}",
+                output_id,
+                output.id()
+            );
+        }
+    }
+}
+
+impl OutputHandler for MultiWaylandClient {
+    fn output_state(&mut self) -> &mut OutputState {
+        &mut self.output_state
+    }
+
+    fn new_output(
+        &mut self,
+        _connection: &Connection,
+        _queue_handle: &QueueHandle<Self>,
+        output: wl_output::WlOutput,
+    ) {
+        self.topology_dirty = true;
+        println!(
+            "trace output-added protocol-id={}",
+            output.id().protocol_id()
+        );
+    }
+
+    fn update_output(
+        &mut self,
+        _connection: &Connection,
+        _queue_handle: &QueueHandle<Self>,
+        output: wl_output::WlOutput,
+    ) {
+        let Some(info) = self.output_state.info(&output) else {
+            return;
+        };
+        let id = info.id;
+        let fractional_supported = self.fractional_globals.supported();
+        let record = self.outputs.entry(id).or_insert_with(|| MultiOutputRecord {
+            output: output.clone(),
+            info: info.clone(),
+            lifecycle: OutputLifecycle::new_with_fractional(
+                info.scale_factor,
+                info.logical_size,
+                fractional_supported,
+            ),
+            surface_id: None,
+            frame_pending: false,
+            callback_ready: false,
+            reconfigure_generation: 0,
+            viewport: None,
+            fractional_scale: None,
+        });
+        record.output = output;
+        record.info = info.clone();
+        if record.surface_id.is_none() {
+            record.lifecycle = OutputLifecycle::new_with_fractional(
+                info.scale_factor,
+                info.logical_size,
+                fractional_supported,
+            );
+            self.degraded_outputs.remove(&id);
+            self.topology_dirty = true;
+        }
+        println!(
+            "trace output-updated id={} logical-size={:?} scale={}",
+            id, info.logical_size, info.scale_factor
+        );
+    }
+
+    fn output_destroyed(
+        &mut self,
+        _connection: &Connection,
+        _queue_handle: &QueueHandle<Self>,
+        output: wl_output::WlOutput,
+    ) {
+        if let Some((id, record)) = self
+            .outputs
+            .iter_mut()
+            .find(|(_, record)| record.output == output)
+        {
+            record.lifecycle.output_removed();
+            record.frame_pending = false;
+            record.callback_ready = false;
+            self.degraded_outputs.remove(id);
+            self.topology_dirty = true;
+            println!("trace output-removed id={} state=removed", id);
+        }
+    }
+}
+
+impl LayerShellHandler for MultiWaylandClient {
+    fn closed(
+        &mut self,
+        _connection: &Connection,
+        _queue_handle: &QueueHandle<Self>,
+        layer: &LayerSurface,
+    ) {
+        if let Some(output_id) = self.record_for_surface(layer.wl_surface()) {
+            if let Some(record) = self.outputs.get_mut(&output_id) {
+                record.lifecycle.close();
+                record.frame_pending = false;
+                record.callback_ready = false;
+                self.topology_dirty = true;
+                println!("trace layer-closed output={} state=closing", output_id);
+            }
+        }
+    }
+
+    fn configure(
+        &mut self,
+        _connection: &Connection,
+        _queue_handle: &QueueHandle<Self>,
+        layer: &LayerSurface,
+        configure: LayerSurfaceConfigure,
+        serial: u32,
+    ) {
+        if let Some(output_id) = self.record_for_surface(layer.wl_surface()) {
+            if let Some(record) = self.outputs.get_mut(&output_id) {
+                record.lifecycle.configured(serial, configure.new_size);
+                record.reconfigure_generation = record.reconfigure_generation.saturating_add(1);
+                Self::update_viewport(output_id, record);
+                let current = record.lifecycle.last_configure;
+                println!(
+                    "trace configure output={} serial={} suggested={}x{} physical={:?} preferred-scale-120={:?} state={:?} ack=toolkit-before-handler",
+                    output_id,
+                    serial,
+                    configure.new_size.0,
+                    configure.new_size.1,
+                    current.and_then(|value| value.physical_extent),
+                    record.lifecycle.preferred_scale_120,
+                    record.lifecycle.state(),
+                );
+            }
+        }
+    }
+}
+
+wayland_client::delegate_noop!(MultiWaylandClient: WpViewporter);
+wayland_client::delegate_noop!(MultiWaylandClient: WpFractionalScaleManagerV1);
+wayland_client::delegate_noop!(MultiWaylandClient: WpViewport);
+
+impl Dispatch<WpFractionalScaleV1, u32> for MultiWaylandClient {
+    fn event(
+        client: &mut Self,
+        _proxy: &WpFractionalScaleV1,
+        event: wp_fractional_scale_v1::Event,
+        output_id: &u32,
+        _connection: &Connection,
+        _queue_handle: &QueueHandle<Self>,
+    ) {
+        let wp_fractional_scale_v1::Event::PreferredScale { scale } = event else {
+            return;
+        };
+        if let Some(record) = client.outputs.get_mut(output_id) {
+            record.lifecycle.preferred_scale_changed(scale);
+            record.reconfigure_generation = record.reconfigure_generation.saturating_add(1);
+            Self::update_viewport(*output_id, record);
+            println!(
+                "trace fractional-scale output={} preferred-scale-120={} physical={:?} state={:?}",
+                output_id,
+                scale,
+                record
+                    .lifecycle
+                    .last_configure
+                    .and_then(|configure| configure.physical_extent),
+                record.lifecycle.state(),
+            );
+        }
+    }
+}
+
+delegate_registry!(MultiWaylandClient);
+
+impl ProvidesRegistryState for MultiWaylandClient {
+    fn registry(&mut self) -> &mut RegistryState {
+        &mut self.registry_state
+    }
+
+    registry_handlers![OutputState];
+}
+
+smithay_client_toolkit::delegate_dispatch2!(MultiWaylandClient);
+
+struct CreatedMultiLayer {
+    layer: LayerSurface,
+    viewport: Option<WpViewport>,
+    fractional_scale: Option<WpFractionalScaleV1>,
+}
+
+fn create_multi_layer(
+    compositor: &CompositorState,
+    layer_shell: &LayerShell,
+    queue_handle: &QueueHandle<MultiWaylandClient>,
+    output: &wl_output::WlOutput,
+    output_id: u32,
+    fractional_globals: &FractionalGlobals,
+) -> Result<CreatedMultiLayer, Box<dyn Error>> {
+    let surface = compositor.create_surface(queue_handle);
+    let layer = layer_shell.create_layer_surface(
+        queue_handle,
+        surface,
+        Layer::Background,
+        Some("worldwall"),
+        Some(output),
+    );
+    layer.set_anchor(Anchor::TOP | Anchor::BOTTOM | Anchor::LEFT | Anchor::RIGHT);
+    layer.set_size(0, 0);
+    layer.set_exclusive_zone(-1);
+    layer.set_keyboard_interactivity(KeyboardInteractivity::None);
+    if fractional_globals.supported() {
+        // Fractional-scale v1 requires buffer scale 1; wp_viewport maps the
+        // physical buffer back to the logical layer destination.
+        layer.wl_surface().set_buffer_scale(1);
+    }
+    let empty_input_region = Region::new(compositor)?;
+    layer.set_input_region(Some(empty_input_region.wl_region()));
+    let viewport = fractional_globals
+        .viewporter
+        .as_ref()
+        .and_then(|global| global.get().ok())
+        .map(|manager| manager.get_viewport(layer.wl_surface(), queue_handle, ()));
+    let fractional_scale = fractional_globals
+        .fractional_scale_manager
+        .as_ref()
+        .and_then(|global| global.get().ok())
+        .map(|manager| manager.get_fractional_scale(layer.wl_surface(), queue_handle, output_id));
+    layer.commit();
+    Ok(CreatedMultiLayer {
+        layer,
+        viewport,
+        fractional_scale,
+    })
+}
+
+fn install_missing_multi_layers(
+    client: &mut MultiWaylandClient,
+    compositor: &CompositorState,
+    layer_shell: &LayerShell,
+    queue_handle: &QueueHandle<MultiWaylandClient>,
+    layers: &mut Vec<(u32, LayerSurface)>,
+) -> Result<(), Box<dyn Error>> {
+    for (output, info) in client.missing_outputs() {
+        let id = info.id;
+        let CreatedMultiLayer {
+            layer,
+            viewport,
+            fractional_scale,
+        } = create_multi_layer(
+            compositor,
+            layer_shell,
+            queue_handle,
+            &output,
+            id,
+            &client.fractional_globals,
+        )?;
+        client.install_layer(&layer, output, info, viewport, fractional_scale);
+        layers.push((id, layer));
+        println!(
+            "trace role-settings output={} layer=background anchors=all size=0x0 keyboard=none input-region=empty exclusive-zone=-1",
+            id
+        );
+    }
+    Ok(())
+}
+
+fn trace_allocation_counters(counters: AllocationCounters) {
+    println!(
+        "trace allocation-counters scene-textures={} scene-buffers={} scene-layouts={} scene-upload-bind-groups={} pipelines={} output-uniform-buffers={} output-bind-groups={} output-initial-surface-configurations={}",
+        counters.scene_texture_creations,
+        counters.scene_buffer_creations,
+        counters.scene_bind_group_layout_creations,
+        counters.scene_upload_bind_group_creations,
+        counters.pipeline_creations,
+        counters.output_uniform_buffer_creations,
+        counters.output_bind_group_creations,
+        counters.output_initial_surface_configurations,
+    );
+}
+
+fn rebuild_multi_presenters<'wayland>(
+    shared: &mut SharedRenderer,
+    connection: &'wayland Connection,
+    client: &mut MultiWaylandClient,
+    layers: &'wayland [(u32, LayerSurface)],
+) -> BTreeMap<u32, OutputRenderer<'wayland>> {
+    let mut presenters = BTreeMap::new();
+    for output_id in client.ready_output_ids() {
+        let Some(extent) = client.physical_extent(output_id) else {
+            continue;
+        };
+        let Some((_, layer)) = layers.iter().find(|(id, _)| *id == output_id) else {
+            continue;
+        };
+        if client.degraded_outputs.contains(&output_id) {
+            continue;
+        }
+        match shared.add_output(connection, layer.wl_surface(), extent) {
+            Ok(presenter) => {
+                println!(
+                    "trace output-presenter-added output={} shared-device=true format={:?}",
+                    output_id,
+                    presenter.format()
+                );
+                presenters.insert(output_id, presenter);
+            }
+            Err(error) => {
+                eprintln!(
+                    "trace output-degraded output={} shared-device=true retry=on-rediscovery reason={error}",
+                    output_id
+                );
+                client.degraded_outputs.insert(output_id);
+            }
+        }
+    }
+    presenters
+}
+
+fn insert_multi_frame_timer(
+    event_loop: &EventLoop<MultiWaylandClient>,
+    interval: Duration,
+) -> Result<RegistrationToken, Box<dyn Error>> {
+    Ok(event_loop
+        .handle()
+        .insert_source(Timer::from_duration(interval), move |_, _, client| {
+            client.mark_timer_fired();
+            TimeoutAction::ToDuration(interval)
+        })?)
+}
+
+fn insert_multi_weather_timer(
+    event_loop: &EventLoop<MultiWaylandClient>,
+    interval: Duration,
+) -> Result<RegistrationToken, Box<dyn Error>> {
+    Ok(event_loop
+        .handle()
+        .insert_source(Timer::from_duration(interval), move |_, _, client| {
+            client.mark_weather_timer_fired();
+            TimeoutAction::ToDuration(interval)
+        })?)
+}
+
+fn render_multi_presenter<'wayland>(
+    connection: &'wayland Connection,
+    presenter: &mut OutputRenderer<'wayland>,
+    extent: (u32, u32),
+    animation_time_seconds: f32,
+    civil_seconds: u32,
+) -> Result<RenderOutcome, Box<dyn Error>> {
+    presenter.reconfigure(extent)?;
+    match presenter.render_at_with_civil_seconds(animation_time_seconds, civil_seconds)? {
+        RenderOutcome::Reconfigure => {
+            presenter.recreate_surface(connection)?;
+            presenter.reconfigure(extent)?;
+            presenter.render_at_with_civil_seconds(animation_time_seconds, civil_seconds)
+        }
+        outcome => Ok(outcome),
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn run_multi_presenting<'wayland>(
+    event_loop: &mut EventLoop<MultiWaylandClient>,
+    client: &mut MultiWaylandClient,
+    mut presenters: BTreeMap<u32, OutputRenderer<'wayland>>,
+    connection: &'wayland Connection,
+    queue_handle: &QueueHandle<MultiWaylandClient>,
+    layers: &'wayland [(u32, LayerSurface)],
+    schedulers: &mut BTreeMap<u32, FrameScheduler>,
+    seen_generations: &mut BTreeMap<u32, u64>,
+    civil_time: &CivilTimeRuntime,
+    weather: &mut WeatherRuntime,
+    clock_origin: Instant,
+    animation_clock: &mut PausedAnimationClock,
+    power: &mut PowerStateMachine,
+    frame_timer: &mut Option<RegistrationToken>,
+    weather_timer: &mut Option<RegistrationToken>,
+    fps: Fps,
+    shared_scene_uploads: u64,
+    interval: Duration,
+    #[cfg(debug_assertions)] test_exit_deadline: Option<Instant>,
+) -> Result<bool, Box<dyn Error>> {
+    // Bootstrap each newly-created presenter only after its callback request
+    // is queued. The next steady-state draw is callback/deadline gated below.
+    if !client.render_paused {
+        for (&output_id, presenter) in &mut presenters {
+            let Some((_, layer)) = layers.iter().find(|(id, _)| *id == output_id) else {
+                continue;
+            };
+            client.request_frame_for_surface(output_id, layer.wl_surface(), queue_handle);
+            match presenter.render_at_with_civil_seconds(0.0, civil_time.seconds())? {
+                RenderOutcome::Presented => {
+                    if let Some(scheduler) = schedulers.get_mut(&output_id) {
+                        let _ = scheduler.submit_if_due(0);
+                    }
+                }
+                RenderOutcome::Timeout | RenderOutcome::Occluded => {
+                    eprintln!(
+                        "trace gpu-frame output={} skipped reason=surface-not-ready bounded=true",
+                        output_id
+                    );
+                }
+                RenderOutcome::Reconfigure | RenderOutcome::Fatal => {}
+            }
+        }
+    }
+
+    loop {
+        event_loop.dispatch(None, client)?;
+        if client.weather_timer_fired {
+            client.weather_timer_fired = false;
+            weather.poll();
+        }
+        let now_ns = clock_origin.elapsed().as_nanos().min(u128::from(u64::MAX)) as u64;
+        for event in client.take_power_events() {
+            match power.on_event(event) {
+                PowerAction::Pause { generation } => {
+                    client.pause_rendering();
+                    animation_clock.pause(now_ns);
+                    for scheduler in schedulers.values_mut() {
+                        scheduler.pause();
+                    }
+                    if let Some(token) = frame_timer.take() {
+                        event_loop.handle().remove(token);
+                    }
+                    if let Some(token) = weather_timer.take() {
+                        event_loop.handle().remove(token);
+                    }
+                    println!("trace suspend state=paused generation={generation} deadlines=false");
+                }
+                PowerAction::BeginResume { generation } => {
+                    println!(
+                        "trace resume state=pending generation={generation} output-ready={}",
+                        !client.ready_output_ids().is_empty()
+                    );
+                }
+                PowerAction::ServiceDegraded => {
+                    eprintln!("trace power-service state=degraded resume-support=false");
+                }
+                PowerAction::ServiceRestored => {
+                    println!("trace power-service state=available resume-support=true");
+                }
+                PowerAction::Ignored => {}
+            }
+        }
+        if let Some(generation) = power.begin_resume_if_ready(!client.ready_output_ids().is_empty())
+        {
+            client.resume_rendering();
+            animation_clock.resume(now_ns);
+            for scheduler in schedulers.values_mut() {
+                scheduler.resume();
+            }
+            if frame_timer.is_none() && !presenters.is_empty() {
+                *frame_timer = Some(insert_multi_frame_timer(event_loop, interval)?);
+            }
+            if weather_timer.is_none() {
+                *weather_timer = Some(insert_multi_weather_timer(
+                    event_loop,
+                    Duration::from_secs(1),
+                )?);
+            }
+            let _ = power.complete_resume(generation);
+            println!(
+                "trace resume state=active generation={generation} shared-scene-retained=true"
+            );
+            println!(
+                "trace resume-presented generation={generation} output-ready={}",
+                !presenters.is_empty()
+            );
+        }
+        // A configure can make a newly-created output ready after this
+        // topology pass has already built presenters for the outputs that
+        // were ready at its start. Rebuild once for that output, but do not
+        // retry an output already placed in the bounded degraded set.
+        let missing_ready_presenter = client.ready_output_ids().into_iter().any(|output_id| {
+            !presenters.contains_key(&output_id) && !client.degraded_outputs.contains(&output_id)
+        });
+        if client.topology_dirty() || missing_ready_presenter {
+            return Ok(true);
+        }
+        #[cfg(debug_assertions)]
+        if test_exit_deadline.is_some_and(|deadline| Instant::now() >= deadline) {
+            println!("trace test-exit clean=true reason=deadline");
+            return Ok(false);
+        }
+        if !client.timer_fired {
+            continue;
+        }
+        client.timer_fired = false;
+        let now_ns = clock_origin.elapsed().as_nanos().min(u128::from(u64::MAX)) as u64;
+        if client.render_paused {
+            continue;
+        }
+        let animation_time_seconds = animation_clock.seconds(now_ns);
+        for output_id in client.ready_output_ids() {
+            let Some(presenter) = presenters.get_mut(&output_id) else {
+                continue;
+            };
+            if client.callback_ready(output_id) {
+                if let Some(scheduler) = schedulers.get_mut(&output_id) {
+                    scheduler.on_callback();
+                }
+            }
+            let generation = client
+                .outputs
+                .get(&output_id)
+                .map_or(0, |record| record.reconfigure_generation);
+            if seen_generations.get(&output_id).copied() != Some(generation) {
+                if let Some(scheduler) = schedulers.get_mut(&output_id) {
+                    scheduler.on_reconfigure();
+                }
+                seen_generations.insert(output_id, generation);
+            }
+            let Some(extent) = client.physical_extent(output_id) else {
+                continue;
+            };
+            let Some(scheduler) = schedulers.get_mut(&output_id) else {
+                continue;
+            };
+            if client.frame_pending(output_id) || !scheduler.is_due(now_ns) {
+                continue;
+            }
+            let Some((_, layer)) = layers.iter().find(|(id, _)| *id == output_id) else {
+                continue;
+            };
+            client.request_frame_for_surface(output_id, layer.wl_surface(), queue_handle);
+            match render_multi_presenter(
+                connection,
+                presenter,
+                extent,
+                animation_time_seconds,
+                civil_time.seconds(),
+            )? {
+                RenderOutcome::Presented => {
+                    let _ = scheduler.submit_if_due(now_ns);
+                    println!(
+                        "trace animation-frame output={} fps={} phase-seconds={animation_time_seconds:.6} shared-scene-uploads={} animation-uniform-updates={}",
+                        output_id,
+                        match fps {
+                            Fps::Fifteen => 15,
+                            Fps::Thirty => 30,
+                        },
+                        shared_scene_uploads,
+                        presenter.animation_uniform_update_count(),
+                    );
+                }
+                RenderOutcome::Timeout => eprintln!(
+                    "trace gpu-frame output={} skipped reason=timeout bounded=true",
+                    output_id
+                ),
+                RenderOutcome::Occluded => eprintln!(
+                    "trace gpu-frame output={} skipped reason=occluded bounded=true",
+                    output_id
+                ),
+                RenderOutcome::Reconfigure | RenderOutcome::Fatal => {}
+            }
+        }
+        let _ = interval;
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn run_multi_session<'owners>(
+    event_loop: &mut EventLoop<MultiWaylandClient>,
+    client: &mut MultiWaylandClient,
+    shared: &mut Option<SharedRenderer>,
+    connection: &'owners Connection,
+    queue_handle: &QueueHandle<MultiWaylandClient>,
+    compositor: &CompositorState,
+    layer_shell: &LayerShell,
+    layers: &'owners mut Vec<(u32, LayerSurface)>,
+    schedulers: &mut BTreeMap<u32, FrameScheduler>,
+    seen_generations: &mut BTreeMap<u32, u64>,
+    scene: &Scene,
+    civil_time: &CivilTimeRuntime,
+    weather: &mut WeatherRuntime,
+    clock_origin: Instant,
+    animation_clock: &mut PausedAnimationClock,
+    power: &mut PowerStateMachine,
+    fps: Fps,
+    frame_timer: &mut Option<RegistrationToken>,
+    weather_timer: &mut Option<RegistrationToken>,
+    interval: Duration,
+    #[cfg(debug_assertions)] test_exit_deadline: Option<Instant>,
+) -> Result<(), Box<dyn Error>> {
+    loop {
+        if shared.is_none() {
+            if let Some(first_ready) = client.ready_output_ids().into_iter().next() {
+                let first_layer = layers
+                    .iter()
+                    .find(|(id, _)| *id == first_ready)
+                    .ok_or_else(|| "ready output has no retained layer owner".to_owned())?;
+                *shared = Some(SharedRenderer::new_with_scene(
+                    connection,
+                    first_layer.1.wl_surface(),
+                    scene,
+                )?);
+                println!("trace outputs-restored shared-device-created=true");
+            }
+        }
+        let presenters = shared
+            .as_mut()
+            .map(|renderer| rebuild_multi_presenters(renderer, connection, client, layers))
+            .unwrap_or_default();
+        if let Some(renderer) = shared.as_ref() {
+            trace_allocation_counters(renderer.allocation_counters());
+        }
+        if presenters.is_empty() || client.render_paused {
+            if let Some(token) = frame_timer.take() {
+                event_loop.handle().remove(token);
+            }
+            println!("trace outputs-zero frame-wakeup=false dispatch-idle=true");
+        } else if frame_timer.is_none() {
+            *frame_timer = Some(insert_multi_frame_timer(event_loop, interval)?);
+        }
+        client.clear_topology_dirty();
+        let topology_changed = run_multi_presenting(
+            event_loop,
+            client,
+            presenters,
+            connection,
+            queue_handle,
+            layers,
+            schedulers,
+            seen_generations,
+            civil_time,
+            weather,
+            clock_origin,
+            animation_clock,
+            power,
+            frame_timer,
+            weather_timer,
+            fps,
+            shared
+                .as_ref()
+                .map_or(0, SharedRenderer::scene_upload_count),
+            interval,
+            #[cfg(debug_assertions)]
+            test_exit_deadline,
+        )?;
+        if !topology_changed {
+            return Ok(());
+        }
+
+        // `presenters` was moved into run_multi_presenting and dropped there. This
+        // is the lifetime barrier before any retained LayerSurface is removed.
+        let removed = client.removed_output_ids();
+        layers.retain(|(id, _)| !removed.contains(id));
+        for id in removed {
+            schedulers.remove(&id);
+            seen_generations.remove(&id);
+            client.forget_output(id);
+        }
+        install_missing_multi_layers(client, compositor, layer_shell, queue_handle, layers)?;
+        for id in client.output_ids() {
+            schedulers
+                .entry(id)
+                .or_insert_with(|| FrameScheduler::new(fps));
+            seen_generations.entry(id).or_insert(0);
+        }
+        continue;
+    }
+}
+
+/// S09 event loop: every layer, presenter, callback, configuration, and
+/// scheduler is keyed by wl_output identity. Output changes only rebuild
+/// presentation; the selected scene transaction is never touched.
+pub fn run_multi() -> Result<(), Box<dyn Error>> {
+    let connection = Connection::connect_to_env()?;
+    let (globals, mut event_queue) = registry_queue_init(&connection)?;
+    let queue_handle = event_queue.handle();
+    let compositor = CompositorState::bind(&globals, &queue_handle)
+        .map_err(|error| format!("required wl_compositor global is unavailable: {error}"))?;
+    let layer_shell = LayerShell::bind(&globals, &queue_handle).map_err(|error| {
+        format!("required zwlr_layer_shell_v1 global is unavailable; a layer-shell compositor is required: {error}")
+    })?;
+    let registry_state = RegistryState::new(&globals);
+    let output_state = OutputState::new(&globals, &queue_handle);
+    let fractional_globals = FractionalGlobals {
+        viewporter: SimpleGlobal::<WpViewporter, 1>::bind(&globals, &queue_handle).ok(),
+        fractional_scale_manager: SimpleGlobal::<WpFractionalScaleManagerV1, 1>::bind(
+            &globals,
+            &queue_handle,
+        )
+        .ok(),
+    };
+    println!(
+        "trace fractional-scale protocol viewporter={} manager={} enabled={}",
+        fractional_globals.viewporter.is_some(),
+        fractional_globals.fractional_scale_manager.is_some(),
+        fractional_globals.supported(),
+    );
+    let mut client = MultiWaylandClient::new(registry_state, output_state, fractional_globals);
+    event_queue.roundtrip(&mut client)?;
+    let mut layers = Vec::new();
+    install_missing_multi_layers(
+        &mut client,
+        &compositor,
+        &layer_shell,
+        &queue_handle,
+        &mut layers,
+    )?;
+    event_queue.roundtrip(&mut client)?;
+    let civil_time = CivilTimeRuntime::startup()?;
+    let mut weather = WeatherRuntime::startup()?;
+    let (scene, _selection) = load_scene(civil_time.snapshot(weather.weather()))?;
+    // A compositor may start with no complete outputs. Keep dispatching with
+    // no timer and create the shared device only when the first layer reaches
+    // a nonzero configure; a later output arrival reuses this device/scene.
+    let mut shared: Option<SharedRenderer> = None;
+    let fps = configured_fps();
+    let mut schedulers = client
+        .output_ids()
+        .map(|id| (id, FrameScheduler::new(fps)))
+        .collect::<BTreeMap<_, _>>();
+    let mut seen_generations = client
+        .output_ids()
+        .map(|id| (id, 0_u64))
+        .collect::<BTreeMap<_, _>>();
+    let clock_origin = Instant::now();
+    #[cfg(debug_assertions)]
+    let test_exit_deadline = test_exit_deadline(clock_origin);
+
+    let mut event_loop: EventLoop<MultiWaylandClient> = EventLoop::try_new()?;
+    let interval = Duration::from_nanos(fps.interval_nanos());
+    WaylandSource::new(connection.clone(), event_queue).insert(event_loop.handle())?;
+    let power_events = PowerEventSource::start().into_event_source();
+    event_loop
+        .handle()
+        .insert_source(power_events, move |event, _, client| match event {
+            ChannelEvent::Msg(event) => client.mark_power_event(event),
+            ChannelEvent::Closed => client.mark_power_event(PowerEvent::Disconnected),
+        })?;
+    let weather_timer_interval = Duration::from_secs(1);
+    let mut weather_timer = Some(insert_multi_weather_timer(
+        &event_loop,
+        weather_timer_interval,
+    )?);
+    let mut power = PowerStateMachine::new();
+    let mut animation_clock = PausedAnimationClock::new(0);
+    let mut frame_timer = None;
+    run_multi_session(
+        &mut event_loop,
+        &mut client,
+        &mut shared,
+        &connection,
+        &queue_handle,
+        &compositor,
+        &layer_shell,
+        &mut layers,
+        &mut schedulers,
+        &mut seen_generations,
+        &scene,
+        &civil_time,
+        &mut weather,
+        clock_origin,
+        &mut animation_clock,
+        &mut power,
+        fps,
+        &mut frame_timer,
+        &mut weather_timer,
+        interval,
+        #[cfg(debug_assertions)]
+        test_exit_deadline,
+    )?;
+
+    drop(event_loop);
+    drop(shared);
+    layers.clear();
+    client.outputs.clear();
+    println!("trace shutdown multi-output=true");
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1425,6 +2673,45 @@ mod tests {
             Some(PhysicalExtent {
                 width: 3840,
                 height: 2160
+            })
+        );
+    }
+
+    #[test]
+    fn fractional_scale_waits_for_preferred_scale_and_uses_viewport_extent() {
+        let mut lifecycle = OutputLifecycle::new_with_fractional(2, Some((1536, 864)), true);
+        lifecycle.role_created();
+        lifecycle.initial_commit();
+        lifecycle.configured(4, (1536, 864));
+        assert_eq!(lifecycle.state(), LifecycleState::AwaitingConfigure);
+        assert_eq!(lifecycle.last_configure.unwrap().physical_extent, None);
+
+        lifecycle.preferred_scale_changed(150);
+        assert_eq!(lifecycle.state(), LifecycleState::Ready);
+        assert_eq!(
+            lifecycle.last_configure.unwrap().physical_extent,
+            Some(PhysicalExtent {
+                width: 1920,
+                height: 1080
+            })
+        );
+        assert_eq!(scaled_dimension(101, 125), Some(106));
+    }
+
+    #[test]
+    fn fractional_preferred_scale_can_arrive_before_configure() {
+        let mut lifecycle = OutputLifecycle::new_with_fractional(1, None, true);
+        lifecycle.role_created();
+        lifecycle.initial_commit();
+        lifecycle.preferred_scale_changed(150);
+        lifecycle.configured(5, (100, 50));
+
+        assert_eq!(lifecycle.state(), LifecycleState::Ready);
+        assert_eq!(
+            lifecycle.last_configure.unwrap().physical_extent,
+            Some(PhysicalExtent {
+                width: 125,
+                height: 63
             })
         );
     }

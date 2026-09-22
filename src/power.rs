@@ -69,6 +69,7 @@ impl Default for PowerStateMachine {
     }
 }
 
+#[allow(dead_code)]
 impl PowerStateMachine {
     pub const fn new() -> Self {
         Self {

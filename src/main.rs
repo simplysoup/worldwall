@@ -11,7 +11,7 @@ mod wayland_surface;
 mod weather;
 
 fn main() {
-    if let Err(error) = wayland_surface::run() {
+    if let Err(error) = wayland_surface::run_multi() {
         eprintln!("worldwall: {error}");
         std::process::exit(1);
     }

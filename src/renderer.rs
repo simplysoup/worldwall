@@ -4,6 +4,7 @@
 //! connection and layer surface and must keep them alive for this renderer's
 //! lifetime. The raw-handle boundary is intentionally one small function so
 //! its validity and drop-order argument can be reviewed independently.
+#![allow(dead_code)]
 
 use std::{error::Error, fmt, num::NonZeroU64, ptr::NonNull, sync::Arc};
 
@@ -55,6 +56,52 @@ pub enum RenderOutcome {
     Occluded,
     Reconfigure,
     Fatal,
+}
+
+/// Cumulative renderer resource-creation events for S09 diagnostics.
+///
+/// These counters describe the application's explicit wgpu resource creation
+/// sites; they are not driver allocator or VRAM statistics. They make shared
+/// scene reuse and output-local resource growth visible without pretending to
+/// measure the backend allocator.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct AllocationCounters {
+    pub scene_texture_creations: u64,
+    pub scene_buffer_creations: u64,
+    pub scene_bind_group_layout_creations: u64,
+    pub scene_upload_bind_group_creations: u64,
+    pub pipeline_creations: u64,
+    pub output_uniform_buffer_creations: u64,
+    pub output_bind_group_creations: u64,
+    pub output_initial_surface_configurations: u64,
+}
+
+impl AllocationCounters {
+    fn record_scene_upload(&mut self, creates_layout: bool) {
+        // index texture, palette texture, and the resident time-of-day atlas
+        self.scene_texture_creations = self.scene_texture_creations.saturating_add(3);
+        // mapping, animation metadata, cycle indices, time-of-day keyframes,
+        // and animation clock buffers are created by the upload helper.
+        self.scene_buffer_creations = self.scene_buffer_creations.saturating_add(5);
+        if creates_layout {
+            self.scene_bind_group_layout_creations =
+                self.scene_bind_group_layout_creations.saturating_add(1);
+        }
+        self.scene_upload_bind_group_creations =
+            self.scene_upload_bind_group_creations.saturating_add(1);
+    }
+
+    fn record_output(&mut self) {
+        self.output_uniform_buffer_creations =
+            self.output_uniform_buffer_creations.saturating_add(2);
+        self.output_bind_group_creations = self.output_bind_group_creations.saturating_add(1);
+        self.output_initial_surface_configurations =
+            self.output_initial_surface_configurations.saturating_add(1);
+    }
+
+    fn record_pipeline_pair(&mut self) {
+        self.pipeline_creations = self.pipeline_creations.saturating_add(2);
+    }
 }
 
 fn classify_surface_texture(acquisition: &wgpu::CurrentSurfaceTexture) -> RenderOutcome {
@@ -402,6 +449,595 @@ impl<'wayland> Renderer<'wayland> {
         println!("trace gpu-surface recreated reason=lost");
         Ok(())
     }
+}
+
+/// Device, queue, scene textures, metadata, and pipelines shared by every
+/// output presenter. Output-local dimensions never live in this type.
+pub struct SharedRenderer {
+    scene: SharedScene,
+    source_extent: (u32, u32),
+    device: wgpu::Device,
+    queue: wgpu::Queue,
+    adapter: wgpu::Adapter,
+    instance: wgpu::Instance,
+    pipelines: Vec<PipelineSet>,
+    scene_upload_count: u64,
+    allocation_counters: AllocationCounters,
+    diagnostic_solid_color: bool,
+}
+
+/// Presentation state for one keyed output. The wgpu handles are cloned from
+/// the shared device/queue; the scene textures are not. This makes it possible
+/// to rebuild an output binding or surface while the shared scene remains
+/// resident, and lets the event loop drop these values before LayerSurface
+/// owners during topology changes.
+pub struct OutputRenderer<'wayland> {
+    pipeline: wgpu::RenderPipeline,
+    solid_pipeline: wgpu::RenderPipeline,
+    bind_group: wgpu::BindGroup,
+    mapping_buffer: wgpu::Buffer,
+    animation_clock_buffer: wgpu::Buffer,
+    queue: wgpu::Queue,
+    device: wgpu::Device,
+    surface: wgpu::Surface<'wayland>,
+    instance: wgpu::Instance,
+    wayland_surface: &'wayland wl_surface::WlSurface,
+    format: wgpu::TextureFormat,
+    config: wgpu::SurfaceConfiguration,
+    source_extent: (u32, u32),
+    time_of_day_keyframe_count: u32,
+    time_of_day_enabled: bool,
+    animation_uniform_update_count: u64,
+    diagnostic_solid_color: bool,
+    #[cfg(debug_assertions)]
+    test_surface_error: Option<RenderOutcome>,
+}
+
+struct PipelineSet {
+    format: wgpu::TextureFormat,
+    pipeline: wgpu::RenderPipeline,
+    solid_pipeline: wgpu::RenderPipeline,
+}
+
+struct SharedScene {
+    index_texture: wgpu::Texture,
+    palette_texture: wgpu::Texture,
+    mapping_layout: wgpu::BindGroupLayout,
+    animation_metadata_buffer: wgpu::Buffer,
+    cycle_indices_buffer: wgpu::Buffer,
+    time_of_day_atlas: wgpu::Texture,
+    time_of_day_keyframes: wgpu::Buffer,
+    time_of_day_keyframe_count: u32,
+    time_of_day_enabled: bool,
+}
+
+impl SharedScene {
+    fn from_uploaded(uploaded: UploadedScene) -> Self {
+        let UploadedScene {
+            index_texture,
+            palette_texture,
+            animation_metadata_buffer,
+            cycle_indices_buffer,
+            time_of_day_atlas,
+            time_of_day_keyframes,
+            time_of_day_keyframe_count,
+            time_of_day_enabled,
+            indexed_layout,
+            ..
+        } = uploaded;
+        Self {
+            index_texture,
+            palette_texture,
+            mapping_layout: indexed_layout,
+            animation_metadata_buffer,
+            cycle_indices_buffer,
+            time_of_day_atlas,
+            time_of_day_keyframes,
+            time_of_day_keyframe_count,
+            time_of_day_enabled,
+        }
+    }
+}
+
+impl SharedRenderer {
+    /// Create one Vulkan device/queue and upload the scene once. The supplied
+    /// surface is used only to choose the adapter and validate the first
+    /// output's presentation matrix; actual presenters are added separately.
+    pub fn new_with_scene(
+        connection: &'_ Connection,
+        wayland_surface: &'_ wl_surface::WlSurface,
+        scene: &Scene,
+    ) -> Result<Self, Box<dyn Error>> {
+        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
+            backends: wgpu::Backends::VULKAN,
+            ..wgpu::InstanceDescriptor::new_without_display_handle()
+        });
+        let bootstrap_surface = create_wayland_surface(&instance, connection, wayland_surface)?;
+        let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
+            power_preference: wgpu::PowerPreference::HighPerformance,
+            force_fallback_adapter: false,
+            compatible_surface: Some(&bootstrap_surface),
+            apply_limit_buckets: false,
+        }))
+        .map_err(|error| {
+            RendererError(format!(
+                "no Vulkan adapter can present on Wayland surface: {error}"
+            ))
+        })?;
+        let info = adapter.get_info();
+        println!(
+            "trace gpu-shared-adapter backend={:?} name={:?} device={:?}",
+            info.backend, info.name, info.device
+        );
+        let first_capabilities = bootstrap_surface.get_capabilities(&adapter);
+        validate_output_capabilities(&first_capabilities)?;
+        let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
+            label: Some("worldwall-shared-device"),
+            ..wgpu::DeviceDescriptor::default()
+        }))
+        .map_err(|error| RendererError(format!("Vulkan device request failed: {error}")))?;
+        device.on_uncaptured_error(Arc::new(|error| {
+            eprintln!("trace gpu-uncaptured-error error={error:?}");
+        }));
+        device.set_device_lost_callback(|reason, message| {
+            eprintln!("trace gpu-device-lost reason={reason:?} message={message}");
+        });
+
+        let uploaded = upload_scene(&device, &queue, scene, (1, 1))?;
+        let shared_scene = SharedScene::from_uploaded(uploaded);
+        let mut renderer = Self {
+            scene: shared_scene,
+            source_extent: (scene.image.width, scene.image.height),
+            device,
+            queue,
+            adapter,
+            instance,
+            pipelines: Vec::new(),
+            scene_upload_count: 1,
+            allocation_counters: AllocationCounters::default(),
+            diagnostic_solid_color: std::env::var_os("WORLDWALL_SOLID_COLOR").is_some(),
+        };
+        renderer.allocation_counters.record_scene_upload(true);
+        let format = choose_format(&first_capabilities.formats).ok_or_else(|| {
+            RendererError(
+                "Wayland surface advertises no supported sRGB render format for indexed scenes"
+                    .to_owned(),
+            )
+        })?;
+        renderer.ensure_pipeline(format);
+        println!(
+            "trace gpu-shared-scene image={}x{} index-bytes={} palette-bytes={} uploads=1",
+            scene.image.width,
+            scene.image.height,
+            scene.image.indices.len(),
+            scene.palette.rgba.len()
+        );
+        Ok(renderer)
+    }
+
+    /// Validate a new output against the existing adapter and prepare its
+    /// format-specific pipeline without creating a second device.
+    pub fn ensure_output_format(
+        &mut self,
+        connection: &Connection,
+        wayland_surface: &wl_surface::WlSurface,
+    ) -> Result<wgpu::TextureFormat, Box<dyn Error>> {
+        let surface = create_wayland_surface(&self.instance, connection, wayland_surface)?;
+        let capabilities = surface.get_capabilities(&self.adapter);
+        validate_output_capabilities(&capabilities)?;
+        let format = choose_format(&capabilities.formats).ok_or_else(|| {
+            RendererError(format!(
+                "output {} has no compatible sRGB format; retained shared device",
+                wayland_surface.id()
+            ))
+        })?;
+        self.ensure_pipeline(format);
+        Ok(format)
+    }
+
+    /// Add an output after `ensure_output_format` has validated it. The
+    /// returned presenter owns only output-local GPU state and the borrowed
+    /// Wayland surface; scene textures stay in `SharedRenderer`.
+    pub fn add_output<'wayland>(
+        &mut self,
+        connection: &'wayland Connection,
+        wayland_surface: &'wayland wl_surface::WlSurface,
+        extent: (u32, u32),
+    ) -> Result<OutputRenderer<'wayland>, Box<dyn Error>> {
+        validate_extent(extent)?;
+        let surface = create_wayland_surface(&self.instance, connection, wayland_surface)?;
+        let capabilities = surface.get_capabilities(&self.adapter);
+        validate_output_capabilities(&capabilities)?;
+        let format = choose_format(&capabilities.formats).ok_or_else(|| {
+            RendererError("output has no compatible sRGB render format".to_owned())
+        })?;
+        self.ensure_pipeline(format);
+        let alpha_mode = capabilities
+            .alpha_modes
+            .first()
+            .copied()
+            .ok_or_else(|| RendererError("output advertises no alpha mode".to_owned()))?;
+        let config = wgpu::SurfaceConfiguration {
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+            format,
+            color_space: wgpu::SurfaceColorSpace::Auto,
+            width: extent.0,
+            height: extent.1,
+            present_mode: wgpu::PresentMode::Fifo,
+            desired_maximum_frame_latency: 2,
+            alpha_mode,
+            view_formats: Vec::new(),
+        };
+        surface.configure(&self.device, &config);
+        self.allocation_counters.record_output();
+        let (pipeline, solid_pipeline) = self
+            .pipelines
+            .iter()
+            .find(|pipeline| pipeline.format == format)
+            .map(|pipeline| (pipeline.pipeline.clone(), pipeline.solid_pipeline.clone()))
+            .ok_or_else(|| RendererError("output pipeline was not prepared".to_owned()))?;
+        let mapping_buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("worldwall-output-cover-mapping"),
+            size: 16,
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::UNIFORM,
+            mapped_at_creation: false,
+        });
+        self.queue.write_buffer(
+            &mapping_buffer,
+            0,
+            &mapping_bytes(self.source_extent, extent),
+        );
+        let animation_clock_buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("worldwall-output-animation-clock"),
+            size: 16,
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::UNIFORM,
+            mapped_at_creation: false,
+        });
+        self.queue.write_buffer(
+            &animation_clock_buffer,
+            0,
+            &animation_clock_bytes(
+                0.0,
+                0,
+                self.scene.time_of_day_keyframe_count,
+                self.scene.time_of_day_enabled,
+            ),
+        );
+        let bind_group = create_output_bind_group(
+            &self.device,
+            &self.scene,
+            &mapping_buffer,
+            &animation_clock_buffer,
+        );
+        Ok(OutputRenderer {
+            pipeline,
+            solid_pipeline,
+            bind_group,
+            mapping_buffer,
+            animation_clock_buffer,
+            queue: self.queue.clone(),
+            device: self.device.clone(),
+            surface,
+            instance: self.instance.clone(),
+            wayland_surface,
+            format,
+            config,
+            source_extent: self.source_extent,
+            time_of_day_keyframe_count: self.scene.time_of_day_keyframe_count,
+            time_of_day_enabled: self.scene.time_of_day_enabled,
+            animation_uniform_update_count: 0,
+            diagnostic_solid_color: self.diagnostic_solid_color,
+            #[cfg(debug_assertions)]
+            test_surface_error: requested_test_surface_error(),
+        })
+    }
+
+    /// Replace only the shared scene bundle. Callers must refresh each live
+    /// output binding immediately after this succeeds, before its next draw.
+    pub fn upload_and_swap_scene(&mut self, scene: &Scene) -> Result<(), Box<dyn Error>> {
+        let uploaded = upload_scene_with_layout(
+            &self.device,
+            &self.queue,
+            scene,
+            (1, 1),
+            Some(&self.scene.mapping_layout),
+        )?;
+        self.scene = SharedScene::from_uploaded(uploaded);
+        self.source_extent = (scene.image.width, scene.image.height);
+        self.scene_upload_count = self.scene_upload_count.saturating_add(1);
+        self.allocation_counters.record_scene_upload(false);
+        println!(
+            "trace scene-upload shared=true image={}x{} uploads={}",
+            scene.image.width, scene.image.height, self.scene_upload_count
+        );
+        Ok(())
+    }
+
+    pub fn scene_upload_count(&self) -> u64 {
+        self.scene_upload_count
+    }
+
+    pub fn device(&self) -> &wgpu::Device {
+        &self.device
+    }
+
+    fn ensure_pipeline(&mut self, format: wgpu::TextureFormat) {
+        if self
+            .pipelines
+            .iter()
+            .any(|pipeline| pipeline.format == format)
+        {
+            return;
+        }
+        let indexed_shader = self
+            .device
+            .create_shader_module(wgpu::ShaderModuleDescriptor {
+                label: Some("worldwall-shared-indexed-scene-shader"),
+                source: wgpu::ShaderSource::Wgsl(INDEXED_SCENE_SHADER.into()),
+            });
+        let indexed_pipeline_layout =
+            self.device
+                .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                    label: Some("worldwall-shared-indexed-scene-layout"),
+                    bind_group_layouts: &[Some(&self.scene.mapping_layout)],
+                    immediate_size: 0,
+                });
+        let pipeline = create_pipeline(
+            &self.device,
+            format,
+            &indexed_pipeline_layout,
+            &indexed_shader,
+            "worldwall-shared-indexed-scene-pipeline",
+        );
+        let solid_shader = self
+            .device
+            .create_shader_module(wgpu::ShaderModuleDescriptor {
+                label: Some("worldwall-shared-solid-color-shader"),
+                source: wgpu::ShaderSource::Wgsl(SOLID_COLOR_SHADER.into()),
+            });
+        let solid_layout = self
+            .device
+            .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("worldwall-shared-solid-color-layout"),
+                bind_group_layouts: &[],
+                immediate_size: 0,
+            });
+        let solid_pipeline = create_pipeline(
+            &self.device,
+            format,
+            &solid_layout,
+            &solid_shader,
+            "worldwall-shared-solid-color-pipeline",
+        );
+        self.pipelines.push(PipelineSet {
+            format,
+            pipeline,
+            solid_pipeline,
+        });
+        self.allocation_counters.record_pipeline_pair();
+    }
+
+    pub fn allocation_counters(&self) -> AllocationCounters {
+        self.allocation_counters
+    }
+}
+
+impl<'wayland> OutputRenderer<'wayland> {
+    /// Rebuild only this output's bind group after a shared scene swap.
+    pub fn refresh_scene_binding(&mut self, shared: &mut SharedRenderer) {
+        self.bind_group = create_output_bind_group(
+            &self.device,
+            &shared.scene,
+            &self.mapping_buffer,
+            &self.animation_clock_buffer,
+        );
+        shared.allocation_counters.output_bind_group_creations = shared
+            .allocation_counters
+            .output_bind_group_creations
+            .saturating_add(1);
+        self.source_extent = shared.source_extent;
+        self.time_of_day_keyframe_count = shared.scene.time_of_day_keyframe_count;
+        self.time_of_day_enabled = shared.scene.time_of_day_enabled;
+        self.queue.write_buffer(
+            &self.mapping_buffer,
+            0,
+            &mapping_bytes(self.source_extent, (self.config.width, self.config.height)),
+        );
+    }
+
+    pub fn reconfigure(&mut self, extent: (u32, u32)) -> Result<(), Box<dyn Error>> {
+        validate_extent(extent)?;
+        if self.config.width != extent.0 || self.config.height != extent.1 {
+            self.config.width = extent.0;
+            self.config.height = extent.1;
+            self.surface.configure(&self.device, &self.config);
+            self.queue.write_buffer(
+                &self.mapping_buffer,
+                0,
+                &mapping_bytes(self.source_extent, extent),
+            );
+            println!(
+                "trace gpu-output reconfigured extent={}x{} scene-upload=false",
+                extent.0, extent.1
+            );
+        }
+        Ok(())
+    }
+
+    pub fn render_at_with_civil_seconds(
+        &mut self,
+        animation_time_seconds: f32,
+        civil_seconds: u32,
+    ) -> Result<RenderOutcome, Box<dyn Error>> {
+        #[cfg(debug_assertions)]
+        if let Some(outcome) = self.test_surface_error.take() {
+            println!("trace test-output-surface-error injected={outcome:?}");
+            return Ok(outcome);
+        }
+        self.queue.write_buffer(
+            &self.animation_clock_buffer,
+            0,
+            &animation_clock_bytes(
+                animation_time_seconds,
+                civil_seconds.min(crate::scene::CIVIL_SECONDS_PER_DAY - 1),
+                self.time_of_day_keyframe_count,
+                self.time_of_day_enabled,
+            ),
+        );
+        self.animation_uniform_update_count = self.animation_uniform_update_count.saturating_add(1);
+        let acquisition = self.surface.get_current_texture();
+        let acquisition_outcome = classify_surface_texture(&acquisition);
+        let frame = match acquisition {
+            wgpu::CurrentSurfaceTexture::Success(frame)
+            | wgpu::CurrentSurfaceTexture::Suboptimal(frame) => frame,
+            _ => return Ok(acquisition_outcome),
+        };
+        let view = frame
+            .texture
+            .create_view(&wgpu::TextureViewDescriptor::default());
+        let mut encoder = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("worldwall-output-encoder"),
+            });
+        {
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("worldwall-output-pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &view,
+                    depth_slice: None,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(CLEAR_COLOR),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+            if self.diagnostic_solid_color {
+                pass.set_pipeline(&self.solid_pipeline);
+            } else {
+                pass.set_pipeline(&self.pipeline);
+                pass.set_bind_group(0, &self.bind_group, &[]);
+            }
+            pass.draw(0..3, 0..1);
+        }
+        self.queue.submit([encoder.finish()]);
+        self.queue.present(frame);
+        println!(
+            "trace gpu-output-frame presented extent={}x{} format={:?}",
+            self.config.width, self.config.height, self.format
+        );
+        println!(
+            "trace gpu-frame presented output-format={:?} extent={}x{}",
+            self.format, self.config.width, self.config.height
+        );
+        Ok(RenderOutcome::Presented)
+    }
+
+    pub fn animation_uniform_update_count(&self) -> u64 {
+        self.animation_uniform_update_count
+    }
+
+    pub fn recreate_surface(
+        &mut self,
+        connection: &'wayland Connection,
+    ) -> Result<(), Box<dyn Error>> {
+        let surface = create_wayland_surface(&self.instance, connection, self.wayland_surface)?;
+        self.surface = surface;
+        self.surface.configure(&self.device, &self.config);
+        println!("trace gpu-output-surface recreated reason=lost");
+        Ok(())
+    }
+
+    pub fn format(&self) -> wgpu::TextureFormat {
+        self.format
+    }
+}
+
+fn create_output_bind_group(
+    device: &wgpu::Device,
+    scene: &SharedScene,
+    mapping_buffer: &wgpu::Buffer,
+    animation_clock_buffer: &wgpu::Buffer,
+) -> wgpu::BindGroup {
+    let index_view = scene
+        .index_texture
+        .create_view(&wgpu::TextureViewDescriptor::default());
+    let palette_view = scene
+        .palette_texture
+        .create_view(&wgpu::TextureViewDescriptor::default());
+    let time_of_day_view = scene
+        .time_of_day_atlas
+        .create_view(&wgpu::TextureViewDescriptor::default());
+    device.create_bind_group(&wgpu::BindGroupDescriptor {
+        label: Some("worldwall-output-indexed-bind-group"),
+        layout: &scene.mapping_layout,
+        entries: &[
+            wgpu::BindGroupEntry {
+                binding: 0,
+                resource: wgpu::BindingResource::TextureView(&index_view),
+            },
+            wgpu::BindGroupEntry {
+                binding: 1,
+                resource: wgpu::BindingResource::TextureView(&palette_view),
+            },
+            wgpu::BindGroupEntry {
+                binding: 2,
+                resource: mapping_buffer.as_entire_binding(),
+            },
+            wgpu::BindGroupEntry {
+                binding: 3,
+                resource: scene.animation_metadata_buffer.as_entire_binding(),
+            },
+            wgpu::BindGroupEntry {
+                binding: 4,
+                resource: scene.cycle_indices_buffer.as_entire_binding(),
+            },
+            wgpu::BindGroupEntry {
+                binding: 5,
+                resource: animation_clock_buffer.as_entire_binding(),
+            },
+            wgpu::BindGroupEntry {
+                binding: 6,
+                resource: wgpu::BindingResource::TextureView(&time_of_day_view),
+            },
+            wgpu::BindGroupEntry {
+                binding: 7,
+                resource: scene.time_of_day_keyframes.as_entire_binding(),
+            },
+        ],
+    })
+}
+
+fn validate_output_capabilities(
+    capabilities: &wgpu::SurfaceCapabilities,
+) -> Result<(), Box<dyn Error>> {
+    if choose_format(&capabilities.formats).is_none() {
+        return Err(Box::new(RendererError(
+            "output advertises no supported sRGB render format; output is degraded without a second device"
+                .to_owned(),
+        )));
+    }
+    if !capabilities
+        .present_modes
+        .contains(&wgpu::PresentMode::Fifo)
+    {
+        return Err(Box::new(RendererError(
+            "output does not advertise required FIFO presentation; output is degraded without a second device"
+                .to_owned(),
+        )));
+    }
+    if capabilities.alpha_modes.is_empty() {
+        return Err(Box::new(RendererError(
+            "output advertises no alpha mode; output is degraded without a second device"
+                .to_owned(),
+        )));
+    }
+    Ok(())
 }
 
 fn create_pipeline(
@@ -1152,6 +1788,15 @@ mod tests {
     use super::*;
 
     #[test]
+    fn output_mapping_uniforms_are_independent_values() {
+        let first = mapping_bytes((3, 2), (1920, 1080));
+        let second = mapping_bytes((3, 2), (1280, 720));
+        assert_ne!(first, second);
+        assert_eq!(&first[..8], &second[..8]);
+        assert_ne!(&first[8..], &second[8..]);
+    }
+
+    #[test]
     fn zero_extent_is_rejected_before_surface_configuration() {
         assert!(validate_extent((0, 1080)).is_err());
         assert!(validate_extent((1920, 0)).is_err());
@@ -1192,6 +1837,60 @@ mod tests {
         );
         assert_eq!(choose_format(&[wgpu::TextureFormat::Rgba16Float]), None);
         assert_eq!(choose_format(&[]), None);
+    }
+
+    #[test]
+    fn allocation_counters_distinguish_shared_and_output_resources() {
+        let mut counters = AllocationCounters::default();
+        counters.record_scene_upload(true);
+        counters.record_pipeline_pair();
+        counters.record_output();
+        counters.output_bind_group_creations =
+            counters.output_bind_group_creations.saturating_add(1);
+        counters.record_scene_upload(false);
+
+        assert_eq!(counters.scene_texture_creations, 6);
+        assert_eq!(counters.scene_buffer_creations, 10);
+        assert_eq!(counters.scene_bind_group_layout_creations, 1);
+        assert_eq!(counters.scene_upload_bind_group_creations, 2);
+        assert_eq!(counters.pipeline_creations, 2);
+        assert_eq!(counters.output_uniform_buffer_creations, 2);
+        assert_eq!(counters.output_bind_group_creations, 2);
+        assert_eq!(counters.output_initial_surface_configurations, 1);
+    }
+
+    #[test]
+    fn incompatible_output_capabilities_are_bounded_and_actionable() {
+        let no_srgb = wgpu::SurfaceCapabilities {
+            formats: vec![wgpu::TextureFormat::Rgba16Float],
+            present_modes: vec![wgpu::PresentMode::Fifo],
+            alpha_modes: vec![wgpu::CompositeAlphaMode::Opaque],
+            ..Default::default()
+        };
+        let error = validate_output_capabilities(&no_srgb).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("no supported sRGB render format")
+        );
+
+        let no_fifo = wgpu::SurfaceCapabilities {
+            formats: vec![wgpu::TextureFormat::Rgba8UnormSrgb],
+            present_modes: Vec::new(),
+            alpha_modes: vec![wgpu::CompositeAlphaMode::Opaque],
+            ..Default::default()
+        };
+        let error = validate_output_capabilities(&no_fifo).unwrap_err();
+        assert!(error.to_string().contains("required FIFO"));
+
+        let no_alpha = wgpu::SurfaceCapabilities {
+            formats: vec![wgpu::TextureFormat::Rgba8UnormSrgb],
+            present_modes: vec![wgpu::PresentMode::Fifo],
+            alpha_modes: Vec::new(),
+            ..Default::default()
+        };
+        let error = validate_output_capabilities(&no_alpha).unwrap_err();
+        assert!(error.to_string().contains("no alpha mode"));
     }
 
     #[test]

@@ -27,7 +27,7 @@ Discovered → RoleCreated → AwaitingConfigure → Ready → Closing → Remov
 1. Create the background layer, all anchors, keyboard interactivity none, explicit empty input region, and agreed exclusive zone (`-1` as in the outline, validated on Hyprland).
 2. Commit the role's initial state with no content buffer; wait for configure. Verify whether the pinned SCTK callback already acknowledges it to avoid double-acknowledging.
 3. Resolve configure size using protocol/toolkit rules. A zero component may mean client-chosen sizing; derive it from known output state or defer. Never configure wgpu with a zero extent or busy-wait for size.
-4. Track logical extent separately from physical buffer extent, scale, and transform. S01 records integer-scale behavior; S09 closes the supported fractional-scale/transform matrix.
+4. Track logical extent separately from physical buffer extent, scale, and transform. S01 records integer-scale behavior; S09 records the supported integer-scale, assigned-host fractional-scale/viewport, and tested-transform matrix. When the protocols are unavailable, the client falls back to integer `wl_output` scaling.
 5. Create/configure the wgpu surface with capabilities-derived format/alpha mode and FIFO. The display and surface must remain valid until the dependent wgpu surface and in-flight usage are safely released.
 6. On resize, acknowledge the configure correctly, stop acquiring old-size frames, and reconfigure at a safe point. On removal, cancel callbacks/deadlines and drop dependent GPU presentation before Wayland owners. The connection outlives all surfaces.
 

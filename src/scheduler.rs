@@ -72,6 +72,7 @@ impl FrameScheduler {
         self.next_deadline_ns = None;
     }
 
+    #[allow(dead_code)]
     pub fn is_paused(&self) -> bool {
         self.paused
     }

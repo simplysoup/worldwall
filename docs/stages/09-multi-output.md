@@ -30,6 +30,8 @@ Output map with independent layer/presentation/configuration/pacing state, share
 - [ ] **S09-AC4:** Each output observes its FPS ceiling/readiness; one slow/hidden output does not busy-spin or corrupt another's state.
 - [ ] **S09-AC5:** Hotplug never advances selection generation. Incompatible outputs produce an actionable bounded degraded state while compatible outputs remain usable where possible.
 
+**Acceptance boundary:** [CR-0004](../changes/CR-0004-s09-incompatible-output-evidence-deferral.md) approves S09 acceptance using the bounded unit/source capability-failure evidence and compatible-output live evidence. A physical incompatible-capability output remains explicit future work and `not-run`; no universal hardware-compatibility claim is made.
+
 ## Failure and rollback
 
 Do not fix shared-uniform corruption by duplicating the full renderer or scene textures. Isolate per-output state and retain a one-output reproduction. Unsupported hardware is documented as unsupported, not passed; required but unavailable test hardware creates a roadblock.

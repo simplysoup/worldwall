@@ -9,5 +9,6 @@ Follow the [roadmap-change workflow](../workflows/roadmap-changes.md). Copy the 
 | [CR-0001 — S04 byte-space BlendShift](CR-0001-s04-byte-blendshift.md) | S04 / WW-04 / ADR-0004 | applied | `simplysoup` | Approved/applied 2026-09-22; [implementation evidence](../updates/2026-09-22-s04-byte-blendshift.md) |
 | [CR-0002 — S06 time-of-day palettes](CR-0002-s06-time-of-day-palettes.md) | S06 / S04 / WW-03 / WW-04 / WW-06 / WW-08 | applied | `simplysoup` | Approved/applied 2026-09-22; [implementation update](../updates/2026-09-22-cr002-time-of-day.md) |
 | [CR-0003 — complete 12-scene/variant manifest](CR-0003-effectgames-12-scene-variants.md) | S04 / S05 / S06 / WW-03 / WW-04 / WW-06 / WW-08 / WW-12 | applied | `simplysoup` | Approved/applied 2026-09-22; [CR-0003 evidence](../evidence/2026-09-22-cr003-scene-variants.md) |
+| [CR-0004 — S09 incompatible-output evidence deferral](CR-0004-s09-incompatible-output-evidence-deferral.md) | S09-AC5 / WW-09 / WW-11 | applied | `simplysoup` | Approved/applied 2026-09-22; [S09 acceptance update](../updates/2026-09-22-s09-multi-output.md) |
 
 Keep proposed changes out of normative files until approved. Applied records remain as history and link the applying revision or artifact identity.

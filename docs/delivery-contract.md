@@ -1,6 +1,6 @@
 # Worldwall delivery contract
 
-**Version:** 0.3 · **State:** approved · **Baseline date:** 2026-09-21 · **CR-0001 applied:** 2026-09-22 · **CR-0002 applied:** 2026-09-22
+**Version:** 0.4 · **State:** approved · **Baseline date:** 2026-09-21 · **CR-0001 applied:** 2026-09-22 · **CR-0002 applied:** 2026-09-22 · **CR-0004 applied:** 2026-09-22
 **Accountable maintainer / acceptance authority:** GitHub account `simplysoup`; baseline ratified in ADR-0001 on 2026-09-21.  
 **Target:** Linux desktop with Hyprland, Wayland layer-shell, and a supported Vulkan adapter. Library/compositor versions and the tested device matrix are established by evidence, not assumed here.
 
@@ -18,7 +18,7 @@ Deliver a long-running foreground wallpaper engine that renders indexed pixel ar
 | M3 — Environment-aware engine | S06–S08 | Time/astronomy, optional cached weather, suspend/resume-triggered selection |
 | M4 — Release candidate | S09–S11 | Multi-output lifecycle, secure local controls, recovery, measured resource cost, packaging/docs |
 
-No dates or percentage estimates are promised without an assigned team and measured execution data. A milestone is accepted only after all required stage gates and dependencies are accepted.
+No dates or percentage estimates are promised without an assigned team and measured execution data. A milestone is accepted only after all required stage gates and dependencies are accepted. CR-0004 records the approved S09-AC5 evidence deferral: the physical incompatible-output result is future work and remains `not-run`; this does not claim universal hardware compatibility.
 
 ## 2. Functional and safety requirements
 
