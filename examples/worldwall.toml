@@ -1,0 +1,4 @@
+# Minimal private configuration example. No scene or artwork is bundled.
+schema_version = 1
+fps = 30
+registry_dir = "none"

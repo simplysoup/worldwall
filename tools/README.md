@@ -56,6 +56,23 @@ The config may also contain a `scenes` string list to replace the registry
 matrix. Avoid putting secrets in `env`; explicit environment values are passed
 to Worldwall but only their names are recorded in `resolved-config.json`.
 
+## S11 release-candidate package
+
+`package_release.py` creates an identifiable release-candidate directory under
+`target/` containing both binaries, operator documentation, the MIT license,
+and a minimal config example. It refuses a dirty checkout by default and
+records the source revision, dirty state, per-file hashes, and a deterministic
+artifact digest in `manifest.json`. It rejects scene fixtures and artwork so
+no unlicensed assets enter the package:
+
+```sh
+python3 tools/package_release.py --output-dir target/worldwall-release
+```
+
+Use `--allow-dirty` only for a local smoke package; use `--force` only to
+replace the generated output directory. This tool does not install, publish,
+or alter the compositor/session configuration. See the [release runbook](../docs/release.md).
+
 ## S10 IPC live runner
 
 `run_s10_ipc.py` starts the debug binary on the current Wayland session with a

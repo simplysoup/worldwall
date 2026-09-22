@@ -2,7 +2,7 @@
 
 A planned GPU-accelerated, weather- and time-aware pixel-art wallpaper engine for Hyprland/Wayland.
 
-**Current state:** S00–S09 are accepted, including the S09 multi-output/hotplug milestone. CR-0004 records the physical incompatible-capability output result as explicit future work and `not-run`; no universal hardware-compatibility claim is made. Fractional-scale/viewport protocol handling and an assigned-host non-integer scale trace are implemented. Application-level allocation-event counters are instrumented; they do not measure driver allocator or VRAM statistics.
+**Current state:** S00–S10 are accepted, including the S10 IPC/config milestone; S11 release validation is in progress. CR-0004 records the physical incompatible-capability output result as explicit future work and `not-run`; no universal hardware-compatibility claim is made. Fractional-scale/viewport protocol handling and an assigned-host non-integer scale trace are implemented. Application-level allocation-event counters are instrumented; they do not measure driver allocator or VRAM statistics.
 
 ## Start here
 
@@ -14,7 +14,7 @@ A planned GPU-accelerated, weather- and time-aware pixel-art wallpaper engine fo
 6. [S03 evidence](docs/evidence/2026-09-21-s03-indexed-scene.md) — accepted M1 decoder/resource/live evidence.
 7. [Contributor instructions](AGENTS.md) — how to work safely and leave a useful handoff.
 
-**Current action:** Proceed to the planned S10 IPC/config stage while retaining S09's renderer and pacing boundaries. S09's assigned-host integer/fractional scale, mixed-output, resize, hotplug, zero-output/reconnect, topology-during-sleep, and bounded pacing evidence is recorded as accepted by `simplysoup` on 2026-09-22. Physical incompatible-capability output evidence is explicitly future work and `not-run` under CR-0004; no universal hardware-compatibility claim is made. See the [S09 implementation and acceptance update](docs/updates/2026-09-22-s09-multi-output.md) and [current status](docs/status.md). Open-Meteo remains disabled unless explicitly configured with a provider name and latitude/longitude; weather completions never reselect a scene.
+**Current action:** Execute S11 release-validation work while retaining S09's renderer and pacing boundaries. S09's assigned-host integer/fractional scale, mixed-output, resize, hotplug, zero-output/reconnect, topology-during-sleep, and bounded pacing evidence is recorded as accepted by `simplysoup` on 2026-09-22. Physical incompatible-capability output evidence is explicitly future work and `not-run` under CR-0004; no universal hardware-compatibility claim is made. See the [S09 implementation and acceptance update](docs/updates/2026-09-22-s09-multi-output.md), [S10 implementation and acceptance update](docs/updates/2026-09-22-s10-ipc-config.md), and [current status](docs/status.md). Open-Meteo remains disabled unless explicitly configured with a provider name and latitude/longitude; weather completions never reselect a scene.
 
 ## Build and run the S03 indexed-scene path
 

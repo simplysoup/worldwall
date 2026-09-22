@@ -17,7 +17,7 @@
 | [S08](stages/08-suspend-resume.md) | Suspend/resume / M3 | S07 | accepted | Pi coding agent | [S08 implementation and acceptance](updates/2026-09-22-s08-suspend-resume.md) |
 | [S09](stages/09-multi-output.md) | Multi-output and hotplug | S08 | accepted | Pi coding agent | [S09 implementation and acceptance](updates/2026-09-22-s09-multi-output.md) |
 | [S10](stages/10-ipc-config.md) | Local IPC and config transactions | S09 | accepted | Pi coding agent | [S10 IPC/config implementation and acceptance](updates/2026-09-22-s10-ipc-config.md) |
-| [S11](stages/11-release-validation.md) | Recovery, performance, release / M4 | S10 | planned | unassigned | None |
+| [S11](stages/11-release-validation.md) | Recovery, performance, release / M4 | S10 | in-progress | Pi coding agent | [S11 release-package update](updates/2026-09-22-s11-release-packaging.md), [S11 pmon-backed benchmark update](updates/2026-09-22-s11-benchmark-pmon-reruns.md), [S11 result-review disposition](updates/2026-09-22-s11-result-review-disposition.md) |
 
 `ready` means dependencies/inputs permit starting work, **not** that approval or delivery is complete. S03 is accepted with ADR-0003 and recorded pure/GPU/live evidence; S04 is accepted with ADR-0004 and the recorded implementation evidence, with the additive CR-0001 byte-space BlendShift amendment applied and evidenced.
 
