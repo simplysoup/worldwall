@@ -202,9 +202,28 @@ runtime filter is not implemented yet.
 
 ## Limitations and non-goals
 
-The runtime does not read these files yet; `worldwallctl curator`, schema-v5
-config wiring, and the shared selector filter are later S12 gates. XDG default
-locations for the library and sidecar are an S12-AC3 decision; the validator
-takes explicit paths only. Imported CanvasCycle cycle rate/direction semantics
-remain unmapped, and no capture carries a reviewed license. Registry-sourced
-pool membership is resolved by the runtime, not by the offline validator.
+The runtime does not read these files yet; schema-v5 config wiring and the
+shared selector filter remain later S12 gates. The S12-AC3 curator defaults are
+`$XDG_DATA_HOME/worldwall/scene-library` (fallback
+`$HOME/.local/share/worldwall/scene-library`) and
+`$XDG_CONFIG_HOME/worldwall/scene-pools.toml` (fallback
+`$HOME/.config/worldwall/scene-pools.toml`). Relative XDG base values are
+ignored in favor of the fallback, consistent with the XDG specification;
+`--library DIR` and `--rules FILE` override the respective paths. A missing
+default rules file means no sidecar is present, but an explicitly requested
+missing rules file is an error.
+
+The initial `worldwallctl curator` implementation is a read-only Firefox
+catalog/preview slice: it displays actual catalog metadata, provides
+searchable/scrollable scene selection, decodes the selected indexed image and
+palette for a WebGL2 static preview, and summarizes an existing sidecar without
+evaluating it. It serves only token-scoped data on an ephemeral loopback port
+and uses a temporary isolated Firefox profile; it does not use Worldwall IPC.
+Pool/scene controls, rule editing, eligibility explanations, authored
+animation, and ToD preview remain unimplemented. The curator checks catalog
+structure, contained non-symlink package/asset paths, and selected PNG data,
+but it does not replace the full offline validator's digest/provenance/rule
+validation (`tools/scene_pool_library.py`). Imported CanvasCycle cycle
+rate/direction semantics remain unmapped, and no capture carries a reviewed
+license. Registry-sourced pool membership is resolved by the runtime, not by
+the offline validator.

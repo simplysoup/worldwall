@@ -75,6 +75,6 @@ Other additions remain non-goals and require an approved roadmap change; CR-0008
 
 ## 6. Change and record policy
 
-Use [development updates](workflows/development.md) for progress, [roadblocks](workflows/roadblocks.md) for inability to proceed, and [change proposals](workflows/roadmap-changes.md) for a changed plan. [CR-0008](changes/CR-0008-worldwallctl-scene-curator.md) is applied to this v0.8 baseline; its S12 implementation remains unstarted. An ADR explains an architectural choice; it does not independently authorize changing scope. Approval identity/date and the affected files must be recorded, never inferred from silence.
+Use [development updates](workflows/development.md) for progress, [roadblocks](workflows/roadblocks.md) for inability to proceed, and [change proposals](workflows/roadmap-changes.md) for a changed plan. [CR-0008](changes/CR-0008-worldwallctl-scene-curator.md) is applied to this v0.8 baseline; S12 remains in progress, with AC1/AC2 accepted and the first partial AC3 curator slice implemented. An ADR explains an architectural choice; it does not independently authorize changing scope. Approval identity/date and the affected files must be recorded, never inferred from silence.
 
 Until S00 approval, explicitly mark proposals rather than presenting new decisions as implemented facts. [ADR-0001](decisions/ADR-0001-delivery-baseline.md) identifies the proposed differences from the original outline.

@@ -88,6 +88,22 @@ worldwallctl next
 worldwallctl weather
 ```
 
+The post-M4 curator is under development. Its current read-only slice can be
+opened independently of Worldwall with an explicit local library, for example:
+
+```sh
+worldwallctl curator --library /path/to/scene-library
+```
+
+It uses `$XDG_DATA_HOME/worldwall/scene-library` (fallback
+`$HOME/.local/share/worldwall/scene-library`) and
+`$XDG_CONFIG_HOME/worldwall/scene-pools.toml` (fallback
+`$HOME/.config/worldwall/scene-pools.toml`) by default. `--rules FILE` overrides
+the sidecar path. The current Firefox UI supports search, scene browsing, a
+static indexed-image/palette GPU preview, and a read-only sidecar summary; it
+does not edit rules, evaluate eligibility, preview animation, or control a
+running Worldwall process. See [scene-pool formats and current limits](docs/scene-pools.md).
+
 Set `WORLDWALL_CONFIG` to a versioned config file when startup/config
 transactions should control `fps`, `registry_dir`, explicit location/timezone,
 and optional weather/adaptive selection. `reload-config` validates and applies

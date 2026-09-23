@@ -1,7 +1,17 @@
 //! Command-line client for Worldwall's bounded local control socket.
 
+#[allow(dead_code)]
+#[path = "../animation.rs"]
+mod animation;
+#[path = "../curator.rs"]
+mod curator;
+#[path = "../environment.rs"]
+mod environment;
 #[path = "../ipc.rs"]
 mod ipc;
+#[allow(dead_code)]
+#[path = "../scene.rs"]
+mod scene;
 
 use std::{
     collections::HashSet,
@@ -31,6 +41,15 @@ fn run() -> Result<(), Box<dyn Error>> {
         } else {
             command_args.push(arg);
         }
+    }
+    if command_args
+        .first()
+        .is_some_and(|command| command == "curator")
+    {
+        if socket.is_some() {
+            return Err("--socket cannot be used with curator".into());
+        }
+        return curator::run(&command_args[1..]);
     }
     if matches!(command_args.as_slice(), [command] if command == "scenes" || command == "list") {
         return list_scenes(socket.as_deref());
@@ -167,7 +186,7 @@ fn parse_command(args: &[String]) -> Result<ipc::Command, Box<dyn Error>> {
         [command] if command == "weather" => Ok(ipc::Command::Weather),
         [command, id] if command == "scene" => Ok(ipc::Command::Scene(id.clone())),
         _ => Err(
-            "usage: worldwallctl [--socket PATH] status|scenes|reload|reload-config|scene ID|next|weather"
+            "usage: worldwallctl [--socket PATH] status|scenes|reload|reload-config|scene ID|next|weather; worldwallctl curator [--library DIR] [--rules FILE]"
                 .into(),
         ),
     }

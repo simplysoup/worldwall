@@ -157,10 +157,9 @@ one current snapshot; a constrained unknown input is not a match. Manual
 known scene. Applying/reloading this configuration never selects by itself,
 and it adds no clock/weather triggers. If no scene is eligible, startup reports
 selection unavailable; later selection attempts keep the resident scene or
-return a no-op reason instead of using a disallowed fallback. The planned `worldwallctl curator` command is a local GUI and does not add an IPC command. The sidecar's
-final schema and adaptive-family composition are acceptance gates in
-[S12](stages/12-scene-pool-curator.md); do not write schema-v5 config until the
-runtime implementation is available.
+return a no-op reason instead of using a disallowed fallback. The `worldwallctl curator` command is a local GUI and does not add an IPC command. Its current partial S12-AC3 implementation is read-only; see [scene-pool formats and curator limits](scene-pools.md). The AC2 sidecar schema is defined and accepted; schema-v5 config consumption,
+transaction behavior, and adaptive-family filtering remain S12 gates. Do not
+write schema-v5 config until the runtime implementation is available.
 
 ## CLI
 
@@ -183,5 +182,8 @@ For `scenes`, this socket is used only to query the active-scene marker; the
 scene IDs are read from the configured registry. Control commands return a
 nonzero exit status when the service returns an error.
 
-S12 plans a separate `worldwallctl curator` GUI command for editing the pool
-sidecar. It is not implemented yet and is not a socket/IPC command.
+S12 adds a separate `worldwallctl curator` GUI command for editing the pool
+sidecar. The current partial implementation browses/searches the local catalog,
+previews indexed pixels and palette through a static WebGL2 shader, and
+summarizes rules read-only. It does not edit the sidecar, evaluate eligibility,
+or use the control socket. The curator is not a socket/IPC command.
