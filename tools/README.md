@@ -11,6 +11,34 @@ The checker exits `0` on success and `1` on findings. `--root PATH` checks a dif
 
 The S02 nested lifecycle harness is `run_nested_s01.sh`. On a Wayland host with Hyprland, it compiles the test-only `nested_wayland_connect.c` bridge with the available C compiler so the child compositor can publish a distinct socket while using the outer compositor as its backend. The harness rejects outer-socket reuse and waits for a GPU presentation before output-removal or disconnect teardown.
 
+## CanvasCycle local capture importer
+
+`import_canvascycle_capture.py` accepts only an explicitly supplied local legacy
+LBM object-literal capture. It parses a bounded data-only grammar; it never
+executes JavaScript or fetches a source URL. `--check-only` reports the source
+hash and structural counts without writing files. Materialization requires an
+explicit new output path, stable ID, and provenance URLs/title. Output
+`scene.png`/`palette.png` assets and `scene.toml` are placed in a mode-0700
+package with mode-0600 files; existing output is never overwritten. Provenance
+records `license_state = "unreviewed"`. Raw source cycle values are preserved
+in `source-cycles.toml` with rate/direction semantics marked `unknown`; no
+`animation.toml`, time/weather rules, or source-title-derived eligibility is
+created until the semantics and rules are independently established.
+
+Example local-only validation:
+
+```sh
+python3 tools/import_canvascycle_capture.py \
+  --input fixtures/untracked/effectgames/canvascycle-v25heat/V25HEAT.LBM.json \
+  --check-only
+```
+
+The private capture under `fixtures/untracked/` is ignored and is not part of a
+clean checkout. Other CanvasCycle entries must not be synthesized or fetched;
+import only entries for which an operator explicitly supplies a local capture.
+The generated art is private inspection material and must not be committed,
+published, or redistributed without a separate license review.
+
 ## Effect Games matrix runner
 
 `run_effectgames_matrix.py` runs the local, untracked Effect Games registry

@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>WW S12 Firefox Spike — READY</title>
+  <style>
+    body { font: 16px sans-serif; margin: 24px; }
+    input, button { font: inherit; padding: 8px; }
+    #list { height: 240px; width: 360px; overflow-y: auto; border: 1px solid #555; margin: 16px 0; }
+    .item { height: 72px; padding: 8px; border-bottom: 1px solid #aaa; }
+  </style>
+</head>
+<body>
+  <h1>Worldwall S12 Firefox host spike</h1>
+  <p>This temporary local page checks focus, keyboard input, scroll, and close/reopen. It contains no project artwork or network requests.</p>
+  <label for="search">Search test</label>
+  <input id="search" type="search" autocomplete="off" autofocus aria-label="Search test">
+  <button id="action" type="button">Test button</button>
+  <div id="list" role="listbox" tabindex="0" aria-label="Scrollable scene list">
+    <div class="item" role="option">Scene test 1</div>
+    <div class="item" role="option">Scene test 2</div>
+    <div class="item" role="option">Scene test 3</div>
+    <div class="item" role="option">Scene test 4</div>
+    <div class="item" role="option">Scene test 5</div>
+    <div class="item" role="option">Scene test 6</div>
+    <div class="item" role="option">Scene test 7</div>
+    <div class="item" role="option">Scene test 8</div>
+    <div class="item" role="option">Scene test 9</div>
+    <div class="item" role="option">Scene test 10</div>
+  </div>
+  <output id="status">Ready</output>
+  <script>
+    const search = document.querySelector('#search');
+    const list = document.querySelector('#list');
+    const status = document.querySelector('#status');
+    search.addEventListener('focus', () => { status.textContent = 'Focused'; document.title = 'WW S12 Firefox Spike — FOCUSED'; });
+    search.addEventListener('input', () => { status.textContent = `Input: ${search.value}`; document.title = `WW S12 Firefox Spike — INPUT ${search.value}`; });
+    list.addEventListener('scroll', () => { status.textContent = `Scrolled: ${list.scrollTop}`; document.title = `WW S12 Firefox Spike — SCROLL ${list.scrollTop}`; });
+    document.querySelector('#action').addEventListener('click', () => { status.textContent = 'Button clicked'; document.title = 'WW S12 Firefox Spike — CLICKED'; });
+  </script>
+</body>
+</html>
