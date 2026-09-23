@@ -1,6 +1,8 @@
 # Documentation checks
 
-These are developer tools, not the Worldwall application. They require Python 3.10+ and only the standard library. Run from the project root:
+These are developer tools, not the Worldwall application. They require Python
+3.10+ (3.11+ for `scene_pool_library.py`, which uses the standard-library
+`tomllib` parser) and only the standard library. Run from the project root:
 
 ```sh
 python3 tools/check_docs.py
@@ -38,6 +40,38 @@ clean checkout. Other CanvasCycle entries must not be synthesized or fetched;
 import only entries for which an operator explicitly supplies a local capture.
 The generated art is private inspection material and must not be committed,
 published, or redistributed without a separate license review.
+
+## Scene-pool library catalog and sidecar validator
+
+`scene_pool_library.py` validates the S12 library catalog (`library.toml`) and
+pool/scene-rules sidecar (`scene-pools.toml`) defined in
+[docs/scene-pools.md](../docs/scene-pools.md). It needs Python 3.11+ for the
+standard-library `tomllib` parser. It reads only explicitly supplied local
+files and writes nothing except an atomic `--write-catalog` replacement of
+`<library>/library.toml`; a validation failure preserves any previous catalog.
+Paths, file counts, file sizes, image dimensions, palettes, and source-cycle
+collections are bounded, and duplicate IDs, unsafe paths, symlinks, malformed
+rules, and invalid animation/cycle data are rejected before any write.
+
+```sh
+# Validate an existing catalog (and optionally a sidecar); writes nothing.
+python3 tools/scene_pool_library.py \
+  --library fixtures/untracked/effectgames/canvascycle-v25heat \
+  --sidecar /path/to/scene-pools.toml \
+  --check-only
+
+# Rebuild library.toml from the complete packages in the library root.
+python3 tools/scene_pool_library.py \
+  --library fixtures/untracked/effectgames/canvascycle-v25heat \
+  --write-catalog
+```
+
+Every non-hidden subdirectory of the library root must be a complete package
+(`scene.toml`, `provenance.toml`, and exactly the declared assets); unrelated
+regular files are ignored. Curated `world`/`appearance` relationships survive
+regeneration and are never inferred from source titles. License states and
+unmapped source-cycle semantics are recorded as declared and never upgraded.
+The runtime does not read these files yet (S12-AC4/AC5).
 
 ## Effect Games matrix runner
 
