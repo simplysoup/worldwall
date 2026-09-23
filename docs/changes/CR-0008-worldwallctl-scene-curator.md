@@ -79,7 +79,7 @@ Rollback disables/removes the optional pool-file reference and curator command; 
 
 ## Application
 
-- Applying revision / evidence: [CR-0008 baseline application record](../updates/2026-09-23-cr0008-baseline-application.md); commit identity will be recorded after the baseline application commit.
+- Applying revision / evidence: applied in commit `9892043340f8e67212bac051bdf7888bda5b7fe5`; see the [CR-0008 baseline application record](../updates/2026-09-23-cr0008-baseline-application.md).
 - Updated contract version / files: v0.8; delivery contract, S12 stage, roadmap, status, architecture, IPC/config reference, scene-format reference, change register, curator mockup, and application record.
 - Accepted evidence made stale: none. No runtime/software stage was implemented or accepted; S00–S11 records remain historical.
 - Linked roadblock disposition: none.

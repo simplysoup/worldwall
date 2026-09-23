@@ -31,4 +31,4 @@
 
 ## Revision
 
-- Baseline application commit: to be recorded after commit creation.
+- Baseline application commit: `9892043340f8e67212bac051bdf7888bda5b7fe5` (`docs: apply approved CR-0008 curator baseline`).
