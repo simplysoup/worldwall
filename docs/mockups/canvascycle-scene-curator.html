@@ -1,0 +1,574 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Worldwall Scene Curator — Concept Mockup</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #11151b;
+      --panel: #1a2029;
+      --panel-2: #202833;
+      --line: #303a47;
+      --muted: #99a6b6;
+      --text: #edf2f7;
+      --accent: #88d1c1;
+      --accent-2: #efc078;
+      --warn: #f3be70;
+      --danger: #ff9b89;
+      --shadow: 0 18px 48px #0005;
+      font: 14px/1.45 ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; min-width: 320px; background: radial-gradient(1000px 500px at 50% -160px, #2a3941 0, transparent 70%), var(--bg); color: var(--text); }
+    button, input { font: inherit; }
+    button { color: inherit; }
+    .shell { max-width: 1660px; margin: 0 auto; padding: 22px 24px 30px; }
+    .topbar { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 18px; }
+    .brand { display: flex; align-items: center; gap: 13px; }
+    .brand-mark { width: 38px; height: 38px; display: grid; place-items: center; border-radius: 12px; color: #10201e; background: linear-gradient(145deg, #9be1d1, #4f9c96); font-weight: 900; font-size: 18px; box-shadow: 0 5px 20px #68cbb244; }
+    .brand h1 { font-size: 17px; letter-spacing: .015em; margin: 0; }
+    .brand p { margin: 2px 0 0; color: var(--muted); font-size: 12px; }
+    .top-actions { display: flex; align-items: center; gap: 10px; }
+    .pill, .button { border: 1px solid var(--line); border-radius: 999px; padding: 8px 12px; background: #ffffff06; color: #d7e0e9; font-size: 12px; }
+    .pill { color: var(--warn); border-color: #725a39; background: #7b54231c; }
+    .button { cursor: pointer; transition: background .15s, border-color .15s; }
+    .button:hover { background: #ffffff12; border-color: #566475; }
+    .button.primary { color: #10201e; background: var(--accent); border-color: var(--accent); font-weight: 750; }
+    .button.primary:hover { background: #a6ecde; }
+    .notice { display: flex; align-items: flex-start; gap: 10px; padding: 11px 14px; margin-bottom: 16px; color: #e9d9b8; border: 1px solid #665338; border-radius: 12px; background: #6b4c241e; font-size: 12px; }
+    .notice strong { color: #ffda99; }
+    .notice .icon { flex: none; color: var(--warn); font-size: 16px; }
+    .workspace { display: grid; grid-template-columns: 306px minmax(390px, 1fr) 326px; gap: 15px; align-items: stretch; min-height: 720px; }
+    .panel { min-width: 0; background: linear-gradient(180deg, #202731, #191f27); border: 1px solid var(--line); border-radius: 16px; box-shadow: var(--shadow); overflow: hidden; }
+    .panel-head { padding: 16px 16px 13px; border-bottom: 1px solid #ffffff0d; }
+    .panel-head-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+    .panel-head h2 { margin: 0; font-size: 14px; letter-spacing: .02em; }
+    .panel-head p { margin: 5px 0 0; color: var(--muted); font-size: 11px; }
+    .count { color: #bfd3d0; background: #5c9b901e; border: 1px solid #4d80761a; border-radius: 999px; padding: 3px 8px; font-size: 11px; white-space: nowrap; }
+    .library-tools { padding: 12px 13px 9px; }
+    .pool-controls { margin: 0 11px 8px; padding: 10px; border: 1px solid #37434f; border-radius: 10px; background: #151b22; }
+    .pool-controls h3 { margin: 0 0 6px; color: #dce6ed; font-size: 10px; }
+    .pool-toggle { display: flex; align-items: center; gap: 7px; padding: 4px 0; color: #bbc7d1; font-size: 10px; cursor: pointer; }
+    .pool-toggle input { accent-color: #81cab9; }
+    .pool-help { margin: 4px 0 0; color: #8997a6; font-size: 9px; }
+    .search { width: 100%; padding: 9px 11px; border: 1px solid var(--line); border-radius: 9px; outline: none; color: var(--text); background: #11171e; }
+    .search:focus, input[type="number"]:focus { border-color: #6ab6a9; box-shadow: 0 0 0 3px #62c3ae1c; }
+    .filters { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 9px; }
+    .filter { border: 1px solid #394450; border-radius: 999px; background: transparent; color: #aebac7; padding: 4px 8px; font-size: 10px; cursor: pointer; }
+    .filter[aria-pressed="true"] { color: #c7f1e8; border-color: #4c8e84; background: #4c8e8427; }
+    .scene-list { height: 570px; overflow-y: auto; overscroll-behavior: contain; padding: 3px 9px 11px; scrollbar-color: #4b5867 #171d25; scrollbar-width: thin; }
+    .scene-card { display: grid; grid-template-columns: 72px minmax(0, 1fr); gap: 10px; width: 100%; margin: 0 0 7px; padding: 7px; text-align: left; border: 1px solid transparent; border-radius: 11px; background: transparent; cursor: pointer; }
+    .scene-card:hover { background: #ffffff07; }
+    .scene-card[aria-selected="true"] { border-color: #67a89c; background: #5ba39517; box-shadow: inset 0 0 0 1px #67a89c22; }
+    .thumb { position: relative; display: block; width: 72px; height: 48px; overflow: hidden; border-radius: 7px; border: 1px solid #ffffff20; background: linear-gradient(180deg, #a5c7d0 0 54%, #638578 55% 100%); }
+    .thumb::before { content: ""; position: absolute; left: -8%; right: -8%; bottom: -16px; height: 36px; border-radius: 50% 50% 0 0; background: var(--thumb-land, #648a68); transform: rotate(-5deg); }
+    .thumb::after { content: ""; position: absolute; top: 7px; right: 9px; width: 10px; height: 10px; border-radius: 50%; background: #ffe3a5; box-shadow: 0 0 10px #ffe3a588; }
+    .thumb.water { background: linear-gradient(180deg,#a4d0d9 0 48%,#4b8b9c 49% 100%); --thumb-land:#327582; }
+    .thumb.forest { background: linear-gradient(180deg,#91b4a4 0 47%,#244b43 48% 100%); --thumb-land:#183d38; }
+    .thumb.cave { background: linear-gradient(180deg,#8fa0ad 0 50%,#4a596d 51% 100%); --thumb-land:#414c60; }
+    .thumb.ruins { background: linear-gradient(180deg,#bd9a83 0 50%,#765c55 51% 100%); --thumb-land:#664b48; }
+    .thumb.city { background: linear-gradient(180deg,#9aa7ba 0 54%,#4d5871 55% 100%); --thumb-land:#48536b; }
+    .thumb.desert { background: linear-gradient(180deg,#a9c9d8 0 44%,#f5c57d 45% 100%); --thumb-land:#cf805a; }
+    .thumb.coral { background: linear-gradient(180deg,#96cad0 0 47%,#4b9c91 48% 100%); --thumb-land:#28716d; }
+    .thumb.swamp { background: linear-gradient(180deg,#718d84 0 48%,#455e53 49% 100%); --thumb-land:#384b42; }
+    .thumb.ice { background: linear-gradient(180deg,#c7dce3 0 48%,#88aeb9 49% 100%); --thumb-land:#739aa9; }
+    .thumb .mini-label { position: absolute; left: 4px; bottom: 3px; z-index: 1; color: #fff; text-shadow: 0 1px 3px #000; font-size: 9px; font-weight: 800; }
+    .scene-meta { min-width: 0; align-self: center; }
+    .scene-title { display: block; overflow: hidden; color: #e4ebf1; font-size: 11px; font-weight: 680; text-overflow: ellipsis; white-space: nowrap; }
+    .scene-id { display: block; margin-top: 2px; color: #8997a7; font-size: 10px; }
+    .tag-row { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 5px; }
+    .tag { padding: 2px 5px; border-radius: 4px; color: #b6c3d0; background: #ffffff0a; font-size: 9px; line-height: 1.3; }
+    .tag.time { color: #f0d4a0; background: #be85311a; }
+    .tag.weather { color: #a8d8ed; background: #4b99b71d; }
+    .tag.temp { color: #f0a891; background: #bc60311c; }
+    .tag.cycles { color: #9fddc9; background: #4b9d801c; }
+    .empty { display: none; padding: 18px; color: var(--muted); text-align: center; font-size: 12px; }
+    .center { padding: 17px; display: flex; flex-direction: column; gap: 13px; }
+    .preview-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+    .preview-title { margin: 0; font-size: 18px; letter-spacing: -.02em; }
+    .preview-subtitle { margin: 4px 0 0; color: var(--muted); font-size: 11px; }
+    .live-chip { display: inline-flex; align-items: center; gap: 6px; flex: none; border: 1px solid #40766e; border-radius: 999px; color: #a8dfd0; background: #3c8d7920; padding: 5px 9px; font-size: 10px; }
+    .live-dot { width: 6px; height: 6px; border-radius: 50%; background: #6ed8b5; box-shadow: 0 0 9px #6ed8b5; animation: pulse 1.7s infinite; }
+    @keyframes pulse { 50% { opacity: .4; transform: scale(.8); } }
+    .preview-art { position: relative; width: 100%; aspect-ratio: 4 / 3; overflow: hidden; border: 1px solid #ffffff26; border-radius: 12px; background: #6e91a0; isolation: isolate; }
+    .preview-art svg { display: block; width: 100%; height: 100%; }
+    .preview-art .heatwave { animation: shimmer 3.2s ease-in-out infinite alternate; transform-origin: center; }
+    .preview-art .heatwave:nth-of-type(2) { animation-delay: -1.2s; }
+    .preview-art .heatwave:nth-of-type(3) { animation-delay: -2.1s; }
+    @keyframes shimmer { from { opacity: .1; transform: translateX(-4px) scaleY(.97); } to { opacity: .46; transform: translateX(7px) scaleY(1.03); } }
+    .preview-art { --hill: #9a8a83; --mid: #d58961; --front: #e7ae70; --deep: #b85f49; }
+    .preview-art[data-theme="water"] { --hill: #668c8d; --mid: #4b8581; --front: #4c9d9c; --deep: #276d78; }
+    .preview-art[data-theme="forest"] { --hill: #607b60; --mid: #376347; --front: #2a5941; --deep: #173d34; }
+    .preview-art[data-theme="ice"] { --hill: #a6c2c8; --mid: #86b5bf; --front: #c8dce1; --deep: #658fa0; }
+    .preview-art[data-theme="city"] { --hill: #777e91; --mid: #6d7086; --front: #77778b; --deep: #474d65; }
+    .preview-art[data-theme="ruins"] { --hill: #918174; --mid: #96745e; --front: #b18a66; --deep: #624f4d; }
+    .preview-art[data-theme="swamp"] { --hill: #718277; --mid: #526d5c; --front: #65775c; --deep: #344c42; }
+    .preview-art[data-theme="coral"] { --hill: #7d9a8e; --mid: #4b8d83; --front: #55a69a; --deep: #28716d; }
+    .preview-art #backgroundHills { fill: var(--hill); }
+    .preview-art #middleLand { fill: var(--mid); }
+    .preview-art #frontLand { fill: var(--front); }
+    .preview-art #deepLand { fill: var(--deep); }
+    .preview-art g.scene-detail { display: none; }
+    .preview-art[data-theme="desert"] #detail-desert,
+    .preview-art[data-theme="water"] #detail-water,
+    .preview-art[data-theme="forest"] #detail-forest,
+    .preview-art[data-theme="ice"] #detail-ice,
+    .preview-art[data-theme="city"] #detail-city,
+    .preview-art[data-theme="ruins"] #detail-ruins,
+    .preview-art[data-theme="swamp"] #detail-swamp,
+    .preview-art[data-theme="coral"] #detail-water { display: block; }
+    .art-caption { position: absolute; left: 11px; bottom: 10px; padding: 5px 8px; color: #fff; border: 1px solid #ffffff32; border-radius: 7px; background: #11151bb8; backdrop-filter: blur(5px); font-size: 10px; }
+    .preview-stats { display: flex; flex-wrap: wrap; gap: 7px; }
+    .stat { padding: 5px 8px; border: 1px solid #394450; border-radius: 7px; color: #bac6d2; background: #ffffff05; font-size: 10px; }
+    .clock-box { padding: 12px 13px; border: 1px solid #36414d; border-radius: 11px; background: #151b22; }
+    .clock-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 6px; }
+    .clock-head label { color: #dce5ed; font-weight: 700; font-size: 11px; }
+    .time-value { color: #aadacc; font-variant-numeric: tabular-nums; font-weight: 750; }
+    input[type="range"] { width: 100%; accent-color: #7fc9b8; cursor: pointer; }
+    .clock-labels { display: flex; justify-content: space-between; color: #8997a6; font-size: 9px; }
+    .clock-message { min-height: 30px; margin: 8px 0 0; color: #adb9c5; font-size: 10px; }
+    .eligibility { display: inline-flex; align-items: center; gap: 6px; margin-top: 2px; padding: 4px 8px; border-radius: 6px; background: #3b96701b; color: #abdfc9; font-size: 10px; }
+    .eligibility.no { background: #ae63301b; color: #f2bc8a; }
+    .bottom-row { display: grid; grid-template-columns: minmax(0, .88fr) minmax(0, 1.12fr); gap: 12px; }
+    .subpanel { min-width: 0; padding: 12px; border: 1px solid #35404c; border-radius: 11px; background: #171d25; }
+    .subpanel h3 { margin: 0 0 9px; font-size: 11px; }
+    .source-note { color: #9eacba; font-size: 10px; }
+    .source-note strong { color: #dce6ed; }
+    .config-preview { margin: 0; padding: 10px; max-height: 116px; overflow: auto; border-radius: 8px; color: #bfe3d6; background: #10161b; font: 10px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; white-space: pre-wrap; }
+    .config-label { margin-top: 9px; color: var(--warn); font-size: 9px; }
+    .right { padding-bottom: 13px; }
+    .form-section { padding: 13px 15px; border-bottom: 1px solid #ffffff0c; }
+    .form-section h3 { margin: 0 0 9px; color: #e1e8ef; font-size: 11px; }
+    .form-section .help { margin: -4px 0 9px; color: #8e9baa; font-size: 10px; }
+    .rule-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: 8px 0; color: #bcc7d1; font-size: 11px; }
+    .number-pair { display: grid; grid-template-columns: 1fr auto 1fr; gap: 7px; align-items: center; }
+    .number-wrap { position: relative; }
+    .number-wrap input { width: 100%; padding: 8px 30px 8px 9px; border: 1px solid #3b4652; border-radius: 8px; outline: none; color: var(--text); background: #11171e; font-variant-numeric: tabular-nums; }
+    .unit { position: absolute; top: 8px; right: 9px; color: #8693a1; font-size: 10px; }
+    .check-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 7px 5px; }
+    .check { display: flex; align-items: center; gap: 7px; min-height: 24px; color: #bdc8d2; font-size: 10px; cursor: pointer; }
+    .check input { width: 13px; height: 13px; margin: 0; accent-color: #81cab9; }
+    .period-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+    .period { display: flex; align-items: center; gap: 7px; padding: 7px; border: 1px solid #394450; border-radius: 7px; color: #aebac5; font-size: 10px; cursor: pointer; }
+    .period:has(input:checked) { border-color: #568e82; color: #c8ede4; background: #4b95851a; }
+    .period input { accent-color: #81cab9; }
+    .rule-summary { padding: 11px 14px; color: #aebac6; font-size: 10px; }
+    .rule-summary strong { color: #e5eef4; }
+    .rule-summary .and { color: var(--accent-2); font-weight: 800; }
+    .rule-actions { display: flex; gap: 8px; padding: 0 14px 12px; }
+    .rule-actions .button { flex: 1; text-align: center; }
+    .rule-actions .button.primary { color: #10201e; }
+    .wire-card { margin: 0 13px 12px; padding: 12px; border: 1px solid #405047; border-radius: 10px; background: linear-gradient(145deg, #1a2927, #171e25); }
+    .wire-card h3 { margin: 0 0 4px; color: #bce8dc; font-size: 11px; }
+    .wire-card p { margin: 0 0 9px; color: #99aaa9; font-size: 10px; }
+    .wire-code { overflow: auto; max-height: 176px; padding: 9px; border-radius: 7px; background: #101519; color: #c7e5d7; font: 9px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; white-space: pre; }
+    .wire-foot { margin-top: 8px; color: #e4c999; font-size: 9px; }
+    .footer-note { display: flex; justify-content: space-between; gap: 16px; margin-top: 13px; padding: 0 4px; color: #778493; font-size: 10px; }
+    .footer-note a { color: #9ecfc2; text-decoration: none; }
+    .footer-note a:hover { text-decoration: underline; }
+    @media (max-width: 1180px) { .workspace { grid-template-columns: 270px minmax(350px, 1fr); } .right { grid-column: 1 / -1; display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); align-items: start; } .right .panel-head, .right .rule-summary, .right .rule-actions { grid-column: 1 / -1; } .right .wire-card { grid-column: 1 / -1; } }
+    @media (max-width: 760px) { .shell { padding: 13px; } .topbar { align-items: flex-start; } .top-actions .pill { display: none; } .workspace { grid-template-columns: 1fr; } .library-panel { order: 2; } .center { order: 1; } .right { order: 3; display: block; grid-column: auto; } .scene-list { height: 310px; } .bottom-row { grid-template-columns: 1fr; } .preview-title { font-size: 15px; } .brand p { max-width: 210px; } }
+  </style>
+</head>
+<body>
+  <div class="shell">
+    <header class="topbar">
+      <div class="brand">
+        <div class="brand-mark" aria-hidden="true">W</div>
+        <div><h1>Worldwall <span style="color:#8bd2c2">Scene Curator</span></h1><p>Import, preview, and describe CanvasCycle appearances</p></div>
+      </div>
+      <div class="top-actions">
+        <span class="pill">Concept only · not runtime UI</span>
+        <button class="button" type="button" onclick="document.getElementById('wiring').scrollIntoView({behavior:'smooth'})">Config wiring</button>
+        <button class="button primary" type="button" id="importBtn">Import all 35</button>
+      </div>
+    </header>
+
+    <div class="notice" role="note">
+      <span class="icon" aria-hidden="true">◆</span>
+      <div><strong>Prototype only.</strong> This mockup uses synthetic thumbnails/preview art and simulated pool/rule controls. The proposed runtime would read an opt-in pool sidecar; nothing here changes the current config, registry, or running session. CanvasCycle artwork is not embedded; licensing still needs review before distribution.</div>
+    </div>
+
+    <main class="workspace">
+      <aside class="panel library-panel" aria-label="CanvasCycle scene library">
+        <div class="panel-head">
+          <div class="panel-head-row"><h2>Scene library</h2><span class="count">35 source entries</span></div>
+          <p>CanvasCycle catalog · local import status: pending</p>
+        </div>
+        <div class="library-tools">
+          <input class="search" id="search" type="search" placeholder="Search title or ID…" aria-label="Search scenes">
+          <div class="filters" aria-label="Filter by time of day">
+            <button class="filter" type="button" data-filter="all" aria-pressed="true">All</button>
+            <button class="filter" type="button" data-filter="day" aria-pressed="false">Day</button>
+            <button class="filter" type="button" data-filter="night" aria-pressed="false">Night</button>
+            <button class="filter" type="button" data-filter="weather" aria-pressed="false">Weather tags</button>
+          </div>
+        </div>
+        <section class="pool-controls" aria-label="Scene pool toggles">
+          <h3>Enabled selection pools</h3>
+          <label class="pool-toggle"><input id="poolCanvasCycle" type="checkbox" checked> CanvasCycle worlds + cycles <span class="count">35</span></label>
+          <label class="pool-toggle"><input id="poolWorldwall" type="checkbox" checked> Existing Worldwall registry</label>
+          <p class="pool-help">Pool switches filter every automatic selection; they do not force a swap. Manual scene ID is an explicit override.</p>
+        </section>
+        <div class="scene-list" id="sceneList" role="listbox" aria-label="Available CanvasCycle scenes"></div>
+        <div class="empty" id="empty">No matching catalog entries.</div>
+      </aside>
+
+      <section class="panel center" aria-label="Scene preview">
+        <div class="preview-header">
+          <div>
+            <h2 class="preview-title" id="previewTitle">Desert Heat Wave — Day</h2>
+            <p class="preview-subtitle"><span id="previewId">V25HEAT</span> · CanvasCycle source entry · candidate appearance rules</p>
+          </div>
+          <span class="live-chip"><span class="live-dot"></span> Animated mock preview</span>
+        </div>
+
+        <div class="preview-art" id="previewArt" data-theme="desert" data-period="day" role="img" aria-label="Stylized animated desert preview; not source artwork">
+          <svg viewBox="0 0 800 600" preserveAspectRatio="xMidYMid slice" aria-hidden="true">
+            <defs>
+              <linearGradient id="sky" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#91c8dc"/><stop offset=".67" stop-color="#e7bd95"/><stop offset="1" stop-color="#efaa78"/></linearGradient>
+              <linearGradient id="dune1" x1="0" y1="0" x2="0" y2="1"><stop stop-color="#e9a875"/><stop offset="1" stop-color="#bc644c"/></linearGradient>
+              <linearGradient id="dune2" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#f1c27f"/><stop offset="1" stop-color="#d67c56"/></linearGradient>
+              <filter id="soft"><feGaussianBlur stdDeviation="8"/></filter>
+            </defs>
+            <rect width="800" height="600" fill="url(#sky)"/>
+            <circle cx="600" cy="135" r="52" fill="#ffe6a3" opacity=".95"/>
+            <circle cx="600" cy="135" r="74" fill="#ffe5ad" opacity=".18" filter="url(#soft)"/>
+            <path id="backgroundHills" d="M0 345 L110 274 189 324 274 256 356 329 440 275 520 329 601 261 690 322 800 270 800 420 0 420Z" fill="#9a8a83" opacity=".66"/>
+            <path id="middleLand" d="M0 397 C145 350 227 421 360 374 C514 320 642 401 800 342 L800 600 0 600Z" fill="url(#dune1)"/>
+            <path id="frontLand" d="M0 477 C151 417 273 459 388 425 C534 381 662 474 800 427 L800 600 0 600Z" fill="url(#dune2)"/>
+            <path id="deepLand" d="M0 528 C152 478 299 514 424 477 C573 431 696 526 800 483 L800 600 0 600Z" fill="#b85f49" opacity=".88"/>
+            <g id="detail-desert" class="scene-detail" fill="#443d35" opacity=".8">
+              <path d="M153 421 C149 400 155 385 162 381 C170 377 176 391 173 407 L184 407 C183 388 189 379 196 380 C204 382 205 399 199 419 L205 447 147 447Z"/>
+              <path d="M707 359 C702 341 706 329 712 326 C719 323 725 334 723 348 L734 348 C734 335 740 328 745 330 C752 333 752 347 747 360 L752 383 703 383Z"/>
+              <g fill="none" stroke="#fff0cf" stroke-width="3" stroke-linecap="round" opacity=".55">
+                <path class="heatwave" d="M265 344 C245 327 282 311 263 292 C248 277 274 263 266 247"/>
+                <path class="heatwave" d="M324 363 C304 344 342 328 324 311 C307 293 340 281 329 263"/>
+                <path class="heatwave" d="M390 342 C370 325 410 308 390 290 C373 275 405 260 394 244"/>
+              </g>
+            </g>
+            <g id="detail-water" class="scene-detail" fill="none" stroke="#c9eee5" stroke-linecap="round">
+              <path d="M0 439 C155 420 260 453 399 433 S660 412 800 435" stroke-width="23" opacity=".72"/>
+              <path d="M0 500 C177 476 282 511 442 492 S671 479 800 495" stroke-width="9" opacity=".75"/>
+              <path d="M80 457 Q150 449 217 458 M493 450 Q570 440 651 451 M253 520 Q344 510 426 519" stroke-width="3" opacity=".7"/>
+              <path d="M355 355 C344 383 367 397 352 423 C338 448 369 465 355 491" stroke="#e1fff4" stroke-width="21" opacity=".78"/>
+            </g>
+            <g id="detail-forest" class="scene-detail" fill="#183d38">
+              <path d="M95 470 143 342 191 470Z M115 427 143 330 171 427Z M618 478 671 325 724 478Z M644 423 671 312 698 423Z"/>
+              <path d="M140 470h8v33h-8z M668 470h8v34h-8z" fill="#735941"/>
+            </g>
+            <g id="detail-ice" class="scene-detail" fill="#e7f2ef" opacity=".92">
+              <path d="m90 390 62-94 48 76 53-108 85 134Z M425 382l68-100 45 66 61-87 104 126Z"/>
+            </g>
+            <g id="detail-city" class="scene-detail" fill="#55596b">
+              <path d="M535 410h45v-96h45v96h35v-137h50v137h37v-79h33v79h20v90H535Z"/>
+              <path d="M654 273v-35l6-15 6 15v35 M683 273v-27l7-13 7 13v27" fill="#55596b"/>
+              <g fill="#f4d59a"><path d="M590 334h8v13h-8z M590 360h8v13h-8z M665 300h9v12h-9z M687 300h9v12h-9z M739 355h7v11h-7z"/></g>
+            </g>
+            <g id="detail-ruins" class="scene-detail" fill="#604c46">
+              <path d="M135 465V333h29v132z M125 329h49l-24-31z M187 465V365h30v100z M179 360h46l-23-26z M570 452V305h35v147z M560 300h55l-27-34z"/>
+              <path d="M232 393h70v12h-70z M241 405v52h8v-52z M283 405v52h8v-52z"/>
+            </g>
+            <g id="detail-swamp" class="scene-detail" fill="#283f38">
+              <path d="M67 470 112 355l45 115z M102 439l10-115 11 115z M668 474l47-132 50 132z M699 445l16-133 14 133z"/>
+              <path d="M0 518 Q180 493 360 519 T800 507" fill="none" stroke="#a0bd79" stroke-width="7" opacity=".8"/>
+            </g>
+            <path d="M0 568 Q177 542 345 573 T800 552" fill="none" stroke="#ffd394" stroke-width="3" opacity=".4"/>
+          </svg>
+          <span class="art-caption">Synthetic preview art · heat shimmer is illustrative</span>
+        </div>
+
+        <div class="preview-stats" id="previewStats">
+          <span class="stat">640 × 480 indexed source</span><span class="stat">16 source palette cycles</span><span class="stat">Day-only entry</span><span class="stat">No weather/ToD siblings in this source</span>
+        </div>
+
+        <div class="clock-box">
+          <div class="clock-head"><label for="timeSlider">Preview time-of-day</label><span class="time-value" id="timeValue">10:00 · simulated local time</span></div>
+          <input type="range" id="timeSlider" min="0" max="23" value="10" step="1" aria-label="Preview local hour">
+          <div class="clock-labels"><span>00 Night</span><span>06 Dawn</span><span>12 Day</span><span>18 Dusk</span><span>23 Night</span></div>
+          <p class="clock-message" id="clockMessage">V25HEAT is a Day appearance only. Scrubbing tests the proposed eligibility rule; it does not invent a night palette.</p>
+          <span class="eligibility" id="eligibility"><span>●</span><span>Time/pool match only; weather/temp not simulated</span></span>
+        </div>
+
+        <div class="bottom-row">
+          <section class="subpanel">
+            <h3>Source & appearance notes</h3>
+            <div class="source-note" id="sourceNote"><strong>V25HEAT</strong> is a complete indexed image + palette + animation source, not merely a palette overlay. The page contains no weather or day/night rule for it; the conditions at right are user-authored mock rules.</div>
+          </section>
+          <section class="subpanel" id="wiring">
+            <h3>How it would wire to config</h3>
+            <pre class="config-preview" id="configPreview"># Proposed worldwall.toml schema v5
+schema_version = 5
+registry_dir = "&lt;existing registry&gt;"
+scene_pools_file = "&lt;scene-pools.toml&gt;"
+fps = 30
+animation_speed_multiplier = 0.5</pre>
+            <div class="config-label">Proposed: reload-config applies rules without selecting; every automatic selector uses the current environment snapshot. Manual scene ID overrides the filters.</div>
+          </section>
+        </div>
+      </section>
+
+      <aside class="panel right" aria-label="Appearance criteria and config wiring">
+        <div class="panel-head">
+          <div class="panel-head-row"><h2>When is this appearance acceptable?</h2><span class="count">Draft rule</span></div>
+          <p>All enabled criteria must match; weather choices are OR'd.</p>
+        </div>
+        <section class="form-section">
+          <h3>Temperature range</h3>
+          <p class="help">Illustrative ambient-temperature condition; not read from CanvasCycle.</p>
+          <div class="number-pair">
+            <div class="number-wrap"><input id="tempMin" type="number" value="28" step="0.5" aria-label="Minimum temperature in Celsius"><span class="unit">°C</span></div>
+            <span style="color:#788696">to</span>
+            <div class="number-wrap"><input id="tempMax" type="number" value="45" step="0.5" aria-label="Maximum temperature in Celsius"><span class="unit">°C</span></div>
+          </div>
+        </section>
+        <section class="form-section">
+          <h3>Acceptable weather</h3>
+          <p class="help">No source default is inferred; choose conditions explicitly.</p>
+          <div class="check-grid">
+            <label class="check"><input class="weather" type="checkbox" value="clear" checked> Clear</label>
+            <label class="check"><input class="weather" type="checkbox" value="cloudy" checked> Cloudy</label>
+            <label class="check"><input class="weather" type="checkbox" value="rain"> Rain</label>
+            <label class="check"><input class="weather" type="checkbox" value="snow"> Snow</label>
+            <label class="check"><input class="weather" type="checkbox" value="storm"> Storm</label>
+            <label class="check"><input class="weather" type="checkbox" value="fog"> Fog</label>
+          </div>
+        </section>
+        <section class="form-section">
+          <h3>Time-of-day buckets</h3>
+          <p class="help">Candidate tags from the title; matching policy is not applied.</p>
+          <div class="period-grid">
+            <label class="period"><input class="period-check" type="checkbox" value="dawn"> Dawn</label>
+            <label class="period"><input class="period-check" type="checkbox" value="day" checked> Day</label>
+            <label class="period"><input class="period-check" type="checkbox" value="dusk"> Dusk</label>
+            <label class="period"><input class="period-check" type="checkbox" value="night"> Night</label>
+          </div>
+        </section>
+        <div class="rule-summary" id="ruleSummary"><strong>Draft match:</strong> 28–45 °C <span class="and">AND</span> Day <span class="and">AND</span> Clear or Cloudy</div>
+        <div class="rule-actions">
+          <button class="button" type="button" id="resetRule">Reset</button>
+          <button class="button primary" type="button" id="saveRule">Preview rule</button>
+        </div>
+        <section class="wire-card">
+          <h3>Proposed pool sidecar</h3>
+          <p>Illustrative only; runtime schema support is pending approval.</p>
+          <pre class="wire-code" id="sidecar"># ~/.config/worldwall/scene-pools.toml
+schema_version = 1
+
+[[pool]]
+id = "canvascycle"
+enabled = true
+scene_ids = ["V25HEAT"]
+
+[[scene_rule]]
+scene_id = "V25HEAT"
+enabled = true
+time_of_day = ["day"]
+temperature_min_c = 28.0
+temperature_max_c = 45.0
+weather_any = ["clear", "cloudy"]</pre>
+          <div class="wire-foot">After approval, reload-config applies rules without a scene swap. All existing automatic selectors filter candidates; manual scene ID overrides. No new clock/weather triggers.</div>
+        </section>
+      </aside>
+    </main>
+
+    <footer class="footer-note">
+      <span>35 selectable CanvasCycle entries · synthetic art · provisional labels · pool-aware runtime behavior proposed, not implemented</span>
+      <span><a href="https://www.effectgames.com/demos/canvascycle/" target="_blank" rel="noreferrer">Source catalog</a> · artwork license review required</span>
+    </footer>
+  </div>
+
+  <script>
+    // Mock catalog only. Labels below are provisional title-derived suggestions;
+    // this page neither downloads assets nor writes Worldwall configuration.
+    const scenes = [
+      {id:"V08AM",title:"Jungle Waterfall - Morning",time:"day",weather:"unknown",theme:"water",group:"jungle"},
+      {id:"V29",title:"Seascape - Day",time:"day",weather:"unknown",theme:"water",group:"seascape"},
+      {id:"V19",title:"Mountain Stream - Morning",time:"day",weather:"unknown",theme:"water",group:"stream"},
+      {id:"V26SNOW",title:"Winter Forest - Snow",time:"unknown",weather:"snow",temp:"cold",theme:"ice"},
+      {id:"V08RAIN",title:"Jungle Waterfall - Rain",time:"unknown",weather:"rain",theme:"water"},
+      {id:"V14",title:"Mountain Storm - Day",time:"day",weather:"storm",theme:"water"},
+      {id:"V30",title:"Deep Forest - Day",time:"day",weather:"unknown",theme:"forest"},
+      {id:"V04",title:"Highland Ruins - Rain",time:"unknown",weather:"rain",theme:"ruins"},
+      {id:"V07",title:"Rough Seas - Day",time:"day",weather:"unknown",theme:"water"},
+      {id:"V20",title:"Crystal Caves - Day",time:"day",weather:"unknown",theme:"cave"},
+      {id:"V05RAIN",title:"Haunted Castle Ruins - Rain",time:"unknown",weather:"rain",theme:"ruins"},
+      {id:"V08PM",title:"Jungle Waterfall - Night",time:"night",weather:"unknown",theme:"water",group:"jungle"},
+      {id:"V16RAIN",title:"Mirror Pond - Rain",time:"unknown",weather:"rain",theme:"water"},
+      {id:"V19AURA",title:"Mountain Stream - Night",time:"night",weather:"unknown",theme:"water",group:"stream"},
+      {id:"CORAL",title:"Aquarius - Day",time:"day",weather:"unknown",theme:"coral"},
+      {id:"V15",title:"Harbor Town - Night",time:"night",weather:"unknown",theme:"city"},
+      {id:"V30RAIN",title:"Deep Forest - Rain",time:"unknown",weather:"rain",theme:"forest"},
+      {id:"V02",title:"Mountain Fortress - Dusk",time:"dusk",weather:"unknown",theme:"ruins"},
+      {id:"V28",title:"Water City Gates - Fog",time:"unknown",weather:"fog",theme:"city"},
+      {id:"V29PM",title:"Seascape - Sunset",time:"dusk",weather:"unknown",theme:"water",group:"seascape"},
+      {id:"V16",title:"Mirror Pond - Morning",time:"day",weather:"unknown",theme:"water",group:"pond"},
+      {id:"V01",title:"Island Fires - Dusk",time:"dusk",weather:"unknown",theme:"water"},
+      {id:"V09",title:"Forest Edge - Day",time:"day",weather:"unknown",theme:"forest"},
+      {id:"V16PM",title:"Mirror Pond - Afternoon",time:"day",weather:"unknown",theme:"water",group:"pond"},
+      {id:"V08",title:"Jungle Waterfall - Afternoon",time:"day",weather:"unknown",theme:"water",group:"jungle"},
+      {id:"V03",title:"Swamp Cathedral - Day",time:"day",weather:"unknown",theme:"swamp"},
+      {id:"V05HAUNT",title:"Haunted Castle Ruins - Night",time:"night",weather:"unknown",theme:"ruins"},
+      {id:"V10",title:"Deep Swamp - Day",time:"day",weather:"unknown",theme:"swamp"},
+      {id:"V11AM",title:"Approaching Storm - Day",time:"day",weather:"storm",theme:"water"},
+      {id:"V13",title:"Pond Ripples - Dawn",time:"dawn",weather:"unknown",theme:"water"},
+      {id:"V17",title:"Ice Wind - Day",time:"day",weather:"unknown",temp:"cold",theme:"ice"},
+      {id:"V19PM",title:"Mountain Stream - Afternoon",time:"day",weather:"unknown",theme:"water",group:"stream"},
+      {id:"V25HEAT",title:"Desert Heat Wave - Day",time:"day",weather:"unknown",temp:"hot",theme:"desert",cycles:16},
+      {id:"V27",title:"Magic Marsh Cave - Night",time:"night",weather:"unknown",theme:"swamp"},
+      {id:"V29FOG",title:"Seascape - Fog",time:"unknown",weather:"fog",theme:"water"}
+    ];
+    const todGroups = {
+      jungle:[{id:"V08AM",hour:8},{id:"V08",hour:14},{id:"V08PM",hour:21}],
+      stream:[{id:"V19",hour:8},{id:"V19PM",hour:14},{id:"V19AURA",hour:21}],
+      pond:[{id:"V16",hour:8},{id:"V16PM",hour:14}],
+      seascape:[{id:"V29",hour:12},{id:"V29PM",hour:18}]
+    };
+    let activeFilter = "all";
+    let selected = scenes.find(scene => scene.id === "V25HEAT");
+    const list = document.getElementById("sceneList");
+    const $ = id => document.getElementById(id);
+
+    function tagsFor(scene) {
+      const values = [];
+      values.push([scene.time === "unknown" ? "time ?" : scene.time, "time"]);
+      values.push([scene.weather === "unknown" ? "weather ?" : scene.weather, "weather"]);
+      if (scene.temp) values.push([`${scene.temp} theme`, "temp"]);
+      if (scene.cycles) values.push([`${scene.cycles} cycles`, "cycles"]);
+      return values.map(([text, cls]) => `<span class="tag ${cls}">${text}</span>`).join("");
+    }
+    function matches(scene, query) {
+      const text = `${scene.id} ${scene.title}`.toLowerCase();
+      const searchOk = !query || text.includes(query.toLowerCase());
+      const filterOk = activeFilter === "all" ||
+        (activeFilter === "day" && scene.time === "day") ||
+        (activeFilter === "night" && scene.time === "night") ||
+        (activeFilter === "weather" && scene.weather !== "unknown");
+      return searchOk && filterOk && $("poolCanvasCycle").checked;
+    }
+    function renderList() {
+      const query = $("search").value.trim();
+      const visible = scenes.filter(scene => matches(scene, query));
+      list.innerHTML = visible.map(scene => `<button type="button" class="scene-card" role="option" aria-selected="${scene.id === selected.id}" data-id="${scene.id}">
+        <span class="thumb ${scene.theme}"><span class="mini-label">${scene.time === "unknown" ? "SOURCE" : scene.time.toUpperCase()}</span></span>
+        <span class="scene-meta"><span class="scene-title">${scene.title}</span><span class="scene-id">${scene.id}</span><span class="tag-row">${tagsFor(scene)}</span></span>
+      </button>`).join("");
+      $("empty").style.display = visible.length ? "none" : "block";
+      list.querySelectorAll(".scene-card").forEach(button => button.addEventListener("click", () => choose(button.dataset.id)));
+    }
+    function choose(id) {
+      selected = scenes.find(scene => scene.id === id) || scenes[0];
+      renderList();
+      updatePreview();
+      updateRule();
+    }
+    function titleToTheme(scene) {
+      if (scene.theme === "forest") return "forest";
+      if (scene.theme === "ice") return "ice";
+      if (scene.theme === "city") return "city";
+      if (scene.theme === "water" || scene.theme === "coral") return "water";
+      return "desert";
+    }
+    function hourLabel(hour) { return `${String(hour).padStart(2,"0")}:00`; }
+    function dayPart(hour) {
+      // Demo-only clock buckets. Production must use Worldwall's approved time policy.
+      if (hour < 5) return "night";
+      if (hour < 7) return "dawn";
+      if (hour < 18) return "day";
+      if (hour < 20) return "dusk";
+      return "night";
+    }
+    function timeGroupAppearance(scene, hour) {
+      const group = scene.group && todGroups[scene.group];
+      if (!group) return null;
+      let choice = group[0];
+      for (const candidate of group) if (hour >= candidate.hour) choice = candidate;
+      return scenes.find(item => item.id === choice.id) || scene;
+    }
+    function updatePreview() {
+      const hour = Number($("timeSlider").value);
+      const part = dayPart(hour);
+      const appearance = timeGroupAppearance(selected, hour);
+      const shown = appearance || selected;
+      $("previewTitle").textContent = shown.title.replaceAll(" - ", " — ");
+      $("previewId").textContent = shown.id;
+      $("timeValue").textContent = `${hourLabel(hour)} · simulated local time · ${part}`;
+      $("previewArt").dataset.theme = titleToTheme(shown);
+      $("previewArt").dataset.period = part;
+      const tags = [];
+      if (shown.cycles) tags.push(`<span class="stat">${shown.cycles} source palette cycles</span>`);
+      else tags.push(`<span class="stat">cycle metadata: import pending</span>`);
+      tags.push(`<span class="stat">${shown.time === "unknown" ? "time not stated" : `${shown.time} source title`}</span>`);
+      tags.push(`<span class="stat">${shown.group ? `ToD sibling set: ${shown.group}` : "no known ToD sibling"}</span>`);
+      tags.push(`<span class="stat">weather: ${shown.weather}</span>`);
+      $("previewStats").innerHTML = tags.join("");
+      const selectedPeriods = [...document.querySelectorAll(".period-check:checked")].map(input => input.value);
+      const timeOk = selectedPeriods.length === 0 || selectedPeriods.includes(part);
+      const poolEnabled = $("poolCanvasCycle").checked;
+      const eligible = timeOk && poolEnabled;
+      const rule = $("eligibility");
+      rule.classList.toggle("no", !eligible);
+      rule.lastElementChild.textContent = !poolEnabled ? "CanvasCycle pool disabled; excluded from automatic selection" : timeOk ? "Time/pool match only; weather/temp not simulated" : "Outside the selected time bucket; weather/temp not simulated";
+      if (appearance) {
+        $("clockMessage").textContent = `Preview-only sibling swap: ${selected.id} → ${shown.id}. The production time boundaries and transitions would be configured/approved separately.`;
+      } else if (selected.time === "day") {
+        $("clockMessage").textContent = `${selected.id} is a Day appearance only. Scrubbing tests the proposed eligibility rule; it does not invent a night palette.`;
+      } else {
+        $("clockMessage").textContent = `${selected.id} has no known time-of-day sibling in this mock catalog. Scrubbing changes eligibility only; it does not synthesize another source image.`;
+      }
+      $("sourceNote").innerHTML = `<strong>${shown.id}</strong> is shown with a synthetic preview, not imported source art. ${shown.cycles ? `${shown.cycles} active CanvasCycle ranges were observed for V25HEAT.` : "Exact asset/cycle metadata is pending local import."} ${shown.group ? "This title belongs to a candidate ToD group; the grouping is provisional." : "No alternate ToD source entry is currently associated in this mockup."}`;
+      updateSidecar();
+    }
+    function checkedValues(selector) { return [...document.querySelectorAll(`${selector}:checked`)].map(input => input.value); }
+    function updateRule() {
+      const min = $("tempMin").value || "—";
+      const max = $("tempMax").value || "—";
+      const weathers = checkedValues(".weather");
+      const times = checkedValues(".period-check");
+      const weatherText = weathers.length ? weathers.join(" or ") : "no weather restriction";
+      const timeText = times.length ? times.join(" / ") : "any time";
+      $("ruleSummary").innerHTML = `<strong>Draft match:</strong> ${min}–${max} °C <span class="and">AND</span> ${timeText} <span class="and">AND</span> ${weatherText}`;
+      updatePreview();
+    }
+    function updateSidecar() {
+      const min = Number($("tempMin").value || 0);
+      const max = Number($("tempMax").value || 0);
+      const weather = checkedValues(".weather");
+      const times = checkedValues(".period-check");
+      const q = values => `[${values.map(v => `"${v}"`).join(", ")}]`;
+      $("sidecar").textContent = `# ~/.config/worldwall/scene-pools.toml\nschema_version = 1\n\n[[pool]]\nid = "canvascycle"\nenabled = ${$("poolCanvasCycle").checked}\nscene_ids = ["${selected.id}"]\n\n[[pool]]\nid = "worldwall-registry"\nenabled = ${$("poolWorldwall").checked}\nscene_ids = []\n\n[[scene_rule]]\nscene_id = "${selected.id}"\nenabled = true\ntime_of_day = ${q(times)}\ntemperature_min_c = ${Number.isFinite(min) ? min.toFixed(1) : "0.0"}\ntemperature_max_c = ${Number.isFinite(max) ? max.toFixed(1) : "0.0"}\nweather_any = ${q(weather)}`;
+    }
+    document.querySelectorAll(".filter").forEach(button => button.addEventListener("click", () => {
+      activeFilter = button.dataset.filter;
+      document.querySelectorAll(".filter").forEach(item => item.setAttribute("aria-pressed", String(item === button)));
+      renderList();
+    }));
+    $("search").addEventListener("input", renderList);
+    $("poolCanvasCycle").addEventListener("change", () => { renderList(); updatePreview(); });
+    $("poolWorldwall").addEventListener("change", updateSidecar);
+    $("timeSlider").addEventListener("input", updatePreview);
+    document.querySelectorAll(".weather,.period-check").forEach(input => input.addEventListener("change", updateRule));
+    $("tempMin").addEventListener("input", updateRule);
+    $("tempMax").addEventListener("input", updateRule);
+    $("resetRule").addEventListener("click", () => {
+      $("tempMin").value = "28"; $("tempMax").value = "45";
+      document.querySelectorAll(".weather").forEach(input => input.checked = ["clear","cloudy"].includes(input.value));
+      document.querySelectorAll(".period-check").forEach(input => input.checked = input.value === "day");
+      updateRule();
+    });
+    $("saveRule").addEventListener("click", event => {
+      event.currentTarget.textContent = "Rule previewed";
+      setTimeout(() => event.currentTarget.textContent = "Preview rule", 1300);
+    });
+    $("importBtn").addEventListener("click", event => {
+      event.currentTarget.textContent = "Import is not wired";
+      setTimeout(() => event.currentTarget.textContent = "Import all 35", 1500);
+    });
+    renderList();
+    updatePreview();
+    updateRule();
+  </script>
+</body>
+</html>

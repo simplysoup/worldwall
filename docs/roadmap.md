@@ -1,6 +1,6 @@
 # Delivery roadmap
 
-**Baseline:** approved v0.1, ratified by `simplysoup` on 2026-09-21. This is the only stage-state/owner ledger. Stage details define gates, not progress.
+**Baseline:** approved contract v0.8; original v0.1 ratified by `simplysoup` on 2026-09-21; CR-0008 applied 2026-09-23. This is the only stage-state/owner ledger. Stage details define gates, not progress.
 
 ## Stage ledger
 
@@ -18,6 +18,7 @@
 | [S09](stages/09-multi-output.md) | Multi-output and hotplug | S08 | accepted | Pi coding agent | [S09 implementation and acceptance](updates/2026-09-22-s09-multi-output.md) |
 | [S10](stages/10-ipc-config.md) | Local IPC and config transactions | S09 | accepted | Pi coding agent | Historical [S10 acceptance](updates/2026-09-22-s10-ipc-config.md); [CR-0005 evidence](updates/2026-09-23-cr0005-test-batch-run-guide.md); CR-0006 addendum [update](updates/2026-09-23-cr0006-weather-adaptive-scenes.md); CR-0007 [change](changes/CR-0007-global-animation-speed-multiplier.md) and [implementation update](updates/2026-09-23-cr0007-animation-speed-multiplier.md); RB-0005 [resolution](roadblocks/RB-0005-scene-loading-blocks-wayland-owner.md) and [implementation update](updates/2026-09-23-rb0005-bounded-loading.md) |
 | [S11](stages/11-release-validation.md) | Recovery, performance, release / M4 | S10 | accepted | Pi coding agent | [S11 M4 acceptance](updates/2026-09-22-s11-m4-acceptance.md); evidence: [release package](updates/2026-09-22-s11-release-packaging.md), [benchmarks](updates/2026-09-22-s11-benchmark-pmon-reruns.md), [dispositions](updates/2026-09-22-s11-result-review-disposition.md), [clean checkout](updates/2026-09-22-s11-clean-checkout-ac1.md), [recovery matrix](updates/2026-09-22-s11-ac2-recovery-matrix.md), [docs/licensing](updates/2026-09-22-s11-ac4-ac5-docs-licensing.md) |
+| [S12](stages/12-scene-pool-curator.md) | Local scene-pool curator and automatic eligibility / post-M4 | S04, S05, S06, S07, S08, S10, S11 | ready | unassigned | [CR-0008 baseline application](updates/2026-09-23-cr0008-baseline-application.md); implementation and acceptance not started |
 
 `ready` means dependencies/inputs permit starting work, **not** that approval or delivery is complete. S03 is accepted with ADR-0003 and recorded pure/GPU/live evidence. CR-0005's historical acceptance remains recorded. The stage ledger preserves the original S00–S11 acceptances; CR-0006/CR-0007 addendum gates are tracked separately and are not accepted by those historical states. [RB-0004](roadblocks/RB-0004-cr0006-adaptive-artwork-clarification.md) records the clarified, private loader-validated crop but does not establish adaptive acceptance. [RB-0005](roadblocks/RB-0005-scene-loading-blocks-wayland-owner.md) is resolved at the bounded async implementation/deterministic-test level; S05/S10 acceptance and assigned-session adaptive evidence remain separate. The linked updates distinguish offline tests from missing assigned-session and next-login evidence.
 
@@ -40,7 +41,7 @@ Routine state/owner/evidence changes use the progress workflow. Reordering, scop
 
 The default critical path is deliberately linear: prove the renderer before integrating services. Delegates may prepare fixtures, pure-function tests, or bounded design spikes ahead of integration when their inputs are settled. Such preparation does not accept a future stage or bypass dependency gates. The integrator assigns non-overlapping files; shared renderer interfaces, roadmap, and status have one writer per increment.
 
-No multi-device work, extra scaling modes, cross-family weather reselection, implicit weather activation, or GUI editor is scheduled. CR-0006's approved same-family precipitation-variant behavior is opt-in; richer user-facing family/threshold configuration remains deferred.
+No multi-device work, extra scaling modes, cross-family weather reselection, or implicit weather activation is scheduled. CR-0008 adds the approved S12 curator/pool-filtering extension after M4, without changing selection triggers; implementation and acceptance remain open. CR-0006's approved same-family precipitation-variant behavior is opt-in; richer user-facing family/threshold configuration remains deferred.
 
 ## Mapping from the original plan
 

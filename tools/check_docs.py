@@ -18,6 +18,7 @@ STAGE_FILES = (
     "03-indexed-scene.md", "04-palette-animation.md", "05-scene-registry.md",
     "06-time-astronomy.md", "07-weather.md", "08-suspend-resume.md",
     "09-multi-output.md", "10-ipc-config.md", "11-release-validation.md",
+    "12-scene-pool-curator.md",
 )
 SECTIONS = (
     "Purpose", "Entry conditions", "Deliverables", "Execution",

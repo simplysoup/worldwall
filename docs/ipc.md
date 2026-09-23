@@ -102,10 +102,11 @@ resident scene.
 ## Configuration file
 
 Set `WORLDWALL_CONFIG` to a regular, non-symlink file. It is loaded at startup
-and by `reload-config`. Schema v1 remains readable; schema v2 adds optional
-location and weather tables; schema v3 adds the default-off adaptive-scene
-switch inside `[weather]`; schema v4 adds a global animation-speed scalar. A
-minimal privacy-safe v4 file is:
+and by `reload-config`. The current implementation reads schemas v1–v4: v2
+adds optional location and weather tables; v3 adds the default-off adaptive
+switch inside `[weather]`; v4 adds a global animation-speed scalar. Approved
+CR-0008/S12 defines a future schema v5 with an optional `scene_pools_file`
+sidecar reference; v5 is not implemented yet. A minimal privacy-safe v4 file is:
 
 ```toml
 schema_version = 4
@@ -145,6 +146,22 @@ location/timezone, and provider; legacy environment inputs are read only when
 `WORLDWALL_CONFIG` is unset. The environment variables
 `WORLDWALL_SCENE_DIR` and diagnostics remain separate scene-source/test inputs.
 
+### Approved schema-v5 target (S12; not implemented)
+
+Schema v5 adds optional `scene_pools_file`, pointing to a separately versioned
+pool/availability sidecar. If absent, the existing registry and selection
+behavior remains. When present, every automatic selection uses only enabled
+pools and scenes whose configured time/weather/temperature constraints match
+one current snapshot; a constrained unknown input is not a match. Manual
+`scene <id>` explicitly bypasses those filters but still validates/loads a
+known scene. Applying/reloading this configuration never selects by itself,
+and it adds no clock/weather triggers. If no scene is eligible, startup reports
+selection unavailable; later selection attempts keep the resident scene or
+return a no-op reason instead of using a disallowed fallback. The planned `worldwallctl curator` command is a local GUI and does not add an IPC command. The sidecar's
+final schema and adaptive-family composition are acceptance gates in
+[S12](stages/12-scene-pool-curator.md); do not write schema-v5 config until the
+runtime implementation is available.
+
 ## CLI
 
 The installed/local client sends the framed protocol and prints JSON:
@@ -160,3 +177,6 @@ worldwallctl weather
 
 Use `--socket PATH` only for a deliberately selected same-user test socket.
 The client returns a nonzero exit status when the service returns an error.
+
+S12 plans a separate `worldwallctl curator` GUI command for editing the pool
+sidecar. It is not implemented yet and is not a socket/IPC command.
