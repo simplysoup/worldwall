@@ -64,8 +64,9 @@ registry contract; it does not change ordinary schema-v1/v2 selection behavior.
 
 ## Adaptive scene-family metadata (CR-0006)
 
-Scene-manifest schema v2 may add explicit `family_id` and `temperature_band`
-fields. They are metadata, not inferred from a package ID or catalog caption.
+Scene-manifest schema v2 may add explicit `family` and `temperature_band`
+fields. The TOML key is `family`; `family_id` is the internal model name, not an
+accepted manifest key. They are metadata, not inferred from a package ID or catalog caption.
 Ordinary registries may omit them; a registry used with
 `[weather].adaptive_scenes = true` must validate every package as an adaptive
 variant, provide a clear variant for every family, cover all five approved
@@ -81,7 +82,7 @@ id = "v29-seascape"
 image = "scene.png"
 palette = "palette.png"
 weather = ["clear"]
-family_id = "v29-seascape"
+family = "v29-seascape"
 temperature_band = "warm"
 ```
 

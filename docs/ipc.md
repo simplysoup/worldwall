@@ -164,10 +164,13 @@ runtime implementation is available.
 
 ## CLI
 
-The installed/local client sends the framed protocol and prints JSON:
+Control commands send the framed protocol and print JSON. `scenes` reads the
+configured local registry and marks the active scene when the running Worldwall
+instance is reachable:
 
 ```sh
 worldwallctl status
+worldwallctl scenes
 worldwallctl reload
 worldwallctl reload-config
 worldwallctl scene v29-seascape
@@ -176,7 +179,9 @@ worldwallctl weather
 ```
 
 Use `--socket PATH` only for a deliberately selected same-user test socket.
-The client returns a nonzero exit status when the service returns an error.
+For `scenes`, this socket is used only to query the active-scene marker; the
+scene IDs are read from the configured registry. Control commands return a
+nonzero exit status when the service returns an error.
 
 S12 plans a separate `worldwallctl curator` GUI command for editing the pool
 sidecar. It is not implemented yet and is not a socket/IPC command.

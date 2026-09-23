@@ -57,10 +57,82 @@ and does not reselect the resident scene. `weather` reports cache state only;
 it does not enable networking. See [IPC and configuration](ipc.md) for the
 full protocol and privacy behavior.
 
-For Hyprland foreground startup, an operator may use `exec-once = /absolute/path/to/worldwall`
-after testing that exact session environment. This is not a packaged service
-and no user-service unit is supplied. Avoid configuring both mechanisms, which
-would create duplicate instances.
+For Hyprland's legacy text config, an operator may use
+`exec-once = /absolute/path/to/worldwall` after testing that exact session
+environment. For Lua configurations, use the opt-in launcher below. Choose
+only one startup mechanism; no user-service unit is supplied.
+
+## Opt-in Hyprland Lua session launcher
+
+Only change a session configuration with the operator's permission. The source
+checkout supplies [examples/worldwall-session.sh](../examples/worldwall-session.sh);
+it is **not currently included by the release packager**. It requires a POSIX
+shell and util-linux `flock`, an active user Wayland session, a readable private
+config, and installed executable binaries. For the default XDG layout, install
+from the checkout root after building/testing the release binaries:
+
+```sh
+install -d "$HOME/.local/bin" "$HOME/.local/share/worldwall/bin"
+install -m 755 examples/worldwall-session.sh "$HOME/.local/bin/worldwall-session"
+install -m 755 target/release/worldwall target/release/worldwallctl \
+  "$HOME/.local/share/worldwall/bin/"
+```
+
+Do not overwrite a running executable; stop the operator-selected instance
+before replacing binaries, or stage a new file and atomically rename it. The
+launcher reads `${XDG_CONFIG_HOME:-$HOME/.config}/worldwall/worldwall.toml`
+(or explicit `WORLDWALL_CONFIG`) and runs
+`${XDG_DATA_HOME:-$HOME/.local/share}/worldwall/bin/worldwall`. Supply a validated
+registry and config separately; installing the script does not configure
+location, enable weather, or supply artwork. If using non-default XDG paths,
+install files there and ensure Hyprland inherits those variables.
+
+Back up the active Lua configuration, remove any competing wallpaper startup
+and legacy `WORLDWALL_SCENE_DIR` override, and add this call to its **existing**
+startup handler (replace the illustrative home path):
+
+```lua
+hl.on("hyprland.start", function()
+    hl.exec_cmd("/home/YOUR_USER/.local/bin/worldwall-session")
+end)
+```
+
+Do not add a second handler just to copy this example. Verify the active config
+with `Hyprland --verify-config -c /absolute/path/to/hyprland.lua`. After an
+operator-authorized config reload, inspect `hyprctl configerrors`. To test the
+exact launch command without logging out, run:
+
+```sh
+hyprctl eval 'hl.exec_cmd("/home/YOUR_USER/.local/bin/worldwall-session")'
+"$HOME/.local/share/worldwall/bin/worldwallctl" status
+```
+
+The inherited runtime lock makes repeated launcher invocations successful
+no-ops; it does not coordinate other direct launches of `worldwall`. Never
+unlink the lock while an instance is running. Worldwall itself subscribes to
+logind for sleep/resume: **do not add a second resume launch hook**. A successful
+logind connection is not a physical-resume test. This launcher is not a crash
+supervisor; after diagnosing a fatal exit, invoke it again to restart.
+
+Schema-v4 `animation_speed_multiplier = 0.5` plays authored animation at half
+speed; `fps = 30` controls submission rate independently. Changing one does not
+implicitly change the other. After editing the private config, apply it with:
+
+```sh
+"$HOME/.local/share/worldwall/bin/worldwallctl" reload-config
+```
+
+This updates valid configuration without selecting a new scene. Use `reload`
+only when a full selection is intended. Normal stdout is discarded to avoid
+unbounded per-frame logs; runtime stderr appends to
+`${XDG_STATE_HOME:-$HOME/.local/state}/worldwall/session-errors.log`. Launch-time
+preflight errors remain on the caller's stderr. For a **bounded diagnostic run**
+with no existing instance, set `WORLDWALL_SESSION_TRACE=/private/path/trace.log`
+and explicitly end the run afterward; it is not an automatically bounded or
+rotated log. The launcher removes inherited diagnostic/test and fixed-scene
+overrides so the config is authoritative. See the [assigned-host activation
+record](updates/2026-09-23-hyprland-session-activation.md) for this deployment's
+checks, backups, and untested reboot/resume gates.
 
 ## Recovery and troubleshooting
 

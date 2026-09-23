@@ -2,7 +2,7 @@
 
 A planned GPU-accelerated, weather- and time-aware pixel-art wallpaper engine for Hyprland/Wayland.
 
-**Current state:** Historical S00–S11 acceptances remain recorded. CR-0005 remains implemented with its separately classified evidence and limitations. CR-0006's approved policy remains in contract v0.6; CR-0007 adds the global half-speed animation multiplier in contract v0.7. Offline code tests do not constitute acceptance or live evidence. The supplied Monolith guide has been used for a private review crop, and animation speed is now global rather than V29-specific; adaptive registry validation and assigned-session swaps remain open. The Wayland-owner loading path remains blocked by RB-0005. The source-preserving V29 display was reported good, but its runner was aborted before technical finalization; output 115 pacing remains unresolved. The Worldwall launch hook is staged but next-login behavior is not verified. CR-0004's physical incompatible-capability output remains future work and `not-run`; no universal hardware-compatibility claim is made.
+**Current state:** Historical S00–S11 acceptances remain recorded; CR-0006/CR-0007 supplemental acceptance remains open. RB-0005's bounded-loading blocker is resolved offline. The operator-authorized [Hyprland session activation](docs/updates/2026-09-23-hyprland-session-activation.md) now runs a validated private adaptive registry on both outputs, with configured civil time/location, fresh Open-Meteo weather, 30 FPS, and the global 0.5 animation multiplier. The Lua startup hook uses a duplicate-safe launcher instead of a fixed-scene override or hyprpaper. Live config-speed reload and explicit family selection passed bounded checks; reboot and physical resume of this deployment remain untested. Earlier output-115 pacing and CR-0004's physical incompatible-output limitation remain separate, unresolved/not-run evidence—not universal hardware claims.
 
 ## Start here
 
@@ -14,7 +14,7 @@ A planned GPU-accelerated, weather- and time-aware pixel-art wallpaper engine fo
 6. [S03 evidence](docs/evidence/2026-09-21-s03-indexed-scene.md) — accepted M1 decoder/resource/live evidence.
 7. [Contributor instructions](AGENTS.md) — how to work safely and leave a useful handoff.
 
-**Current action:** Complete the remaining approved [CR-0006 implementation gates](docs/changes/CR-0006-weather-adaptive-scene-selection.md) and [CR-0007 animation evidence](docs/changes/CR-0007-global-animation-speed-multiplier.md). The private Monolith crop is review-only. RB-0005 still blocks claiming the off-thread IPC/config loading gates. No adaptive config activation, Worldwall launch/restart, next-login test, network request, private operator-config edit, or commit was performed. See the [CR-0006 update](docs/updates/2026-09-23-cr0006-weather-adaptive-scenes.md), [roadmap](docs/roadmap.md), and [current status](docs/status.md).
+**Current action:** Leave the installed wallpaper running for the user's reboot test. The private adaptive registry includes the approved Monolith crop; source artwork remains unchanged and unbundled. Follow the [session runbook](docs/release.md#opt-in-hyprland-lua-session-launcher) for launch/control. Record next-login and separately authorized physical-resume results, then complete the remaining [CR-0006](docs/changes/CR-0006-weather-adaptive-scene-selection.md) and [CR-0007](docs/changes/CR-0007-global-animation-speed-multiplier.md) supplemental gates without treating activation as acceptance. See [current status](docs/status.md) and the [roadmap](docs/roadmap.md).
 
 ## Build and run the S03 indexed-scene path
 
@@ -80,6 +80,7 @@ through the same-user `$XDG_RUNTIME_DIR/worldwall.sock` socket:
 
 ```sh
 worldwallctl status
+worldwallctl scenes
 worldwallctl reload
 worldwallctl reload-config
 worldwallctl scene <id>
