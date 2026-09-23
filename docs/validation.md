@@ -54,7 +54,7 @@ S04 measures the implemented single-output static/animated paths. Mark later-sta
 2. Record an idle-compositor baseline under the same scene/output/environment conditions, then static and animated Worldwall at 15 and 30 FPS. Include one and multiple outputs, and no-output/suspended states where supported.
 3. Use a 60-second warmup followed by three 5-minute samples per workload. Record sampling tools, intervals, raw data, summary statistics, and background process controls. Keep startup/scene-upload costs separate from steady state.
 4. Use per-output submission timestamps/counters to verify no steady-state intervals shorter than the configured frame interval beyond documented clock precision. Reconfigure/bootstrap frames are tagged separately, not hidden in the average.
-5. Track full texture uploads: zero steady-state scene uploads, apart from documented content changes or recovery. Weather timers must not increase selection-generation counts.
+5. Track full texture uploads: zero steady-state scene uploads, apart from documented content changes or recovery. With adaptive selection absent/disabled, weather timers must not change scene-selection generation. With CR-0006 opt-in, a fresh result may increment the scene-candidate generation for a same-family variant; acceptance verifies family identity never changes on weather events.
 6. Compare against approved limits and the previous accepted baseline; explain regressions. Unsupported power counters are `unavailable`, not measured zero. If a required metric is unavailable, agree on an approved alternative or block acceptance.
 
 ## Required failure coverage

@@ -364,43 +364,61 @@ fn send_event(sender: &SyncSender<PowerEvent>, event: PowerEvent) {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct PausedAnimationClock {
-    origin_ns: u64,
+    last_update_ns: u64,
     paused_at_ns: Option<u64>,
-    suspended_ns: u64,
+    phase_seconds: f64,
+    speed_multiplier: f64,
 }
 
 impl PausedAnimationClock {
     pub const fn new(origin_ns: u64) -> Self {
         Self {
-            origin_ns,
+            last_update_ns: origin_ns,
             paused_at_ns: None,
-            suspended_ns: 0,
+            phase_seconds: 0.0,
+            speed_multiplier: 1.0,
         }
+    }
+
+    pub fn new_with_multiplier(origin_ns: u64, speed_multiplier: f32) -> Self {
+        let mut clock = Self::new(origin_ns);
+        clock.speed_multiplier = f64::from(speed_multiplier);
+        clock
+    }
+
+    fn advance_to(&mut self, now_ns: u64) {
+        let end_ns = self.paused_at_ns.unwrap_or(now_ns);
+        let elapsed_ns = end_ns.saturating_sub(self.last_update_ns);
+        self.phase_seconds = (self.phase_seconds
+            + elapsed_ns as f64 / 1_000_000_000.0 * self.speed_multiplier)
+            .rem_euclid(1024.0);
+        self.last_update_ns = end_ns;
+    }
+
+    /// Change global animation rate without discontinuously changing the phase.
+    pub fn set_multiplier(&mut self, speed_multiplier: f32, now_ns: u64) {
+        self.advance_to(now_ns);
+        self.speed_multiplier = f64::from(speed_multiplier);
     }
 
     pub fn pause(&mut self, now_ns: u64) {
         if self.paused_at_ns.is_none() {
+            self.advance_to(now_ns);
             self.paused_at_ns = Some(now_ns);
         }
     }
 
     pub fn resume(&mut self, now_ns: u64) {
-        if let Some(paused_at) = self.paused_at_ns.take() {
-            self.suspended_ns = self
-                .suspended_ns
-                .saturating_add(now_ns.saturating_sub(paused_at));
+        if self.paused_at_ns.take().is_some() {
+            self.last_update_ns = now_ns;
         }
     }
 
-    pub fn seconds(&self, now_ns: u64) -> f32 {
-        let end = self.paused_at_ns.unwrap_or(now_ns);
-        ((end
-            .saturating_sub(self.origin_ns)
-            .saturating_sub(self.suspended_ns) as f64
-            / 1_000_000_000.0)
-            % 1024.0) as f32
+    pub fn seconds(&mut self, now_ns: u64) -> f32 {
+        self.advance_to(now_ns);
+        self.phase_seconds as f32
     }
 }
 
@@ -471,5 +489,28 @@ mod tests {
         clock.resume(5_000_000_100);
         clock.resume(6_000_000_100);
         assert!((clock.seconds(6_000_000_100) - 3.0).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn animation_multiplier_scales_every_elapsed_interval() {
+        let mut clock = PausedAnimationClock::new_with_multiplier(0, 0.5);
+        assert!((clock.seconds(2_000_000_000) - 1.0).abs() < f32::EPSILON);
+        clock.pause(4_000_000_000);
+        assert!((clock.seconds(9_000_000_000) - 2.0).abs() < f32::EPSILON);
+        clock.resume(9_000_000_000);
+        assert!((clock.seconds(11_000_000_000) - 3.0).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn changing_animation_multiplier_preserves_phase_and_paused_time() {
+        let mut clock = PausedAnimationClock::new_with_multiplier(0, 0.5);
+        assert!((clock.seconds(2_000_000_000) - 1.0).abs() < f32::EPSILON);
+        clock.set_multiplier(1.0, 2_000_000_000);
+        assert!((clock.seconds(3_000_000_000) - 2.0).abs() < f32::EPSILON);
+        clock.pause(4_000_000_000);
+        clock.set_multiplier(0.25, 8_000_000_000);
+        assert!((clock.seconds(9_000_000_000) - 3.0).abs() < f32::EPSILON);
+        clock.resume(9_000_000_000);
+        assert!((clock.seconds(13_000_000_000) - 4.0).abs() < f32::EPSILON);
     }
 }

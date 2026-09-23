@@ -9,6 +9,7 @@ mod renderer;
 mod scene;
 mod scene_registry;
 mod scheduler;
+mod selection_state;
 mod wayland_surface;
 mod weather;
 

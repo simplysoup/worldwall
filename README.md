@@ -2,7 +2,7 @@
 
 A planned GPU-accelerated, weather- and time-aware pixel-art wallpaper engine for Hyprland/Wayland.
 
-**Current state:** S00–S10 are accepted, including the S10 IPC/config milestone; S11 release validation is in progress. CR-0004 records the physical incompatible-capability output result as explicit future work and `not-run`; no universal hardware-compatibility claim is made. Fractional-scale/viewport protocol handling and an assigned-host non-integer scale trace are implemented. Application-level allocation-event counters are instrumented; they do not measure driver allocator or VRAM statistics.
+**Current state:** Historical S00–S11 acceptances remain recorded. CR-0005 remains implemented with its separately classified evidence and limitations. CR-0006's approved policy remains in contract v0.6; CR-0007 adds the global half-speed animation multiplier in contract v0.7. Offline code tests do not constitute acceptance or live evidence. The supplied Monolith guide has been used for a private review crop, and animation speed is now global rather than V29-specific; adaptive registry validation and assigned-session swaps remain open. The Wayland-owner loading path remains blocked by RB-0005. The source-preserving V29 display was reported good, but its runner was aborted before technical finalization; output 115 pacing remains unresolved. The Worldwall launch hook is staged but next-login behavior is not verified. CR-0004's physical incompatible-capability output remains future work and `not-run`; no universal hardware-compatibility claim is made.
 
 ## Start here
 
@@ -14,7 +14,7 @@ A planned GPU-accelerated, weather- and time-aware pixel-art wallpaper engine fo
 6. [S03 evidence](docs/evidence/2026-09-21-s03-indexed-scene.md) — accepted M1 decoder/resource/live evidence.
 7. [Contributor instructions](AGENTS.md) — how to work safely and leave a useful handoff.
 
-**Current action:** Execute S11 release-validation work while retaining S09's renderer and pacing boundaries. S09's assigned-host integer/fractional scale, mixed-output, resize, hotplug, zero-output/reconnect, topology-during-sleep, and bounded pacing evidence is recorded as accepted by `simplysoup` on 2026-09-22. Physical incompatible-capability output evidence is explicitly future work and `not-run` under CR-0004; no universal hardware-compatibility claim is made. See the [S09 implementation and acceptance update](docs/updates/2026-09-22-s09-multi-output.md), [S10 implementation and acceptance update](docs/updates/2026-09-22-s10-ipc-config.md), and [current status](docs/status.md). Open-Meteo remains disabled unless explicitly configured with a provider name and latitude/longitude; weather completions never reselect a scene.
+**Current action:** Complete the remaining approved [CR-0006 implementation gates](docs/changes/CR-0006-weather-adaptive-scene-selection.md) and [CR-0007 animation evidence](docs/changes/CR-0007-global-animation-speed-multiplier.md). The private Monolith crop is review-only. RB-0005 still blocks claiming the off-thread IPC/config loading gates. No adaptive config activation, Worldwall launch/restart, next-login test, network request, private operator-config edit, or commit was performed. See the [CR-0006 update](docs/updates/2026-09-23-cr0006-weather-adaptive-scenes.md), [roadmap](docs/roadmap.md), and [current status](docs/status.md).
 
 ## Build and run the S03 indexed-scene path
 
@@ -22,7 +22,9 @@ S00 pins Rust 1.94.0 and exact dependency versions in `Cargo.toml`/`Cargo.lock`.
 The default binary connects to the current Wayland session, binds SCTK output
 and layer-shell globals, waits for configure, creates a Vulkan wgpu surface on
 the retained Background layer, and presents one static indexed synthetic scene. Set `WORLDWALL_SOLID_COLOR=1` to use the S02 solid-color diagnostic path.
-Set `WORLDWALL_LAYER_ONLY=1` to retain the S01 layer-only diagnostic path. Set `WORLDWALL_REGISTRY_DIR=/path/to/registry-root` to load and validate the explicit S05 registry, perform deterministic startup selection from an unknown snapshot (using the designated fallback when no environmental tag matches), and upload that candidate. The older `WORLDWALL_SCENE_DIR=/path/to/package` path remains available for one fixed package; add an optional strict S04 `animation.toml` beside it to enable GPU palette effects. With neither path, the original synthetic reference scene is used. If both paths are set, the validated registry is selected. Set `WORLDWALL_FPS=15` or `WORLDWALL_FPS=30` (the default) to select the pacing target. An optional package `time_of_day.toml` plus contained `time_of_day.png` 256×N atlas enables civil-time palette fades; set the explicit `WORLDWALL_UTC_OFFSET_MINUTES` to supply the configured civil offset. To enable resume-time astronomy selection, also set the explicit `WORLDWALL_LOCATION_LATITUDE` and `WORLDWALL_LOCATION_LONGITUDE`; without the offset/location pair, the environment receives visible unknown-safe time/season values and no host timezone is inferred. Suspend/resume listens to systemd-logind on the system bus when available and reports degraded support when it is missing. Clock updates only the resident palette uniform and never reselect a scene. To explicitly enable Open-Meteo, set `WORLDWALL_WEATHER=open-meteo`, `WORLDWALL_WEATHER_LATITUDE=<decimal>`, and `WORLDWALL_WEATHER_LONGITUDE=<decimal>`. With `WORLDWALL_WEATHER` unset, weather makes zero requests. Coordinates are sent to Open-Meteo over HTTPS and are not logged or cached.
+Set `WORLDWALL_LAYER_ONLY=1` to retain the S01 layer-only diagnostic path. Set `WORLDWALL_CONFIG=/path/to/worldwall.toml` for authoritative FPS, registry, optional explicit `[location]` (latitude, longitude, IANA timezone), and optional weather configuration. Schema v1-v3 remain readable; schema v2 adds location/weather, v3 adds default-off `[weather].adaptive_scenes`, and v4 adds global `animation_speed_multiplier` (default `0.5`, range `0.0..=1.0`). The tracked [example config](examples/worldwall.toml) leaves location unset, weather disabled, and adaptive selection off; it contains no sample coordinates or timezone. Add location only from explicit operator-supplied values.
+
+Without `WORLDWALL_CONFIG`, legacy `WORLDWALL_REGISTRY_DIR`, `WORLDWALL_FPS`, `WORLDWALL_LOCATION_*`, `WORLDWALL_UTC_OFFSET_MINUTES`, and `WORLDWALL_WEATHER*` inputs remain supported. When a config file is selected, those runtime values do not override it. `WORLDWALL_SCENE_DIR=/path/to/package` remains a separate fixed-scene source; with neither a package nor registry, the original synthetic reference scene is used. Add an optional `animation.toml` and contained `time_of_day.png` atlas for GPU effects. The global multiplier uniformly scales every animated palette effect while leaving civil/solar sampling independent. `time_of_day.toml` schema v1 uses civil seconds; schema v2 can opt into solar-event anchors, which require explicit configured location/timezone and fall back to the base palette when unavailable. No host timezone or location is inferred. Suspend/resume listens to systemd-logind when available and reports degraded support when it is missing. Clock/solar changes do not select scenes; weather is cache-only unless the valid schema-v3 opt-in permits a fresh same-family precipitation variant, never a family switch. Open-Meteo makes no requests unless explicitly enabled in config (or legacy environment mode without a config file); enabled coordinates are sent over HTTPS and are not logged or stored raw in the cache.
 
 ```sh
 cargo fmt --check
@@ -33,8 +35,9 @@ cargo run --locked
 ```
 
 The accepted animation schema and GPU layout are recorded in
-[ADR-0004](docs/decisions/ADR-0004-s04-animation.md); the additive civil-time
-atlas contract is recorded in [CR-0002](docs/changes/CR-0002-s06-time-of-day-palettes.md).
+[ADR-0004](docs/decisions/ADR-0004-s04-animation.md); civil-time v1 and the
+solar-event v2 atlas contracts are recorded in [CR-0002](docs/changes/CR-0002-s06-time-of-day-palettes.md)
+and [CR-0005](docs/changes/CR-0005-configured-location-weather-solar-lighting.md).
 Both files are optional. Unknown fields, overlapping groups, non-finite values,
 out-of-range indices, malformed keyframes, and escaping timeline assets are
 rejected.
@@ -85,9 +88,11 @@ worldwallctl weather
 ```
 
 Set `WORLDWALL_CONFIG` to a versioned config file when startup/config
-transactions should control `fps` and `registry_dir`; `reload-config` validates
-it atomically and never reselects a scene. See [IPC and configuration](docs/ipc.md)
-for the framed protocol, permission policy, stable semantics, and examples.
+transactions should control `fps`, `registry_dir`, explicit location/timezone,
+and optional weather/adaptive selection. `reload-config` validates and applies
+it atomically, never reselects a scene, and may start one bounded asynchronous
+request only if Open-Meteo is explicitly enabled. See [IPC and configuration](docs/ipc.md) for
+the framed protocol, permission policy, stable semantics, and examples.
 
 For repeatable lifecycle testing without changing the outer desktop
 session, run the nested real-Hyprland harness:

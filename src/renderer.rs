@@ -345,6 +345,15 @@ impl<'wayland> Renderer<'wayland> {
         animation_time_seconds: f32,
         civil_seconds: u32,
     ) -> Result<RenderOutcome, Box<dyn Error>> {
+        self.render_at_with_palette_sample(animation_time_seconds, civil_seconds, None)
+    }
+
+    pub fn render_at_with_palette_sample(
+        &mut self,
+        animation_time_seconds: f32,
+        civil_seconds: u32,
+        solar_sample: Option<crate::scene::ResolvedPaletteSample>,
+    ) -> Result<RenderOutcome, Box<dyn Error>> {
         #[cfg(debug_assertions)]
         if let Some(outcome) = self.test_surface_error.take() {
             println!("trace test-surface-error injected={outcome:?}");
@@ -359,6 +368,7 @@ impl<'wayland> Renderer<'wayland> {
                 civil_seconds.min(crate::scene::CIVIL_SECONDS_PER_DAY - 1),
                 self.scene.time_of_day_keyframe_count,
                 self.scene.time_of_day_enabled,
+                solar_sample,
             ),
         );
         self.animation_uniform_update_count = self.animation_uniform_update_count.saturating_add(1);
@@ -689,7 +699,7 @@ impl SharedRenderer {
         );
         let animation_clock_buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("worldwall-output-animation-clock"),
-            size: 16,
+            size: 32,
             usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::UNIFORM,
             mapped_at_creation: false,
         });
@@ -701,6 +711,7 @@ impl SharedRenderer {
                 0,
                 self.scene.time_of_day_keyframe_count,
                 self.scene.time_of_day_enabled,
+                None,
             ),
         );
         let bind_group = create_output_bind_group(
@@ -869,6 +880,15 @@ impl<'wayland> OutputRenderer<'wayland> {
         animation_time_seconds: f32,
         civil_seconds: u32,
     ) -> Result<RenderOutcome, Box<dyn Error>> {
+        self.render_at_with_palette_sample(animation_time_seconds, civil_seconds, None)
+    }
+
+    pub fn render_at_with_palette_sample(
+        &mut self,
+        animation_time_seconds: f32,
+        civil_seconds: u32,
+        solar_sample: Option<crate::scene::ResolvedPaletteSample>,
+    ) -> Result<RenderOutcome, Box<dyn Error>> {
         #[cfg(debug_assertions)]
         if let Some(outcome) = self.test_surface_error.take() {
             println!("trace test-output-surface-error injected={outcome:?}");
@@ -882,6 +902,7 @@ impl<'wayland> OutputRenderer<'wayland> {
                 civil_seconds.min(crate::scene::CIVIL_SECONDS_PER_DAY - 1),
                 self.time_of_day_keyframe_count,
                 self.time_of_day_enabled,
+                solar_sample,
             ),
         );
         self.animation_uniform_update_count = self.animation_uniform_update_count.saturating_add(1);
@@ -1088,12 +1109,26 @@ fn animation_clock_bytes(
     civil_seconds: u32,
     keyframe_count: u32,
     enabled: bool,
-) -> [u8; 16] {
-    let mut bytes = [0u8; 16];
+    solar_sample: Option<crate::scene::ResolvedPaletteSample>,
+) -> [u8; 32] {
+    let mut bytes = [0u8; 32];
     bytes[0..4].copy_from_slice(&seconds.to_ne_bytes());
     bytes[4..8].copy_from_slice(&(civil_seconds as f32).to_ne_bytes());
     bytes[8..12].copy_from_slice(&(keyframe_count as f32).to_ne_bytes());
     bytes[12..16].copy_from_slice(&(if enabled { 1.0 } else { 0.0_f32 }).to_ne_bytes());
+    let (lower_row, upper_row, amount, mode): (f32, f32, f32, f32) = match solar_sample {
+        None => (0.0, 0.0, 0.0, 0.0),
+        Some(crate::scene::ResolvedPaletteSample::Base) => (0.0, 0.0, 0.0, 2.0),
+        Some(crate::scene::ResolvedPaletteSample::Rows {
+            lower_row,
+            upper_row,
+            amount,
+        }) => (lower_row as f32, upper_row as f32, amount, 1.0),
+    };
+    bytes[16..20].copy_from_slice(&lower_row.to_ne_bytes());
+    bytes[20..24].copy_from_slice(&upper_row.to_ne_bytes());
+    bytes[24..28].copy_from_slice(&amount.to_ne_bytes());
+    bytes[28..32].copy_from_slice(&mode.to_ne_bytes());
     bytes
 }
 
@@ -1250,7 +1285,7 @@ fn upload_scene_with_layout(
             timeline.rows,
             timeline.rgba.clone(),
             timeline.keyframe_bytes(),
-            timeline.keyframes.len() as u32,
+            timeline.keyframe_count() as u32,
             true,
         ),
         None => (1, scene.palette.rgba.to_vec(), vec![0u8; 32], 0, false),
@@ -1298,14 +1333,20 @@ fn upload_scene_with_layout(
 
     let animation_clock_buffer = device.create_buffer(&wgpu::BufferDescriptor {
         label: Some("worldwall-animation-clock"),
-        size: 16,
+        size: 32,
         usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::UNIFORM,
         mapped_at_creation: false,
     });
     queue.write_buffer(
         &animation_clock_buffer,
         0,
-        &animation_clock_bytes(0.0, 0, time_of_day_keyframe_count, time_of_day_enabled),
+        &animation_clock_bytes(
+            0.0,
+            0,
+            time_of_day_keyframe_count,
+            time_of_day_enabled,
+            None,
+        ),
     );
 
     // Reuse the renderer's layout during a replacement. A standalone upload
@@ -1371,7 +1412,7 @@ fn upload_scene_with_layout(
                     ty: wgpu::BindingType::Buffer {
                         ty: wgpu::BufferBindingType::Uniform,
                         has_dynamic_offset: false,
-                        min_binding_size: NonZeroU64::new(16),
+                        min_binding_size: NonZeroU64::new(32),
                     },
                     count: None,
                 },
@@ -1551,6 +1592,7 @@ struct PaletteMetadata {
 
 struct AnimationClock {
     values: vec4f,
+    solar: vec4f,
 };
 
 @group(0) @binding(3) var<storage, read> animation_metadata: array<PaletteMetadata>;
@@ -1607,6 +1649,22 @@ fn time_of_day_bytes(index: u32) -> vec3f {
     let count = u32(animation_clock.values.z);
     if count < 2u {
         return palette_bytes(index);
+    }
+    if animation_clock.solar.w > 1.5 {
+        return palette_bytes(index);
+    }
+    if animation_clock.solar.w > 0.5 {
+        let lower_color = floor(textureLoad(
+            time_of_day_atlas,
+            vec2<i32>(i32(index), i32(u32(animation_clock.solar.x))),
+            0,
+        ).rgb * 255.0 + vec3f(0.5));
+        let upper_color = floor(textureLoad(
+            time_of_day_atlas,
+            vec2<i32>(i32(index), i32(u32(animation_clock.solar.y))),
+            0,
+        ).rgb * 255.0 + vec3f(0.5));
+        return floor(lower_color + (upper_color - lower_color) * vec3f(animation_clock.solar.z));
     }
     let civil = min(animation_clock.values.y, 86399.0);
     let civil_u = u32(civil);
@@ -2056,6 +2114,26 @@ mod tests {
         animation_time_seconds: f32,
         civil_seconds: u32,
     ) -> Vec<u8> {
+        readback_scene_with_sample(
+            device,
+            queue,
+            scene,
+            output_extent,
+            animation_time_seconds,
+            civil_seconds,
+            None,
+        )
+    }
+
+    fn readback_scene_with_sample(
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        scene: &Scene,
+        output_extent: (u32, u32),
+        animation_time_seconds: f32,
+        civil_seconds: u32,
+        solar_sample: Option<crate::scene::ResolvedPaletteSample>,
+    ) -> Vec<u8> {
         use std::{sync::mpsc, time::Duration};
 
         let uploaded = upload_scene(device, queue, scene, output_extent).unwrap();
@@ -2067,6 +2145,7 @@ mod tests {
                 civil_seconds,
                 uploaded.time_of_day_keyframe_count,
                 uploaded.time_of_day_enabled,
+                solar_sample,
             ),
         );
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
@@ -2282,7 +2361,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "requires a Vulkan adapter; run explicitly for CR-0002 GPU evidence"]
+    #[ignore = "requires a Vulkan adapter; run explicitly for S04/CR-0002/CR-0005 GPU readback evidence"]
     fn gpu_time_of_day_palette_readback_matches_byte_floor_reference() {
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
             backends: wgpu::Backends::VULKAN,
@@ -2343,5 +2422,114 @@ mod tests {
             assert_eq!(&actual[..3], &expected);
             assert_eq!(actual[3], 255);
         }
+
+        let solar_timeline = crate::scene::TimeOfDayPalette::new_solar(
+            2,
+            [
+                [10, 20, 30, 255]
+                    .into_iter()
+                    .cycle()
+                    .take(256 * 4)
+                    .collect::<Vec<_>>(),
+                [20, 10, 40, 255]
+                    .into_iter()
+                    .cycle()
+                    .take(256 * 4)
+                    .collect::<Vec<_>>(),
+            ]
+            .concat(),
+            vec![
+                crate::scene::SolarTimeOfDayKeyframe {
+                    event: crate::scene::SolarEvent::Sunrise,
+                    offset_minutes: -30,
+                    row: 0,
+                },
+                crate::scene::SolarTimeOfDayKeyframe {
+                    event: crate::scene::SolarEvent::Sunset,
+                    offset_minutes: 30,
+                    row: 1,
+                },
+            ],
+        )
+        .unwrap();
+        let mut base_palette = [0u8; 256 * 4];
+        for entry in base_palette.chunks_exact_mut(4) {
+            entry[3] = 255;
+        }
+        base_palette[0..4].copy_from_slice(&[40, 50, 60, 255]);
+        let solar_scene = Scene::with_resources(
+            crate::scene::IndexedImage {
+                width: 1,
+                height: 1,
+                indices: vec![0],
+            },
+            crate::scene::Palette { rgba: base_palette },
+            crate::animation::Animation::static_default(),
+            Some(solar_timeline),
+        )
+        .unwrap();
+        let actual = readback_scene_with_sample(
+            &device,
+            &queue,
+            &solar_scene,
+            (1, 1),
+            0.0,
+            0,
+            Some(crate::scene::ResolvedPaletteSample::Rows {
+                lower_row: 0,
+                upper_row: 1,
+                amount: 0.5,
+            }),
+        );
+        assert_eq!(&actual[..3], &[15, 15, 35]);
+
+        let animated = crate::animation::Animation::from_toml(
+            r#"
+                schema_version = 1
+                [[group]]
+                name = "solar-pulse"
+                effect = "brightness_pulse"
+                indices = [0]
+                speed = 0.25
+                amplitude = 0.5
+                phase = 0.0
+            "#,
+        )
+        .unwrap();
+        let animated_scene = Scene::with_resources(
+            solar_scene.image.clone(),
+            solar_scene.palette.clone(),
+            animated.clone(),
+            solar_scene.time_of_day.clone(),
+        )
+        .unwrap();
+        let animated_actual = readback_scene_with_sample(
+            &device,
+            &queue,
+            &animated_scene,
+            (1, 1),
+            1.0,
+            0,
+            Some(crate::scene::ResolvedPaletteSample::Rows {
+                lower_row: 0,
+                upper_row: 1,
+                amount: 0.5,
+            }),
+        );
+        let mut solar_interpolated_palette = solar_scene.palette.rgba;
+        solar_interpolated_palette[0..4].copy_from_slice(&[15, 15, 35, 255]);
+        let expected_animated_palette = animated.apply_palette(&solar_interpolated_palette, 1.0);
+        assert_eq!(&animated_actual[..3], &expected_animated_palette[..3]);
+
+        let fallback = readback_scene_with_sample(
+            &device,
+            &queue,
+            &solar_scene,
+            (1, 1),
+            0.0,
+            0,
+            Some(crate::scene::ResolvedPaletteSample::Base),
+        );
+        assert_eq!(&fallback[..3], &[40, 50, 60]);
     }
 }

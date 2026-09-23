@@ -10,7 +10,7 @@ S09 accepted. Freeze a versioned command/request/response schema, request limits
 
 ## Deliverables
 
-`worldwallctl`, same-user Unix socket, protocol tests, atomic config validation/application, structured rate-limited diagnostics, and user-facing command documentation.
+`worldwallctl`, same-user Unix socket, protocol tests, atomic schema-v1/v2/v3/v4 config validation/application (including explicit location/timezone, optional weather, default-off adaptive selection, and the global animation-speed multiplier), structured rate-limited diagnostics, and user-facing command documentation.
 
 ## Execution
 
@@ -18,17 +18,21 @@ S09 accepted. Freeze a versioned command/request/response schema, request limits
 2. Define protocol version, framing, maximum request/response size, command timeout, error codes, and success payloads. Bound clients/queues and handle partial/malformed requests.
 3. Route commands to the event-loop owner; never mutate GPU/Wayland resources directly from client I/O threads.
 4. Implement `status` (outputs, scene, weather freshness, FPS, backend, degraded state), `weather` (cache only), `reload` (bounded refresh + selection), `scene <id>`, `next`, and `reload-config` (transactional config, no reselection).
-5. Validate complete candidate config and resource consequences before committing it. Keep the active scene resident if registry paths change; reject config lacking a viable future fallback.
-6. Apply weather/location changes without leaking credentials or letting old-location responses populate the new cache. Rearm services under the new generation safely.
+5. Validate complete candidate config and resource consequences before committing it. Preserve schema v1-v3; schema v3 adds `[weather].adaptive_scenes = false` by default and accepts true only with enabled Open-Meteo, explicit location, and a validated adaptive registry. Schema v4 adds `animation_speed_multiplier` in `0.0..=1.0`, defaulting to `0.5` when absent in every supported schema.
+6. Keep the active scene resident if registry/location/timezone/provider paths change; reject config lacking a viable future fallback. Apply weather/location changes without leaking credentials or reusing a cache from a changed config generation; retire the old worker before starting a newly enabled provider.
 7. Test socket ownership, concurrent clients, stalled connections, stale sockets, invalid IDs/config, command ordering, disconnect, clean shutdown, and double startup.
 
 ## Acceptance criteria
 
 - [ ] **S10-AC1:** All six command forms have documented stable semantics, output/error examples, and end-to-end tests against the running service.
 - [ ] **S10-AC2:** Socket ownership/permissions/peer policy, framing/size/time limits, concurrent clients, and stale-path handling are tested; clients cannot block rendering or mutate state unsafely.
-- [ ] **S10-AC3:** `reload` selects once, `reload-config` never selects, `weather` never fetches, and failed commands leave active state unchanged. Late async completions respect command generation.
+- [ ] **S10-AC3:** `reload` selects once, `reload-config` never selects, `weather` never fetches, and failed commands leave active state unchanged. A successful config reload invalidates queued adaptive candidates; late async completions respect command generation.
 - [ ] **S10-AC4:** Invalid config is rejected atomically; valid changes reconfigure only intended services and preserve current scene/resources until an explicit selection.
 - [ ] **S10-AC5:** Status/logging exposes degraded/freshness/backend/output state without secrets or exact location, and diagnostics are rate-limited under repeated failures.
+- [ ] **S10-AC6 (CR-0005):** Schema-v1 compatibility and schema-v2 authority/validation are tested; valid location/timezone/provider reloads apply atomically without reselection; invalid replacements preserve the active config, scene, and provider; weather stays disabled unless explicitly enabled.
+- [ ] **S10-AC7 (CR-0006):** Schema-v3 compatibility/validation, adaptive registry requirements, privacy-safe family/band persistence, config-reload invalidation, and default-off behavior pass. No config reload or late candidate changes family outside an explicit full-selection trigger.
+- [ ] **S10-AC8 (CR-0006):** IPC/config and scene-package loading leave the Wayland event thread responsive; asynchronous candidate completion preserves established command and transactional failure semantics.
+- [ ] **S10-AC9 (CR-0007):** Schema-v4 multiplier parsing/range/default compatibility and transactional reload are tested; a successful rate change preserves scene identity/generation and animation phase, while an invalid candidate leaves config, rate, and resident scene unchanged.
 
 ## Failure and rollback
 
@@ -36,4 +40,4 @@ Reject ambiguous or incompatible protocol/config versions with clear errors. Nev
 
 ## Handoff
 
-Provide protocol/config references, permission tests, CLI examples, generation ordering tests, and diagnostics catalogue. S11 uses real commands for acceptance and release runbooks.
+Provide protocol/config references, permission tests, CLI examples, generation ordering tests, and diagnostics catalogue. CR-0005 adds IANA/location/weather reload tests and privacy/cache-scope evidence. S11 uses real commands for acceptance and release runbooks.

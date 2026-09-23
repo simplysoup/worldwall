@@ -1,4 +1,17 @@
-# Minimal private configuration example. No scene or artwork is bundled.
-schema_version = 1
+# Minimal privacy-safe private configuration. No location or artwork is bundled.
+schema_version = 4
 fps = 30
 registry_dir = "none"
+animation_speed_multiplier = 0.5
+
+# Weather remains disabled unless explicitly configured.
+[weather]
+provider = "disabled"
+adaptive_scenes = false
+
+# Optional location must be supplied explicitly by the operator; no values are
+# provided here. Add a complete [location] table only when configured:
+# [location]
+# latitude = <explicit decimal latitude>
+# longitude = <explicit decimal longitude>
+# timezone = "<explicit IANA timezone>"

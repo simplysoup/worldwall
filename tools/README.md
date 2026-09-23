@@ -27,7 +27,7 @@ cargo build --locked
 python3 tools/run_effectgames_matrix.py \
   --fps 30 \
   --duration-seconds 3 \
-  --output-dir /home/soup/.local/state/worldwall/cr003-effectgames-$(date -u +%Y%m%dT%H%M%SZ)
+  --output-dir "${XDG_STATE_HOME:-$HOME/.local/state}/worldwall/cr003-effectgames-$(date -u +%Y%m%dT%H%M%SZ)"
 ```
 
 The registry directory defaults to `fixtures/untracked/effectgames`; the
@@ -46,7 +46,7 @@ A JSON config can hold repeatable settings. CLI options override config values:
   "duration_seconds": 3,
   "timeout_grace_seconds": 10,
   "utc_offset_minutes": 0,
-  "output_dir": "/home/soup/.local/state/worldwall/cr003-effectgames-rerun",
+  "output_dir": "/path/to/private-state/worldwall/cr003-effectgames-rerun",
   "env": {}
 }
 ```
@@ -73,6 +73,12 @@ Use `--allow-dirty` only for a local smoke package; use `--force` only to
 replace the generated output directory. This tool does not install, publish,
 or alter the compositor/session configuration. See the [release runbook](../docs/release.md).
 
+## CR-0005 offline and assigned-session tests
+
+`run_cr0005_tests.py --prepare-live` runs the per-command logged offline batch (format, complete Rust tests, explicit Vulkan solar readback, Clippy, debug-binary build, docs/tool tests, and diff check) and prepares a private weather-disabled copy that preserves the source Effect Games civil-time timeline and atlas byte-for-byte. It never launches Worldwall. See the [CR-0005 test batch run guide](../docs/updates/2026-09-23-cr0005-test-batch-run-guide.md) for the exact evidence files and intervention boundary.
+
+Only after the user has chosen a safe session window and stopped any existing Worldwall instance themselves, run the separate `run_cr0005_live.py --bundle PATH --confirm-live-run`. It refuses to launch if another Worldwall process exists, uses the system wall clock unless a fixed debug time is explicitly requested, uses a debug-only deadline, records application/control/frame logs, checks valid/invalid config reloads, and asks for a separate visual observation. The test config disables weather; neither runner sends an Open-Meteo request or changes compositor/session configuration. Never treat offline tests or screenshots as assigned-session evidence.
+
 ## S10 IPC live runner
 
 `run_s10_ipc.py` starts the debug binary on the current Wayland session with a
@@ -87,7 +93,7 @@ directory:
 ```sh
 cargo build --locked
 python3 tools/run_s10_ipc.py \
-  --output-dir /home/soup/.local/state/worldwall/s10-ipc-live-$(date -u +%Y%m%dT%H%M%SZ)
+  --output-dir "${XDG_STATE_HOME:-$HOME/.local/state}/worldwall/s10-ipc-live-$(date -u +%Y%m%dT%H%M%SZ)"
 ```
 
 To exercise the foreign-UID peer check, run the complete runner from the
@@ -95,7 +101,7 @@ original desktop user's shell with the session environment preserved:
 
 ```sh
 sudo -E python3 tools/run_s10_ipc.py \
-  --output-dir /home/soup/.local/state/worldwall/s10-ipc-live-root-$(date -u +%Y%m%dT%H%M%SZ)
+  --output-dir "${XDG_STATE_HOME:-$HOME/.local/state}/worldwall/s10-ipc-live-root-$(date -u +%Y%m%dT%H%M%SZ)"
 ```
 
 When started as root, the runner launches Worldwall as `SUDO_UID`/`SUDO_GID`,

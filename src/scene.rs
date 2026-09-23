@@ -11,7 +11,7 @@ use std::{
     path::Path,
 };
 
-use crate::animation::Animation;
+use crate::{animation::Animation, environment::SolarEvents};
 use png::{BitDepth, ColorType, Decoder, Limits};
 
 /// Maximum compressed size accepted for one S03 PNG input.
@@ -24,6 +24,8 @@ const MAX_DECODER_BYTES: usize = 64 * 1024 * 1024;
 pub const CIVIL_SECONDS_PER_DAY: u32 = 86_400;
 /// Time-of-day palette rows are intentionally bounded to keep scene uploads small.
 pub const MAX_TIME_OF_DAY_ROWS: u32 = 256;
+/// Shader traversal and per-frame solar anchor sorting have a fixed upper bound.
+pub const MAX_TIME_OF_DAY_KEYFRAMES: usize = 256;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct IndexedImage {
@@ -46,12 +48,39 @@ pub struct TimeOfDayKeyframe {
     pub row: u32,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SolarEvent {
+    Sunrise,
+    Sunset,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SolarTimeOfDayKeyframe {
+    pub event: SolarEvent,
+    pub offset_minutes: i16,
+    pub row: u32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum ResolvedPaletteSample {
+    /// Solar events could not safely define a sample; use the base palette.
+    Base,
+    Rows {
+        lower_row: u32,
+        upper_row: u32,
+        amount: f32,
+    },
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TimeOfDayPalette {
     pub rows: u32,
     /// Authored sRGB RGBA8 bytes, row-major, with 256 entries per row.
     pub rgba: Vec<u8>,
+    /// Schema-v1 civil keyframes. Empty only for a solar schema-v2 timeline.
     pub keyframes: Vec<TimeOfDayKeyframe>,
+    /// Present only for schema-v2 solar timelines.
+    pub solar_keyframes: Option<Vec<SolarTimeOfDayKeyframe>>,
 }
 
 impl TimeOfDayPalette {
@@ -65,10 +94,47 @@ impl TimeOfDayPalette {
             rows,
             rgba,
             keyframes,
+            solar_keyframes: None,
         })
     }
 
+    pub fn new_solar(
+        rows: u32,
+        rgba: Vec<u8>,
+        keyframes: Vec<SolarTimeOfDayKeyframe>,
+    ) -> Result<Self, SceneError> {
+        validate_atlas(rows, &rgba)?;
+        validate_solar_keyframes(rows, &keyframes)?;
+        Ok(Self {
+            rows,
+            rgba,
+            keyframes: Vec::new(),
+            solar_keyframes: Some(keyframes),
+        })
+    }
+
+    pub fn keyframe_count(&self) -> usize {
+        self.solar_keyframes
+            .as_ref()
+            .map_or(self.keyframes.len(), Vec::len)
+    }
+
     pub fn keyframe_bytes(&self) -> Vec<u8> {
+        if let Some(keyframes) = &self.solar_keyframes {
+            return keyframes
+                .iter()
+                .flat_map(|keyframe| {
+                    [
+                        0u32.to_ne_bytes(),
+                        keyframe.row.to_ne_bytes(),
+                        0u32.to_ne_bytes(),
+                        0u32.to_ne_bytes(),
+                    ]
+                    .into_iter()
+                    .flatten()
+                })
+                .collect();
+        }
         self.keyframes
             .iter()
             .flat_map(|keyframe| {
@@ -84,10 +150,56 @@ impl TimeOfDayPalette {
             .collect()
     }
 
-    /// CPU reference for the shader's authored-byte timeline interpolation.
+    /// Resolve a bounded row-pair/fraction using previous/current/next local
+    /// dates in order. `None` means this is a civil timeline; `Base` is the
+    /// specified fallback for missing, polar, duplicate, or unbracketed data.
+    pub fn resolve_solar_sample(
+        &self,
+        utc_seconds: i64,
+        events_by_local_date: &[SolarEvents; 3],
+    ) -> Option<ResolvedPaletteSample> {
+        let keyframes = self.solar_keyframes.as_ref()?;
+        let mut anchors = Vec::with_capacity(keyframes.len() * events_by_local_date.len());
+        for events in events_by_local_date {
+            for keyframe in keyframes {
+                let event_seconds = match keyframe.event {
+                    SolarEvent::Sunrise => events.sunrise_utc_seconds,
+                    SolarEvent::Sunset => events.sunset_utc_seconds,
+                };
+                let Some(event_seconds) = event_seconds else {
+                    return Some(ResolvedPaletteSample::Base);
+                };
+                let Some(instant) =
+                    event_seconds.checked_add(i64::from(keyframe.offset_minutes) * 60)
+                else {
+                    return Some(ResolvedPaletteSample::Base);
+                };
+                anchors.push((instant, keyframe.row));
+            }
+        }
+        anchors.sort_unstable_by_key(|anchor| anchor.0);
+        if anchors.windows(2).any(|pair| pair[0].0 == pair[1].0) {
+            return Some(ResolvedPaletteSample::Base);
+        }
+        let upper = anchors.partition_point(|anchor| anchor.0 <= utc_seconds);
+        if upper == 0 || upper == anchors.len() {
+            return Some(ResolvedPaletteSample::Base);
+        }
+        let (lower_seconds, lower_row) = anchors[upper - 1];
+        let (upper_seconds, upper_row) = anchors[upper];
+        let amount = (utc_seconds - lower_seconds) as f64 / (upper_seconds - lower_seconds) as f64;
+        Some(ResolvedPaletteSample::Rows {
+            lower_row,
+            upper_row,
+            amount: amount.clamp(0.0, 1.0) as f32,
+        })
+    }
+
+    /// CPU reference for the shader's authored-byte civil timeline.
     #[cfg(test)]
     pub fn sample_rgb(&self, index: usize, civil_seconds: u32) -> [u8; 3] {
         assert!(index < 256);
+        assert!(self.solar_keyframes.is_none());
         let civil_seconds = civil_seconds % CIVIL_SECONDS_PER_DAY;
         let lower = self
             .keyframes
@@ -346,9 +458,7 @@ pub fn load_time_of_day(path: impl AsRef<Path>) -> Result<TimeOfDayPalette, Scen
     let input = std::str::from_utf8(&input)
         .map_err(|error| SceneError(format!("time-of-day manifest is not UTF-8: {error}")))?;
     let values = parse_time_of_day_manifest(input)?;
-    let atlas = values
-        .atlas
-        .ok_or_else(|| SceneError("time-of-day atlas is required".into()))?;
+    let atlas = values.atlas;
     let atlas_relative = Path::new(&atlas);
     if atlas_relative.is_absolute()
         || atlas_relative.components().any(|component| {
@@ -372,7 +482,11 @@ pub fn load_time_of_day(path: impl AsRef<Path>) -> Result<TimeOfDayPalette, Scen
     }
     let atlas_bytes = read_bounded(&atlas_path, "time-of-day atlas")?;
     let (rows, rgba) = decode_time_of_day_png(&atlas_bytes)?;
-    TimeOfDayPalette::new(rows, rgba, values.keyframes)
+    match values.schema_version {
+        1 => TimeOfDayPalette::new(rows, rgba, values.civil_keyframes),
+        2 => TimeOfDayPalette::new_solar(rows, rgba, values.solar_keyframes),
+        _ => unreachable!("manifest parser validates schema versions"),
+    }
 }
 
 /// Decode the contained 256 x N opaque RGBA8 time-of-day atlas.
@@ -512,21 +626,31 @@ pub fn cover_source_coord(source: (u32, u32), output: (u32, u32), pixel: (u32, u
     )
 }
 
-#[derive(Default)]
 struct TimeOfDayManifestValues {
+    schema_version: u32,
+    atlas: String,
+    civil_keyframes: Vec<TimeOfDayKeyframe>,
+    solar_keyframes: Vec<SolarTimeOfDayKeyframe>,
+}
+
+#[derive(Default)]
+struct TimeOfDayManifestBuilder {
     schema_version: Option<u32>,
+    basis: Option<String>,
     atlas: Option<String>,
-    keyframes: Vec<TimeOfDayKeyframe>,
+    keyframes: Vec<TimeOfDayKeyframeBuilder>,
 }
 
 #[derive(Default)]
 struct TimeOfDayKeyframeBuilder {
     civil_seconds: Option<u32>,
+    event: Option<SolarEvent>,
+    offset_minutes: Option<i16>,
     row: Option<u32>,
 }
 
 fn parse_time_of_day_manifest(input: &str) -> Result<TimeOfDayManifestValues, SceneError> {
-    let mut values = TimeOfDayManifestValues::default();
+    let mut values = TimeOfDayManifestBuilder::default();
     let mut current: Option<TimeOfDayKeyframeBuilder> = None;
     for (line_number, raw_line) in input.lines().enumerate() {
         let line_number = line_number + 1;
@@ -536,9 +660,7 @@ fn parse_time_of_day_manifest(input: &str) -> Result<TimeOfDayManifestValues, Sc
         }
         if line == "[[keyframe]]" {
             if let Some(builder) = current.take() {
-                values
-                    .keyframes
-                    .push(finish_time_of_day_keyframe(builder, line_number)?);
+                values.keyframes.push(builder);
             }
             current = Some(TimeOfDayKeyframeBuilder::default());
             continue;
@@ -555,6 +677,26 @@ fn parse_time_of_day_manifest(input: &str) -> Result<TimeOfDayManifestValues, Sc
                 "civil_seconds" => {
                     assign_time_of_day_u32(&mut keyframe.civil_seconds, value, line_number, key)?
                 }
+                "event" => {
+                    let event = parse_time_of_day_string(value, line_number, key)?;
+                    if keyframe.event.is_some() {
+                        return Err(SceneError(format!(
+                            "time-of-day line {line_number}: duplicate key {key:?}"
+                        )));
+                    }
+                    keyframe.event = Some(match event.as_str() {
+                        "sunrise" => SolarEvent::Sunrise,
+                        "sunset" => SolarEvent::Sunset,
+                        _ => {
+                            return Err(SceneError(format!(
+                                "time-of-day line {line_number}: event must be sunrise or sunset"
+                            )));
+                        }
+                    });
+                }
+                "offset_minutes" => {
+                    assign_time_of_day_i16(&mut keyframe.offset_minutes, value, line_number, key)?
+                }
                 "row" => assign_time_of_day_u32(&mut keyframe.row, value, line_number, key)?,
                 _ => {
                     return Err(SceneError(format!(
@@ -567,13 +709,18 @@ fn parse_time_of_day_manifest(input: &str) -> Result<TimeOfDayManifestValues, Sc
                 "schema_version" => {
                     assign_time_of_day_u32(&mut values.schema_version, value, line_number, key)?
                 }
-                "atlas" => {
-                    if values.atlas.is_some() {
+                "basis" | "atlas" => {
+                    let slot = if key == "basis" {
+                        &mut values.basis
+                    } else {
+                        &mut values.atlas
+                    };
+                    if slot.is_some() {
                         return Err(SceneError(format!(
                             "time-of-day line {line_number}: duplicate key {key:?}"
                         )));
                     }
-                    values.atlas = Some(parse_time_of_day_string(value, line_number, key)?);
+                    *slot = Some(parse_time_of_day_string(value, line_number, key)?);
                 }
                 _ => {
                     return Err(SceneError(format!(
@@ -584,35 +731,94 @@ fn parse_time_of_day_manifest(input: &str) -> Result<TimeOfDayManifestValues, Sc
         }
     }
     if let Some(builder) = current {
-        values.keyframes.push(finish_time_of_day_keyframe(
-            builder,
-            input.lines().count().max(1),
-        )?);
+        values.keyframes.push(builder);
     }
-    if values.schema_version != Some(1) {
-        return Err(SceneError(format!(
-            "time-of-day schema_version must be 1, got {:?}",
-            values.schema_version
-        )));
-    }
-    if values.atlas.as_deref().is_none_or(str::is_empty) {
-        return Err(SceneError("time-of-day atlas is required".into()));
-    }
+    let schema_version = values
+        .schema_version
+        .ok_or_else(|| SceneError("time-of-day schema_version is required".into()))?;
+    let atlas = values
+        .atlas
+        .filter(|atlas| !atlas.is_empty())
+        .ok_or_else(|| SceneError("time-of-day atlas is required".into()))?;
+    let line = input.lines().count().max(1);
+    let (civil_keyframes, solar_keyframes) = match (schema_version, values.basis.as_deref()) {
+        (1, None) => {
+            let keyframes = values
+                .keyframes
+                .into_iter()
+                .map(|builder| finish_civil_time_of_day_keyframe(builder, line))
+                .collect::<Result<Vec<_>, _>>()?;
+            (keyframes, Vec::new())
+        }
+        (2, Some("solar")) => {
+            let keyframes = values
+                .keyframes
+                .into_iter()
+                .map(|builder| finish_solar_time_of_day_keyframe(builder, line))
+                .collect::<Result<Vec<_>, _>>()?;
+            (Vec::new(), keyframes)
+        }
+        (1, Some(_)) => {
+            return Err(SceneError(
+                "time-of-day schema v1 does not support basis".into(),
+            ));
+        }
+        (2, _) => {
+            return Err(SceneError(
+                "time-of-day schema v2 requires basis = \"solar\"".into(),
+            ));
+        }
+        (version, _) => {
+            return Err(SceneError(format!(
+                "time-of-day schema_version must be 1 or 2, got {version}"
+            )));
+        }
+    };
     Ok(TimeOfDayManifestValues {
-        schema_version: values.schema_version,
-        atlas: values.atlas,
-        keyframes: values.keyframes,
+        schema_version,
+        atlas,
+        civil_keyframes,
+        solar_keyframes,
     })
 }
 
-fn finish_time_of_day_keyframe(
+fn finish_civil_time_of_day_keyframe(
     builder: TimeOfDayKeyframeBuilder,
     line: usize,
 ) -> Result<TimeOfDayKeyframe, SceneError> {
+    if builder.event.is_some() || builder.offset_minutes.is_some() {
+        return Err(SceneError(format!(
+            "time-of-day line {line}: schema v1 accepts only civil_seconds and row"
+        )));
+    }
     Ok(TimeOfDayKeyframe {
         civil_seconds: builder.civil_seconds.ok_or_else(|| {
             SceneError(format!(
                 "time-of-day line {line}: civil_seconds is required"
+            ))
+        })?,
+        row: builder
+            .row
+            .ok_or_else(|| SceneError(format!("time-of-day line {line}: row is required")))?,
+    })
+}
+
+fn finish_solar_time_of_day_keyframe(
+    builder: TimeOfDayKeyframeBuilder,
+    line: usize,
+) -> Result<SolarTimeOfDayKeyframe, SceneError> {
+    if builder.civil_seconds.is_some() {
+        return Err(SceneError(format!(
+            "time-of-day line {line}: schema v2 accepts event anchors, not civil_seconds"
+        )));
+    }
+    Ok(SolarTimeOfDayKeyframe {
+        event: builder
+            .event
+            .ok_or_else(|| SceneError(format!("time-of-day line {line}: event is required")))?,
+        offset_minutes: builder.offset_minutes.ok_or_else(|| {
+            SceneError(format!(
+                "time-of-day line {line}: offset_minutes is required"
             ))
         })?,
         row: builder
@@ -640,6 +846,25 @@ fn assign_time_of_day_u32(
     Ok(())
 }
 
+fn assign_time_of_day_i16(
+    slot: &mut Option<i16>,
+    value: &str,
+    line: usize,
+    key: &str,
+) -> Result<(), SceneError> {
+    if slot.is_some() {
+        return Err(SceneError(format!(
+            "time-of-day line {line}: duplicate key {key:?}"
+        )));
+    }
+    *slot = Some(value.parse::<i16>().map_err(|_| {
+        SceneError(format!(
+            "time-of-day line {line}: {key} must be a signed integer"
+        ))
+    })?);
+    Ok(())
+}
+
 fn parse_time_of_day_string(value: &str, line: usize, key: &str) -> Result<String, SceneError> {
     value
         .strip_prefix('"')
@@ -653,11 +878,7 @@ fn parse_time_of_day_string(value: &str, line: usize, key: &str) -> Result<Strin
         })
 }
 
-fn validate_time_of_day(
-    rows: u32,
-    rgba: &[u8],
-    keyframes: &[TimeOfDayKeyframe],
-) -> Result<(), SceneError> {
+fn validate_atlas(rows: u32, rgba: &[u8]) -> Result<(), SceneError> {
     if !(1..=MAX_TIME_OF_DAY_ROWS).contains(&rows) {
         return Err(SceneError(format!(
             "time-of-day atlas has invalid row count {rows}"
@@ -673,9 +894,28 @@ fn validate_time_of_day(
             rgba.len()
         )));
     }
+    if rgba.chunks_exact(4).any(|entry| entry[3] != 255) {
+        return Err(SceneError(
+            "time-of-day atlas entries must be opaque RGBA8 (alpha 255)".into(),
+        ));
+    }
+    Ok(())
+}
+
+fn validate_time_of_day(
+    rows: u32,
+    rgba: &[u8],
+    keyframes: &[TimeOfDayKeyframe],
+) -> Result<(), SceneError> {
+    validate_atlas(rows, rgba)?;
     if keyframes.len() < 2 {
         return Err(SceneError(
             "time-of-day timeline requires at least two keyframes".into(),
+        ));
+    }
+    if keyframes.len() > MAX_TIME_OF_DAY_KEYFRAMES {
+        return Err(SceneError(
+            "time-of-day timeline exceeds the bounded keyframe limit".into(),
         ));
     }
     let mut previous = None;
@@ -692,20 +932,42 @@ fn validate_time_of_day(
             ));
         }
         previous = Some(keyframe.civil_seconds);
-        let row = usize::try_from(keyframe.row).map_err(|_| {
-            SceneError("time-of-day keyframe row does not fit this platform".into())
-        })?;
-        if row >= rows as usize {
+        if keyframe.row >= rows {
             return Err(SceneError(format!(
                 "time-of-day keyframe row {} is outside the atlas",
                 keyframe.row
             )));
         }
     }
-    if rgba.chunks_exact(4).any(|entry| entry[3] != 255) {
+    Ok(())
+}
+
+fn validate_solar_keyframes(
+    rows: u32,
+    keyframes: &[SolarTimeOfDayKeyframe],
+) -> Result<(), SceneError> {
+    if keyframes.len() < 2 {
         return Err(SceneError(
-            "time-of-day atlas entries must be opaque RGBA8 (alpha 255)".into(),
+            "solar time-of-day timeline requires at least two keyframes".into(),
         ));
+    }
+    if keyframes.len() > MAX_TIME_OF_DAY_KEYFRAMES {
+        return Err(SceneError(
+            "solar time-of-day timeline exceeds the bounded keyframe limit".into(),
+        ));
+    }
+    for keyframe in keyframes {
+        if !(-720..=720).contains(&keyframe.offset_minutes) {
+            return Err(SceneError(
+                "solar time-of-day offset_minutes must be between -720 and 720".into(),
+            ));
+        }
+        if keyframe.row >= rows {
+            return Err(SceneError(format!(
+                "solar time-of-day keyframe row {} is outside the atlas",
+                keyframe.row
+            )));
+        }
     }
     Ok(())
 }
@@ -975,10 +1237,235 @@ mod tests {
             )
             .is_err()
         );
+        assert!(
+            TimeOfDayPalette::new(
+                1,
+                vec![255; 256 * 4],
+                (0..=MAX_TIME_OF_DAY_KEYFRAMES)
+                    .map(|civil_seconds| TimeOfDayKeyframe {
+                        civil_seconds: civil_seconds as u32,
+                        row: 0,
+                    })
+                    .collect(),
+            )
+            .is_err()
+        );
     }
 
     #[test]
-    fn time_of_day_manifest_and_atlas_are_contained_and_decoded() {
+    fn solar_timeline_resolves_event_offsets_wrap_and_fallbacks() {
+        use crate::environment::{CivilDate, SolarEvents};
+
+        let today = CivilDate::new(2024, 6, 21)
+            .unwrap()
+            .unix_seconds_at_midnight();
+        let previous = today - i64::from(CIVIL_SECONDS_PER_DAY);
+        let next = today + i64::from(CIVIL_SECONDS_PER_DAY);
+        let events = [
+            SolarEvents::normal(previous + 6 * 3_600, previous + 18 * 3_600),
+            SolarEvents::normal(today + 6 * 3_600, today + 18 * 3_600),
+            SolarEvents::normal(next + 6 * 3_600, next + 18 * 3_600),
+        ];
+        let timeline = TimeOfDayPalette::new_solar(
+            4,
+            vec![255; 4 * 256 * 4],
+            vec![
+                SolarTimeOfDayKeyframe {
+                    event: SolarEvent::Sunrise,
+                    offset_minutes: -30,
+                    row: 0,
+                },
+                SolarTimeOfDayKeyframe {
+                    event: SolarEvent::Sunrise,
+                    offset_minutes: 30,
+                    row: 1,
+                },
+                SolarTimeOfDayKeyframe {
+                    event: SolarEvent::Sunset,
+                    offset_minutes: -30,
+                    row: 2,
+                },
+                SolarTimeOfDayKeyframe {
+                    event: SolarEvent::Sunset,
+                    offset_minutes: 30,
+                    row: 3,
+                },
+            ],
+        )
+        .unwrap();
+        assert_eq!(
+            timeline.resolve_solar_sample(today + 6 * 3_600, &events),
+            Some(ResolvedPaletteSample::Rows {
+                lower_row: 0,
+                upper_row: 1,
+                amount: 0.5
+            })
+        );
+        assert_eq!(
+            timeline.resolve_solar_sample(today, &events),
+            Some(ResolvedPaletteSample::Rows {
+                lower_row: 3,
+                upper_row: 0,
+                amount: 0.5
+            })
+        );
+        let polar = [events[0], SolarEvents::polar_day(), events[2]];
+        assert_eq!(
+            timeline.resolve_solar_sample(today, &polar),
+            Some(ResolvedPaletteSample::Base)
+        );
+        let duplicate = TimeOfDayPalette::new_solar(
+            2,
+            vec![255; 2 * 256 * 4],
+            vec![
+                SolarTimeOfDayKeyframe {
+                    event: SolarEvent::Sunrise,
+                    offset_minutes: 0,
+                    row: 0,
+                },
+                SolarTimeOfDayKeyframe {
+                    event: SolarEvent::Sunrise,
+                    offset_minutes: 0,
+                    row: 1,
+                },
+            ],
+        )
+        .unwrap();
+        assert_eq!(
+            duplicate.resolve_solar_sample(today, &events),
+            Some(ResolvedPaletteSample::Base)
+        );
+        assert!(
+            TimeOfDayPalette::new_solar(
+                1,
+                vec![255; 256 * 4],
+                (0..=MAX_TIME_OF_DAY_KEYFRAMES)
+                    .map(|_| SolarTimeOfDayKeyframe {
+                        event: SolarEvent::Sunrise,
+                        offset_minutes: 0,
+                        row: 0,
+                    })
+                    .collect(),
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn solar_timeline_covers_event_boundaries_daily_movement_and_unsafe_fallbacks() {
+        use crate::environment::{CivilDate, SolarEvents};
+
+        let date = CivilDate::new(2024, 6, 21).unwrap();
+        let midnight = date.unix_seconds_at_midnight();
+        let event = |date: CivilDate, sunrise_hour: i64, sunset_hour: i64| {
+            let start = date.unix_seconds_at_midnight();
+            SolarEvents::normal(start + sunrise_hour * 3_600, start + sunset_hour * 3_600)
+        };
+        let events = [
+            event(date.add_days(-1).unwrap(), 6, 18),
+            event(date, 6, 18),
+            event(date.add_days(1).unwrap(), 6, 18),
+        ];
+        let timeline = TimeOfDayPalette::new_solar(
+            4,
+            vec![255; 4 * 256 * 4],
+            vec![
+                SolarTimeOfDayKeyframe {
+                    event: SolarEvent::Sunrise,
+                    offset_minutes: -30,
+                    row: 0,
+                },
+                SolarTimeOfDayKeyframe {
+                    event: SolarEvent::Sunrise,
+                    offset_minutes: 30,
+                    row: 1,
+                },
+                SolarTimeOfDayKeyframe {
+                    event: SolarEvent::Sunset,
+                    offset_minutes: -30,
+                    row: 2,
+                },
+                SolarTimeOfDayKeyframe {
+                    event: SolarEvent::Sunset,
+                    offset_minutes: 30,
+                    row: 3,
+                },
+            ],
+        )
+        .unwrap();
+
+        let cases = [
+            (midnight + 5 * 3_600 + 30 * 60, 0, 1, 0.0),
+            (midnight + 6 * 3_600, 0, 1, 0.5),
+            (midnight + 6 * 3_600 + 30 * 60, 1, 2, 0.0),
+            (midnight + 17 * 3_600 + 30 * 60, 2, 3, 0.0),
+            (midnight + 18 * 3_600, 2, 3, 0.5),
+            (midnight + 18 * 3_600 + 30 * 60, 3, 0, 0.0),
+        ];
+        for (utc_seconds, lower_row, upper_row, amount) in cases {
+            assert_eq!(
+                timeline.resolve_solar_sample(utc_seconds, &events),
+                Some(ResolvedPaletteSample::Rows {
+                    lower_row,
+                    upper_row,
+                    amount,
+                }),
+                "unexpected sample at UTC second {utc_seconds}"
+            );
+        }
+
+        let later = date.add_days(1).unwrap();
+        let later_midnight = later.unix_seconds_at_midnight();
+        let later_events = [
+            event(date, 6, 18),
+            event(later, 7, 17),
+            event(later.add_days(1).unwrap(), 7, 17),
+        ];
+        assert_eq!(
+            timeline.resolve_solar_sample(midnight + 6 * 3_600 + 30 * 60, &events),
+            Some(ResolvedPaletteSample::Rows {
+                lower_row: 1,
+                upper_row: 2,
+                amount: 0.0,
+            })
+        );
+        assert_eq!(
+            timeline.resolve_solar_sample(later_midnight + 6 * 3_600 + 30 * 60, &later_events),
+            Some(ResolvedPaletteSample::Rows {
+                lower_row: 0,
+                upper_row: 1,
+                amount: 0.0,
+            }),
+            "the same civil clock time should track the later sunrise"
+        );
+
+        for unsafe_events in [
+            [events[0], SolarEvents::polar_day(), events[2]],
+            [events[0], SolarEvents::polar_night(), events[2]],
+            [events[0], SolarEvents::unavailable(), events[2]],
+            [
+                events[0],
+                SolarEvents::normal(midnight + 6 * 3_600, i64::MAX),
+                events[2],
+            ],
+        ] {
+            assert_eq!(
+                timeline.resolve_solar_sample(midnight + 12 * 3_600, &unsafe_events),
+                Some(ResolvedPaletteSample::Base)
+            );
+        }
+        assert_eq!(
+            timeline.resolve_solar_sample(i64::MIN, &events),
+            Some(ResolvedPaletteSample::Base)
+        );
+        assert_eq!(
+            timeline.resolve_solar_sample(i64::MAX, &events),
+            Some(ResolvedPaletteSample::Base)
+        );
+    }
+
+    #[test]
+    fn solar_manifest_schema_v2_is_parsed_and_validated() {
         let directory =
             std::env::temp_dir().join(format!("worldwall-s06-time-of-day-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&directory);
@@ -997,6 +1484,42 @@ mod tests {
         let timeline = load_time_of_day(directory.join("time_of_day.toml")).unwrap();
         assert_eq!(timeline.rows, 2);
         assert_eq!(timeline.keyframes.len(), 2);
+        assert!(timeline.solar_keyframes.is_none());
+
+        std::fs::write(
+            directory.join("time_of_day.png"),
+            encode_rgba(256, 4, &vec![255; 4 * 256 * 4]),
+        )
+        .unwrap();
+        std::fs::write(
+            directory.join("time_of_day.toml"),
+            "schema_version = 2\nbasis = \"solar\"\natlas = \"time_of_day.png\"\n\n[[keyframe]]\nevent = \"sunrise\"\noffset_minutes = -30\nrow = 0\n\n[[keyframe]]\nevent = \"sunset\"\noffset_minutes = 30\nrow = 3\n",
+        )
+        .unwrap();
+        let solar = load_time_of_day(directory.join("time_of_day.toml")).unwrap();
+        assert_eq!(solar.keyframe_count(), 2);
+        assert!(solar.keyframes.is_empty());
+        assert_eq!(
+            solar.solar_keyframes.as_ref().unwrap()[0].offset_minutes,
+            -30
+        );
+
+        std::fs::write(
+            directory.join("time_of_day.toml"),
+            "schema_version = 2\nbasis = \"solar\"\natlas = \"time_of_day.png\"\n\n[[keyframe]]\nevent = \"sunrise\"\noffset_minutes = 721\nrow = 0\n\n[[keyframe]]\nevent = \"sunset\"\noffset_minutes = 30\nrow = 3\n",
+        )
+        .unwrap();
+        assert!(load_time_of_day(directory.join("time_of_day.toml")).is_err());
+        for malformed in [
+            "schema_version = 2\natlas = \"time_of_day.png\"\n\n[[keyframe]]\nevent = \"sunrise\"\noffset_minutes = 0\nrow = 0\n\n[[keyframe]]\nevent = \"sunset\"\noffset_minutes = 0\nrow = 1\n",
+            "schema_version = 2\nbasis = \"civil\"\natlas = \"time_of_day.png\"\n\n[[keyframe]]\nevent = \"sunrise\"\noffset_minutes = 0\nrow = 0\n\n[[keyframe]]\nevent = \"sunset\"\noffset_minutes = 0\nrow = 1\n",
+            "schema_version = 2\nbasis = \"solar\"\natlas = \"time_of_day.png\"\n\n[[keyframe]]\nevent = \"noon\"\noffset_minutes = 0\nrow = 0\n\n[[keyframe]]\nevent = \"sunset\"\noffset_minutes = 0\nrow = 1\n",
+            "schema_version = 2\nbasis = \"solar\"\natlas = \"time_of_day.png\"\n\n[[keyframe]]\nevent = \"sunrise\"\nrow = 0\n\n[[keyframe]]\nevent = \"sunset\"\noffset_minutes = 0\nrow = 1\n",
+            "schema_version = 2\nbasis = \"solar\"\natlas = \"time_of_day.png\"\n\n[[keyframe]]\nevent = \"sunrise\"\noffset_minutes = 0\noffset_minutes = 1\nrow = 0\n\n[[keyframe]]\nevent = \"sunset\"\noffset_minutes = 0\nrow = 1\n",
+            "schema_version = 2\nbasis = \"solar\"\natlas = \"time_of_day.png\"\n\n[[keyframe]]\nevent = \"sunrise\"\noffset_minutes = 0\ncivil_seconds = 60\nrow = 0\n\n[[keyframe]]\nevent = \"sunset\"\noffset_minutes = 0\nrow = 1\n",
+        ] {
+            assert!(parse_time_of_day_manifest(malformed).is_err());
+        }
         std::fs::remove_dir_all(directory).unwrap();
     }
 

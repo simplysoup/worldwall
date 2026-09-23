@@ -7,6 +7,8 @@ license = "MIT"
 description = "GPU-accelerated indexed pixel-art wallpaper engine for Hyprland/Wayland"
 
 [dependencies]
+chrono = { version = "=0.4.45", default-features = false, features = ["std"] }
+chrono-tz = "=0.10.4"
 calloop = "=0.14.4"
 calloop-wayland-source = "=0.4.1"
 libc = "=0.2.189"
@@ -19,6 +21,7 @@ zbus = { version = "=5.14.0", default-features = true }
 zbus_macros = "=5.14.0"
 raw-window-handle = "=0.6.2"
 smithay-client-toolkit = { version = "=0.21.1", default-features = false, features = ["calloop"] }
+toml = { version = "=1.1.6", default-features = false, features = ["parse", "serde", "std"] }
 wayland-client = { version = "=0.31.15", default-features = false, features = ["system"] }
 wayland-protocols = { version = "=0.32.13", default-features = false, features = ["client", "staging"] }
 wgpu = { version = "=30.0.1", default-features = false, features = ["std", "vulkan", "wgsl"] }

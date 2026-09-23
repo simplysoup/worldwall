@@ -16,8 +16,8 @@ Testable sleep-state machine, real power-event subscription, duplicate/coalesced
 
 1. Isolate power/session signals behind an adapter so unit tests can emit entering-sleep/resumed/disconnected events deterministically.
 2. On sleep, stop render deadlines/submission and unnecessary refresh work without destroying valid scene ownership prematurely.
-3. On resume, re-evaluate output/surface readiness, refresh clock/astronomy and bounded stale weather, then select once with an immutable snapshot.
-4. Coalesce duplicate signals; assign generation tokens so late work from a prior refresh cannot overwrite a manual command or newer resume.
+3. On resume, re-evaluate output/surface readiness, refresh clock/astronomy and bounded stale weather, then perform one full selection with an immutable snapshot. Under CR-0006 opt-in, family choice uses valid temperature and persisted hysteresis state; later fresh weather may update only a same-family variant.
+4. Coalesce duplicate signals; assign generation tokens so late work from a prior refresh cannot overwrite a manual command, successful config reload, or newer resume. Late weather may not select a family.
 5. Avoid full scene uploads when the same content remains selected; allow documented re-upload only when resources need recovery.
 6. Expose degraded state if the service is missing/disconnected; keep rendering/manual reload working. A large wall-clock jump is not proof of resume.
 7. Live-test several sleep/wake cycles with offline weather, an output topology change during sleep, and a failed candidate scene. Ask the operator before suspending their active session.
@@ -25,10 +25,11 @@ Testable sleep-state machine, real power-event subscription, duplicate/coalesced
 ## Acceptance criteria
 
 - [ ] **S08-AC1:** Synthetic and live traces show submission pause on sleep and safe resumption only when output configuration is valid.
-- [ ] **S08-AC2:** One coalesced resume produces one selection; duplicate signals and late weather/scene work do not cause extra swaps.
-- [ ] **S08-AC3:** Same-scene resume avoids redundant full uploads unless GPU recovery requires them; stale weather or candidate failure preserves a working scene.
+- [ ] **S08-AC2:** One coalesced resume produces one full selection; duplicate signals and late/stale scene work cannot supersede it. With CR-0006 opt-in, late fresh weather may cause only a same-family variant swap.
+- [ ] **S08-AC3:** Same-scene resume avoids redundant full uploads unless GPU recovery requires them; stale weather or candidate failure preserves a working scene and the persisted family/band state.
 - [ ] **S08-AC4:** Missing/disconnected power service is reported clearly without a crash or false resume claim; manual refresh remains usable internally.
 - [ ] **S08-AC5:** Real multi-cycle suspend evidence is recorded; reviewer accepts M3 with S06–S08 gates, not just synthetic signal tests.
+- [ ] **S08-AC6 (CR-0006):** Offline first startup falls back to V29; saved family/band and 2°C hysteresis survive resume; weather refresh cannot change family; assigned-session full and same-family swap traces pass.
 
 ## Failure and rollback
 

@@ -1,6 +1,6 @@
 # Failure-mode index
 
-These entries are **anticipated design risks**, not reproduced Worldwall incidents. No implementation exists yet. Promote classifications only with evidence; create a detailed `failures/FM-NNNN-short-name.md` from the [template](../templates/failure-mode.md) when investigating a concrete mechanism. Follow [learning](../workflows/learning.md).
+Each row carries its own classification; anticipated risks are not reproduced incidents. Promote classifications only with evidence; create a detailed `failures/FM-NNNN-short-name.md` from the [template](../templates/failure-mode.md) when investigating a concrete mechanism. Follow [learning](../workflows/learning.md).
 
 | ID | State | Trigger / mechanism | Detection and required prevention | Stage |
 | --- | --- | --- | --- | --- |
@@ -17,5 +17,7 @@ These entries are **anticipated design risks**, not reproduced Worldwall inciden
 | FM-0011 | anticipated | Cache or logs expose location/credentials; error storm repeats requests/logs | Redaction tests, restrictive cache access, request/log limits, disabled-by-default weather | S07, S10 |
 | FM-0012 | anticipated | Green docs/unit tests are misreported as hardware acceptance | Evidence outcome/environment review; separate proposed, implemented, verified, accepted | All |
 | [FM-0013](failures/FM-0013-effectgames-cycle-rate.md) | reproduced | Effect Games cycle rate/range semantics are mapped to the wrong Worldwall effect or speed unit | Preserve the source formula: rate / 280 / range length, explicit speed adjustment, authored-byte BlendShift; validate pure vectors and live pacing separately | S04, S05 |
+| [FM-0014](failures/FM-0014-python-log-stream-permissions.md) | resolved-with-regression-test | A live test runner calls filesystem permission methods on a text stream, aborting before application launch | Set restrictive permissions on the `Path` before opening it; regression-test the private log helper and retain a prelaunch result record | CR-0005 tools |
+| [FM-0015](failures/FM-0015-synthetic-atlas-overrides-source-palette.md) | reproduced | A synthetic live-test atlas replaces authored scene colors, making the displayed palette unrepresentative | Preserve and hash source time-of-day resources for visual runs; isolate synthetic solar fixtures to CPU/GPU tests | CR-0005 tools, S04-AC8 |
 
-Existing IDs reserve their mechanisms; use FM-0014 onward for genuinely new ones, or expand an existing ID into a linked detailed record. Record recovery, regression tests, and remaining limitations when an anticipated risk is actually encountered.
+Existing IDs reserve their mechanisms; use FM-0016 onward for genuinely new ones, or expand an existing ID into a linked detailed record. Record recovery, regression tests, and remaining limitations when an anticipated risk is actually encountered.

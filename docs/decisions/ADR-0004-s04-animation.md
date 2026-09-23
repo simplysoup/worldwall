@@ -1,6 +1,6 @@
 # ADR-0004 — S04 palette animation schema and GPU packing
 
-- Status: accepted; amended by [CR-0001](../changes/CR-0001-s04-byte-blendshift.md) and [CR-0002](../changes/CR-0002-s06-time-of-day-palettes.md) on 2026-09-22
+- Status: accepted; amended by [CR-0001](../changes/CR-0001-s04-byte-blendshift.md), [CR-0002](../changes/CR-0002-s06-time-of-day-palettes.md), and [CR-0005](../changes/CR-0005-configured-location-weather-solar-lighting.md) on 2026-09-22
 - Owner / date: Pi coding agent / 2026-09-21
 - Approval identity / date: `simplysoup` / 2026-09-21
 - Affected stages / requirements: S04; WW-03, WW-04, WW-05
@@ -87,11 +87,12 @@ speed:f32, amplitude:f32, phase:f32, reserved:f32
 `effect` values are 0 static, 1 hue, 2 pulse, 3 palette cycle, and 4 byte-space
 BlendShift. A second immutable 256-element `u32` storage buffer stores the
 concatenated ordered cycle lists. An optional immutable RGBA8 256×N atlas and
-16-byte-per-keyframe civil-seconds/row storage buffer hold time-of-day palettes.
-A 16-byte uniform stores monotonic `time_seconds`, civil seconds, keyframe count,
-and an enabled flag. Scene indices, base palette, metadata, cycle lists, atlas,
-and keyframes are uploaded once per scene. Each rendered frame writes only that
-bounded uniform.
+16-byte-per-keyframe storage buffer holds time-of-day keyframes. The v1 16-byte
+uniform stores monotonic `time_seconds`, civil seconds, keyframe count, and an
+enabled flag. CR-0005 extends this to a 32-byte uniform carrying the
+CPU-resolved solar row pair, interpolation fraction, and sample mode. Scene
+indices, base palette, metadata, cycle lists, atlas, and keyframes are uploaded
+once per scene. Each rendered frame writes only that bounded uniform.
 
 This layout is representable on the pinned device path and leaves ample room
 under ordinary storage/uniform limits. Runtime code still treats device
@@ -115,8 +116,8 @@ effect.
 ## Consequences and validation
 
 The parser and CPU reference vectors are pure and dependency-free. The GPU
-metadata and optional time-of-day resources are immutable, while the two bounded
-clock values are the only normal animation updates. Civil timeline tests cover
+metadata and optional time-of-day resources are immutable; normal animation
+updates write only a bounded frame uniform. Civil timeline tests cover
 ordered keyframes, day wrap, authored-byte floor fading, atlas containment, and
 optional-resource fallback. Scheduler tests use integer fake-clock nanoseconds and cover bootstrap,
 15/30 FPS intervals, early callbacks, withheld callbacks, delayed callbacks,
@@ -155,7 +156,8 @@ on 2026-09-22, adding `blend_shift` and the byte-space reference semantics
 recorded above without changing existing effect behavior. `simplysoup` approved
 CR-0002 on 2026-09-22. It adds the optional civil-time atlas/keyframe resource
 and bounded civil-seconds uniform without changing the base palette or selector
-contract. This approval covers
+contract. `simplysoup` approved CR-0005 on 2026-09-22; [ADR-0008](ADR-0008-cr0005-configured-location-solar-palette.md)
+records the solar-v2 anchor model and 32-byte resolved-sample uniform. This approval covers
 the version-1 authoring fields, effect semantics, metadata packing, bounded
 animation clock, and validation ranges recorded above. Stage acceptance is
 recorded separately in the S04 implementation and acceptance updates after
@@ -163,6 +165,6 @@ review of S04-AC1 through S04-AC5.
 
 ## Supersession
 
-None. CR-0001 and CR-0002 are approved additive amendments; the original
+None. CR-0001, CR-0002, and CR-0005 are approved additive amendments; the original
 linear-RGB `palette_cycle` behavior and packages without a timeline remain
 unchanged.

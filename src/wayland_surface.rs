@@ -6,15 +6,18 @@
 #![allow(dead_code)]
 
 use std::{
-    collections::{BTreeMap, BTreeSet},
+    collections::{BTreeMap, BTreeSet, VecDeque},
     error::Error,
     fmt,
+    path::PathBuf,
+    sync::mpsc,
+    thread,
     time::{Duration, Instant},
 };
 
 use calloop::{
     EventLoop, RegistrationToken,
-    channel::Event as ChannelEvent,
+    channel::{self, Channel, Event as ChannelEvent},
     timer::{TimeoutAction, Timer},
 };
 use calloop_wayland_source::WaylandSource;
@@ -25,24 +28,26 @@ use std::cmp::Ordering;
 use serde_json::{Value, json};
 
 use crate::{
-    config::AppConfig,
+    config::{AppConfig, PreparedAppConfig},
     environment::{
-        EnvironmentProvider, Location, NoaaAstronomy, SystemWallClock, UtcOffsetSchedule,
-        WallClock, Weather,
+        AstronomyProvider, CivilDate, EnvironmentProvider, Location, NoaaAstronomy, SolarEvents,
+        SystemWallClock, UtcOffsetSchedule, WallClock, Weather,
     },
     ipc::{self, Command, ControlRequest, IpcServer},
     power::{PausedAnimationClock, PowerAction, PowerEvent, PowerEventSource, PowerStateMachine},
     renderer::{AllocationCounters, OutputRenderer, RenderOutcome, Renderer, SharedRenderer},
-    scene::Scene,
+    scene::{ResolvedPaletteSample, Scene},
     scene_registry::{
-        CommitOutcome, EnvironmentSnapshot, LoadedScene, RegistryError, SceneLoadToken,
-        SceneManifest, SceneRegistry, SceneTransaction, SelectionController, SelectionRequest,
-        SelectionTrigger,
+        AdaptiveSelectionState, CommitOutcome, EnvironmentSnapshot, LoadedScene,
+        PrecipitationAppearance, RegistryError, SceneLoadCompletion, SceneLoadJob, SceneLoadToken,
+        SceneLoadWorker, SceneManifest, SceneRegistry, SceneTransaction, SelectionController,
+        SelectionRequest, SelectionTrigger,
     },
     scheduler::{Fps, FrameScheduler},
+    selection_state::AdaptiveSelectionStateStore,
     weather::{
-        CacheStore, Freshness, OpenMeteoProvider, RefreshKind, WeatherConfig, WeatherService,
-        WeatherState,
+        CacheStore, Freshness, OpenMeteoProvider, RefreshKind, WeatherConfig, WeatherProvider,
+        WeatherService, WeatherState,
     },
 };
 use smithay_client_toolkit::{
@@ -166,16 +171,18 @@ pub fn run() -> Result<(), Box<dyn Error>> {
         return Ok(());
     }
 
-    // Weather is optional and starts only after explicit provider/location
-    // configuration. Its startup request is asynchronous; selection uses the
-    // cache snapshot available at this boundary and never waits on network I/O.
-    let mut weather = WeatherRuntime::startup()?;
-    let civil_time = CivilTimeRuntime::startup()?;
+    // A selected config file is authoritative for location, timezone, and
+    // weather; the disabled-by-default weather runtime never fetches on its
+    // own. Selection uses only the bounded cached snapshot and never waits for
+    // network I/O.
+    let config = AppConfig::from_environment()?;
+    let mut civil_time = CivilTimeRuntime::from_config(&config)?;
+    let mut weather = WeatherRuntime::from_config(&config)?;
+    weather.request_startup();
     // Keep the validated selection transaction alive with the renderer. S05
     // has no public control source yet, so only startup is invoked here; a
     // later explicit request must use the begin/complete handoff below rather
     // than letting output/config/weather callbacks select implicitly.
-    let config = AppConfig::from_environment()?;
     let (scene, mut registry_selection) = load_scene(
         civil_time.snapshot(weather.weather()),
         config.registry_dir.as_deref(),
@@ -189,7 +196,8 @@ pub fn run() -> Result<(), Box<dyn Error>> {
     let fps = config.fps;
     let mut scheduler = FrameScheduler::new(fps);
     let clock_origin = Instant::now();
-    let mut animation_clock = PausedAnimationClock::new(0);
+    let mut animation_clock =
+        PausedAnimationClock::new_with_multiplier(0, config.animation_speed_multiplier);
     let mut power = PowerStateMachine::new();
     #[cfg(debug_assertions)]
     let test_exit_deadline = test_exit_deadline(clock_origin);
@@ -203,6 +211,10 @@ pub fn run() -> Result<(), Box<dyn Error>> {
         extent,
         animation_clock.seconds(0),
         civil_time.seconds(),
+        resolve_solar_palette_sample(
+            active_scene_or(registry_selection.as_ref(), &scene),
+            &mut civil_time,
+        ),
     )? {
         RenderOutcome::Presented => {
             let _ = scheduler.submit_if_due(0);
@@ -347,6 +359,10 @@ pub fn run() -> Result<(), Box<dyn Error>> {
                 extent,
                 animation_time_seconds,
                 civil_time.seconds(),
+                resolve_solar_palette_sample(
+                    active_scene_or(registry_selection.as_ref(), &scene),
+                    &mut civil_time,
+                ),
             )? {
                 RenderOutcome::Presented => {
                     let _ = scheduler.submit_if_due(now_ns);
@@ -392,6 +408,10 @@ pub fn run() -> Result<(), Box<dyn Error>> {
             extent,
             animation_time_seconds,
             civil_time.seconds(),
+            resolve_solar_palette_sample(
+                active_scene_or(registry_selection.as_ref(), &scene),
+                &mut civil_time,
+            ),
         )? {
             RenderOutcome::Presented => {
                 let _ = scheduler.submit_if_due(now_ns);
@@ -428,83 +448,146 @@ pub fn run() -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SolarTraceState {
+    Base,
+    Rows { lower_row: u32, upper_row: u32 },
+}
+
 struct CivilTimeRuntime {
-    offset_minutes: Option<i32>,
+    timezone: Option<UtcOffsetSchedule>,
     location: Option<Location>,
     clock: SystemWallClock,
+    solar_events_cache: Option<(CivilDate, [SolarEvents; 3])>,
+    reported_solar_state: Option<SolarTraceState>,
 }
 
 impl CivilTimeRuntime {
-    fn startup() -> Result<Self, Box<dyn Error>> {
-        let offset_minutes = match std::env::var("WORLDWALL_UTC_OFFSET_MINUTES") {
-            Ok(value) => Some(value.parse::<i32>().map_err(
-                |_| "WORLDWALL_UTC_OFFSET_MINUTES must be a finite whole-minute offset",
-            )?),
-            Err(std::env::VarError::NotPresent) => None,
-            Err(error) => {
-                return Err(format!("reading WORLDWALL_UTC_OFFSET_MINUTES failed: {error}").into());
-            }
-        };
-        if let Some(offset) = offset_minutes {
-            if !(-14 * 60..=14 * 60).contains(&offset) {
-                return Err("WORLDWALL_UTC_OFFSET_MINUTES must be between -840 and 840".into());
-            }
-        }
-        let location = configured_location()?;
+    fn from_config(config: &AppConfig) -> Result<Self, Box<dyn Error>> {
+        let timezone = config
+            .timezone
+            .map(|timezone| timezone.to_schedule())
+            .transpose()?;
+        let location = config.location;
         println!(
             "trace civil-time configured={} astronomy-location-configured={}",
-            offset_minutes.is_some(),
+            timezone.is_some(),
             location.is_some()
         );
         Ok(Self {
-            offset_minutes,
+            timezone,
             location,
             clock: SystemWallClock,
+            solar_events_cache: None,
+            reported_solar_state: None,
         })
     }
 
     fn snapshot(&self, weather: Weather) -> EnvironmentSnapshot {
-        let (Some(offset_minutes), Some(location)) = (self.offset_minutes, self.location) else {
-            return EnvironmentSnapshot {
-                time: crate::scene_registry::TimeOfDay::Unknown,
-                weather,
-                season: crate::scene_registry::Season::Unknown,
-            };
-        };
-        let Ok(timezone) = UtcOffsetSchedule::fixed(offset_minutes) else {
-            return EnvironmentSnapshot {
-                time: crate::scene_registry::TimeOfDay::Unknown,
-                weather,
-                season: crate::scene_registry::Season::Unknown,
-            };
-        };
-        let Ok(utc_seconds) = self.clock.now_utc_seconds() else {
-            return EnvironmentSnapshot {
-                time: crate::scene_registry::TimeOfDay::Unknown,
-                weather,
-                season: crate::scene_registry::Season::Unknown,
-            };
+        let Some(utc_seconds) = self.now_utc_seconds() else {
+            return EnvironmentSnapshot::unknown();
         };
         EnvironmentProvider {
-            location: Some(location),
-            timezone: Some(timezone),
+            location: self.location,
+            timezone: self.timezone.clone(),
             astronomy: NoaaAstronomy,
         }
         .snapshot_at(utc_seconds, weather)
     }
 
-    fn seconds(&self) -> u32 {
-        let Ok(utc_seconds) = self.clock.now_utc_seconds() else {
-            return 0;
-        };
-        let Some(offset_minutes) = self.offset_minutes else {
-            return 0;
-        };
-        let offset = i64::from(offset_minutes) * 60;
-        utc_seconds
-            .saturating_add(offset)
-            .rem_euclid(crate::scene::CIVIL_SECONDS_PER_DAY as i64) as u32
+    fn now_utc_seconds(&self) -> Option<i64> {
+        #[cfg(debug_assertions)]
+        if let Some(seconds) = std::env::var("WORLDWALL_TEST_UTC_SECONDS")
+            .ok()
+            .and_then(|value| value.parse::<i64>().ok())
+        {
+            return Some(seconds);
+        }
+        self.clock.now_utc_seconds().ok()
     }
+
+    fn report_solar_sample(&mut self, sample: ResolvedPaletteSample) {
+        let state = match sample {
+            ResolvedPaletteSample::Base => SolarTraceState::Base,
+            ResolvedPaletteSample::Rows {
+                lower_row,
+                upper_row,
+                ..
+            } => SolarTraceState::Rows {
+                lower_row,
+                upper_row,
+            },
+        };
+        if self.reported_solar_state == Some(state) {
+            return;
+        }
+        self.reported_solar_state = Some(state);
+        match sample {
+            ResolvedPaletteSample::Base => {
+                println!("trace solar-palette sample=base fallback=true");
+            }
+            ResolvedPaletteSample::Rows {
+                lower_row,
+                upper_row,
+                amount,
+            } => println!(
+                "trace solar-palette sample=rows lower_row={lower_row} upper_row={upper_row} amount={amount:.4} fallback=false"
+            ),
+        }
+    }
+
+    fn seconds(&self) -> u32 {
+        let (Some(timezone), Some(utc_seconds)) = (&self.timezone, self.now_utc_seconds()) else {
+            return 0;
+        };
+        let Ok(local) = timezone.local_datetime_at(utc_seconds) else {
+            return 0;
+        };
+        u32::from(local.hour) * 3_600 + u32::from(local.minute) * 60 + u32::from(local.second)
+    }
+
+    fn solar_events_around(&mut self, utc_seconds: i64) -> Option<[SolarEvents; 3]> {
+        let (Some(location), Some(timezone)) = (self.location, &self.timezone) else {
+            return None;
+        };
+        let date = timezone.local_datetime_at(utc_seconds).ok()?.date;
+        if let Some((cached_date, events)) = &self.solar_events_cache
+            && *cached_date == date
+        {
+            return Some(*events);
+        }
+        let dates = [date.add_days(-1).ok()?, date, date.add_days(1).ok()?];
+        let events = dates.map(|date| {
+            NoaaAstronomy
+                .solar_events(date, location)
+                .unwrap_or_else(|_| SolarEvents::unavailable())
+        });
+        self.solar_events_cache = Some((date, events));
+        Some(events)
+    }
+}
+
+fn resolve_solar_palette_sample(
+    scene: &Scene,
+    civil_time: &mut CivilTimeRuntime,
+) -> Option<ResolvedPaletteSample> {
+    let timeline = scene.time_of_day.as_ref()?;
+    timeline.solar_keyframes.as_ref()?;
+    let sample = match civil_time.now_utc_seconds() {
+        Some(utc_seconds) => civil_time
+            .solar_events_around(utc_seconds)
+            .and_then(|events| timeline.resolve_solar_sample(utc_seconds, &events))
+            .unwrap_or(ResolvedPaletteSample::Base),
+        None => ResolvedPaletteSample::Base,
+    };
+    civil_time.report_solar_sample(sample);
+    Some(sample)
+}
+
+fn active_scene_or<'a>(selection: Option<&'a RegistrySelection>, fallback: &'a Scene) -> &'a Scene {
+    selection
+        .and_then(|selection| selection.transaction.active())
+        .map_or(fallback, |loaded| &loaded.scene)
 }
 
 struct WeatherRuntime {
@@ -514,45 +597,89 @@ struct WeatherRuntime {
 }
 
 impl WeatherRuntime {
-    fn startup() -> Result<Self, Box<dyn Error>> {
+    fn from_config(config: &AppConfig) -> Result<Self, Box<dyn Error>> {
         let clock = SystemWallClock;
-        let Some(provider) = std::env::var_os("WORLDWALL_WEATHER") else {
+        if config.weather_provider == crate::config::WeatherProvider::Disabled {
+            println!("trace weather-enabled=false reason=disabled");
             return Ok(Self {
                 service: None,
                 clock,
                 reported_epoch: 0,
             });
-        };
-        let provider = provider
-            .to_str()
-            .ok_or("WORLDWALL_WEATHER must be valid UTF-8 and equal open-meteo when enabled")?;
-        if provider != "open-meteo" {
-            return Err(format!(
-                "unsupported WORLDWALL_WEATHER provider {provider:?}; expected open-meteo"
-            )
-            .into());
         }
-        let latitude = required_weather_coordinate("WORLDWALL_WEATHER_LATITUDE")?;
-        let longitude = required_weather_coordinate("WORLDWALL_WEATHER_LONGITUDE")?;
-        let location = Location::new(latitude, longitude)
-            .map_err(|_| "configured weather coordinates are invalid")?;
-        let config = WeatherConfig::open_meteo(location)?;
-        let request_deadline = config.request_deadline;
-        let mut service = WeatherService::new(config, OpenMeteoProvider::new(request_deadline)?)?;
-        let now_utc = clock.now_utc_seconds()?;
-        if let Ok(path) = CacheStore::default_path() {
-            service.attach_cache_best_effort(CacheStore::new(path), now_utc)?;
-            if service.snapshot(now_utc).state == crate::weather::WeatherState::Error {
-                eprintln!("trace weather-cache state=error fallback=unknown");
+        let location = config
+            .weather_location
+            .ok_or("enabled weather has no configured location")?;
+        let weather_config = WeatherConfig::open_meteo(location)?;
+        let request_deadline = weather_config.request_deadline;
+        let provider = OpenMeteoProvider::new(request_deadline)?;
+        Self::with_provider(config, weather_config, provider, clock, true)
+    }
+
+    #[cfg(test)]
+    fn from_config_with_provider<P: WeatherProvider>(
+        config: &AppConfig,
+        provider: P,
+    ) -> Result<Self, Box<dyn Error>> {
+        let clock = SystemWallClock;
+        if config.weather_provider == crate::config::WeatherProvider::Disabled {
+            return Ok(Self {
+                service: None,
+                clock,
+                reported_epoch: 0,
+            });
+        }
+        let location = config
+            .weather_location
+            .ok_or("enabled weather has no configured location")?;
+        Self::with_provider(
+            config,
+            WeatherConfig::open_meteo(location)?,
+            provider,
+            clock,
+            false,
+        )
+    }
+
+    fn with_provider<P: WeatherProvider>(
+        config: &AppConfig,
+        weather_config: WeatherConfig,
+        provider: P,
+        clock: SystemWallClock,
+        attach_default_cache: bool,
+    ) -> Result<Self, Box<dyn Error>> {
+        let mut service = WeatherService::new(weather_config, provider)?;
+        if attach_default_cache {
+            let now_utc = clock.now_utc_seconds()?;
+            if let Ok(path) = CacheStore::default_path() {
+                let store = match config.cache_scope {
+                    Some(scope) => CacheStore::new_scoped(path, scope),
+                    None => CacheStore::new(path),
+                };
+                service.attach_cache_best_effort(store, now_utc)?;
+                if service.snapshot(now_utc).state == crate::weather::WeatherState::Error {
+                    eprintln!("trace weather-cache state=error fallback=unknown");
+                }
             }
         }
-        let refresh = service.request_refresh(now_utc, Instant::now(), RefreshKind::Startup);
-        println!("trace weather-enabled provider=open-meteo refresh={refresh:?}");
+        println!("trace weather-enabled=true provider=open-meteo");
         Ok(Self {
             service: Some(service),
             clock,
             reported_epoch: 0,
         })
+    }
+
+    fn request_startup(&mut self) {
+        let Some(service) = &mut self.service else {
+            return;
+        };
+        let Ok(now_utc) = self.clock.now_utc_seconds() else {
+            eprintln!("trace weather-startup state=unknown reason=clock");
+            return;
+        };
+        let refresh = service.request_refresh(now_utc, Instant::now(), RefreshKind::Startup);
+        println!("trace weather-startup refresh={refresh:?} bounded=true");
     }
 
     fn weather(&self) -> Weather {
@@ -574,7 +701,28 @@ impl WeatherRuntime {
         }
     }
 
+    fn adaptive_input(&self) -> (Option<f32>, PrecipitationAppearance) {
+        let Some(service) = &self.service else {
+            return (None, PrecipitationAppearance::Unknown);
+        };
+        let Ok(now_utc) = self.clock.now_utc_seconds() else {
+            return (None, PrecipitationAppearance::Unknown);
+        };
+        let snapshot = service.snapshot(now_utc);
+        if snapshot.state != WeatherState::Fresh {
+            return (None, PrecipitationAppearance::Unknown);
+        }
+        let Some(reading) = snapshot.reading else {
+            return (None, PrecipitationAppearance::Unknown);
+        };
+        (
+            reading.temperature_c,
+            PrecipitationAppearance::from_weather(reading.condition, reading.precipitation),
+        )
+    }
+
     fn refresh_for_resume(&mut self) {
+        let _ = self.poll_for_update();
         let Some(service) = &mut self.service else {
             println!("trace weather-resume state=disabled");
             return;
@@ -590,19 +738,25 @@ impl WeatherRuntime {
     }
 
     fn poll(&mut self) {
+        let _ = self.poll_for_update();
+    }
+
+    fn poll_for_update(&mut self) -> bool {
         let Some(service) = &mut self.service else {
-            return;
+            return false;
         };
         let Ok(now_utc) = self.clock.now_utc_seconds() else {
-            return;
+            return false;
         };
         service.poll(now_utc, Instant::now());
         let epoch = service.cache_epoch();
-        if epoch != self.reported_epoch {
-            self.reported_epoch = epoch;
-            let state = service.snapshot(now_utc).state;
-            println!("trace weather-cache epoch={epoch} state={state:?}");
+        if epoch == self.reported_epoch {
+            return false;
         }
+        self.reported_epoch = epoch;
+        let state = service.snapshot(now_utc).state;
+        println!("trace weather-cache epoch={epoch} state={state:?}");
+        true
     }
 
     fn status_value(&self) -> Value {
@@ -639,40 +793,11 @@ impl WeatherRuntime {
     }
 }
 
-fn required_weather_coordinate(name: &str) -> Result<f64, Box<dyn Error>> {
-    let value = std::env::var(name)
-        .map_err(|_| format!("{name} is required when WORLDWALL_WEATHER=open-meteo"))?;
-    value
-        .parse::<f64>()
-        .map_err(|_| format!("{name} is not a valid finite decimal coordinate").into())
-}
-
-fn configured_location() -> Result<Option<Location>, Box<dyn Error>> {
-    let latitude = std::env::var("WORLDWALL_LOCATION_LATITUDE");
-    let longitude = std::env::var("WORLDWALL_LOCATION_LONGITUDE");
-    match (latitude, longitude) {
-        (Ok(latitude), Ok(longitude)) => {
-            let latitude = latitude
-                .parse::<f64>()
-                .map_err(|_| "WORLDWALL_LOCATION_LATITUDE is not a valid finite decimal")?;
-            let longitude = longitude
-                .parse::<f64>()
-                .map_err(|_| "WORLDWALL_LOCATION_LONGITUDE is not a valid finite decimal")?;
-            Ok(Some(Location::new(latitude, longitude).map_err(
-                |_| "WORLDWALL_LOCATION coordinates are outside the permitted ranges",
-            )?))
-        }
-        (Err(std::env::VarError::NotPresent), Err(std::env::VarError::NotPresent)) => Ok(None),
-        _ => Err(
-            "WORLDWALL_LOCATION_LATITUDE and WORLDWALL_LOCATION_LONGITUDE must be set together"
-                .into(),
-        ),
-    }
-}
-
 struct RegistrySelection {
     controller: SelectionController,
     transaction: SceneTransaction,
+    adaptive_state: Option<AdaptiveSelectionState>,
+    pending_full_generation: Option<u64>,
 }
 
 impl RegistrySelection {
@@ -680,6 +805,8 @@ impl RegistrySelection {
         Self {
             controller: SelectionController::new(registry),
             transaction: SceneTransaction::default(),
+            adaptive_state: None,
+            pending_full_generation: None,
         }
     }
 
@@ -723,6 +850,176 @@ impl RegistrySelection {
         Ok((selection, scene))
     }
 
+    fn startup_adaptive(
+        root: std::path::PathBuf,
+        temperature_c: Option<f32>,
+        appearance: PrecipitationAppearance,
+        previous_state: Option<AdaptiveSelectionState>,
+    ) -> Result<(Self, Scene), Box<dyn Error>> {
+        let registry = SceneRegistry::load(root)?;
+        registry.validate_adaptive()?;
+        let decision = registry.adaptive_full_selection(
+            temperature_c,
+            appearance,
+            previous_state.as_ref(),
+            None,
+        )?;
+        let mut selection = Self::from_registry(registry);
+        let request = selection
+            .controller
+            .request_selected(
+                &decision.scene_id,
+                SelectionTrigger::Startup,
+                decision.rationale.clone(),
+            )
+            .map_err(|result| format!("adaptive startup selection failed: {result:?}"))?;
+        let token = selection.transaction.begin(&request);
+        let manifest = selection
+            .controller
+            .registry()
+            .get(&request.id)
+            .ok_or_else(|| format!("adaptive registry lost selected scene {:?}", request.id))?;
+        let candidate = manifest.load_scene()?;
+        let selected_id = candidate.id.clone();
+        let outcome = selection.transaction.complete(token, Ok(candidate));
+        if !matches!(outcome, CommitOutcome::Applied { .. }) {
+            return Err(format!("adaptive startup transaction failed: {outcome:?}").into());
+        }
+        selection.controller.mark_active(&selected_id)?;
+        selection.adaptive_state = Some(decision.state);
+        let scene = selection
+            .transaction
+            .active()
+            .ok_or_else(|| "adaptive startup transaction produced no active scene".to_owned())?
+            .scene
+            .clone();
+        println!(
+            "trace scene-source=registry id={} trigger=startup adaptive=true family={} band={:?} image={}x{}",
+            selected_id,
+            selection
+                .adaptive_state
+                .as_ref()
+                .map_or("unknown", |state| state.family_id.as_str()),
+            selection
+                .adaptive_state
+                .as_ref()
+                .map(|state| state.temperature_band),
+            scene.image.width,
+            scene.image.height
+        );
+        Ok((selection, scene))
+    }
+
+    fn begin_adaptive_full_job(
+        &mut self,
+        temperature_c: Option<f32>,
+        appearance: PrecipitationAppearance,
+        trigger: SelectionTrigger,
+    ) -> Result<Option<SceneLoadJob>, String> {
+        if !matches!(trigger, SelectionTrigger::Resume | SelectionTrigger::Reload) {
+            return Err("adaptive full selection requires resume or reload".into());
+        }
+        let active_id = self
+            .transaction
+            .active()
+            .map(|scene| scene.id.clone())
+            .or_else(|| self.controller.active_id().map(str::to_owned));
+        let previous_state = self.adaptive_state.clone().or_else(|| {
+            active_id
+                .as_deref()
+                .and_then(|id| self.controller.registry().adaptive_state_for_scene(id))
+        });
+        let decision = self
+            .controller
+            .registry()
+            .adaptive_full_selection(
+                temperature_c,
+                appearance,
+                previous_state.as_ref(),
+                active_id.as_deref(),
+            )
+            .map_err(|error| error.to_string())?;
+        if active_id.as_deref() == Some(decision.scene_id.as_str()) {
+            // A newer full-selection trigger that resolves to the resident
+            // scene still supersedes any older asynchronous candidate.
+            if self.pending_full_generation.is_some() {
+                self.invalidate_pending_adaptive_work();
+            }
+            self.adaptive_state = Some(decision.state);
+            return Ok(None);
+        }
+        let request = self
+            .controller
+            .request_selected(&decision.scene_id, trigger, decision.rationale)
+            .map_err(|result| format!("adaptive selection request rejected: {result:?}"))?;
+        self.pending_full_generation = None;
+        let token = self.transaction.begin(&request);
+        let manifest = self
+            .controller
+            .registry()
+            .get(&request.id)
+            .cloned()
+            .ok_or_else(|| format!("adaptive registry lost requested scene {:?}", request.id))?;
+        Ok(Some(SceneLoadJob {
+            request,
+            token,
+            manifest,
+            resulting_state: Some(decision.state),
+        }))
+    }
+
+    fn begin_adaptive_variant_job(
+        &mut self,
+        appearance: PrecipitationAppearance,
+    ) -> Result<Option<SceneLoadJob>, String> {
+        // Do not let a weather-only candidate supersede a full family choice.
+        // The latest fresh appearance is reconsidered after the full load ends.
+        if self.pending_full_generation.is_some() {
+            return Ok(None);
+        }
+        let Some(active_id) = self.transaction.active().map(|scene| scene.id.clone()) else {
+            return Ok(None);
+        };
+        let Some(active_state) = self
+            .controller
+            .registry()
+            .adaptive_state_for_scene(&active_id)
+        else {
+            return Ok(None);
+        };
+        let state = self
+            .adaptive_state
+            .clone()
+            .filter(|state| state.family_id == active_state.family_id)
+            .unwrap_or(active_state);
+        let Some(manifest) = self
+            .controller
+            .registry()
+            .adaptive_variant_in_family(&state.family_id, appearance)
+            .cloned()
+        else {
+            return Ok(None);
+        };
+        if manifest.id == active_id {
+            return Ok(None);
+        }
+        let request = self
+            .controller
+            .request_selected(
+                &manifest.id,
+                SelectionTrigger::WeatherUpdated,
+                format!("fresh weather variant within family {}", state.family_id),
+            )
+            .map_err(|result| format!("adaptive weather variant rejected: {result:?}"))?;
+        let token = self.transaction.begin(&request);
+        Ok(Some(SceneLoadJob {
+            request,
+            token,
+            manifest,
+            resulting_state: Some(state),
+        }))
+    }
+
     /// Begin one explicit request and return a cloneable manifest for loading
     /// outside the Wayland dispatch thread. The returned token must be paired
     /// with `complete_loaded`; newer requests make older tokens stale.
@@ -737,6 +1034,7 @@ impl RegistrySelection {
             .controller
             .request(snapshot, seed, trigger)
             .map_err(|result| format!("explicit scene request was not accepted: {result:?}"))?;
+        self.pending_full_generation = None;
         let token = self.transaction.begin(&request);
         let manifest = self
             .controller
@@ -763,8 +1061,12 @@ impl RegistrySelection {
             .complete_with_swap(token, candidate, |scene| {
                 renderer.upload_and_swap_scene(scene)
             });
-        if let CommitOutcome::Applied { ref id, .. } = outcome {
-            self.controller.mark_active(id)?;
+        match &outcome {
+            CommitOutcome::Applied { id, .. } | CommitOutcome::Unchanged { id, .. } => {
+                self.controller.mark_active(id)?;
+                self.adaptive_state = self.controller.registry().adaptive_state_for_scene(id);
+            }
+            CommitOutcome::Stale { .. } | CommitOutcome::Failed { .. } => {}
         }
         println!(
             "trace scene-selection generation={} id={} trigger={:?} outcome={outcome:?}",
@@ -779,10 +1081,29 @@ impl RegistrySelection {
     #[allow(dead_code)]
     fn replace_registry(&mut self, registry: SceneRegistry) {
         self.controller.replace_registry(registry);
+        self.invalidate_pending_adaptive_work();
     }
 
     fn disable_registry(&mut self) {
         self.controller.replace_registry(SceneRegistry::empty());
+        self.invalidate_pending_adaptive_work();
+    }
+
+    fn invalidate_pending_adaptive_work(&mut self) {
+        self.controller.invalidate_requests();
+        self.transaction
+            .invalidate_through(self.controller.request_generation());
+        self.pending_full_generation = None;
+    }
+
+    fn mark_full_job_pending(&mut self, generation: u64) {
+        self.pending_full_generation = Some(generation);
+    }
+
+    fn clear_full_job_pending(&mut self, generation: u64) {
+        if self.pending_full_generation == Some(generation) {
+            self.pending_full_generation = None;
+        }
     }
 
     fn complete_loaded_shared<'wayland>(
@@ -798,11 +1119,19 @@ impl RegistrySelection {
             .complete_with_swap(token, candidate, |scene| {
                 renderer.upload_and_swap_scene(scene)
             });
-        if let CommitOutcome::Applied { ref id, .. } = outcome {
-            self.controller.mark_active(id)?;
-            for presenter in presenters.values_mut() {
-                presenter.refresh_scene_binding(renderer);
+        match &outcome {
+            CommitOutcome::Applied { id, .. } => {
+                self.controller.mark_active(id)?;
+                self.adaptive_state = self.controller.registry().adaptive_state_for_scene(id);
+                for presenter in presenters.values_mut() {
+                    presenter.refresh_scene_binding(renderer);
+                }
             }
+            CommitOutcome::Unchanged { id, .. } => {
+                self.controller.mark_active(id)?;
+                self.adaptive_state = self.controller.registry().adaptive_state_for_scene(id);
+            }
+            CommitOutcome::Stale { .. } | CommitOutcome::Failed { .. } => {}
         }
         println!(
             "trace scene-selection generation={} id={} trigger={:?} outcome={outcome:?} shared=true",
@@ -849,6 +1178,107 @@ fn load_scene(
     Ok((scene, None))
 }
 
+fn load_startup_config_off_thread() -> Result<AppConfig, Box<dyn Error>> {
+    thread::Builder::new()
+        .name("worldwall-config-startup".to_owned())
+        .spawn(|| AppConfig::from_environment().map_err(|error| error.to_string()))?
+        .join()
+        .map_err(|_| "startup config worker panicked")?
+        .map_err(Into::into)
+}
+
+fn load_startup_scene_off_thread(
+    config: &AppConfig,
+    snapshot: EnvironmentSnapshot,
+    adaptive_input: (Option<f32>, PrecipitationAppearance),
+    previous_state: Option<AdaptiveSelectionState>,
+) -> Result<(Scene, Option<RegistrySelection>), Box<dyn Error>> {
+    let adaptive = config.adaptive_scenes;
+    let registry_dir = config.registry_dir.clone();
+    thread::Builder::new()
+        .name("worldwall-scene-startup".to_owned())
+        .spawn(move || {
+            if adaptive {
+                let root = registry_dir
+                    .ok_or_else(|| "adaptive selection has no validated registry".to_owned())?;
+                let (temperature_c, appearance) = adaptive_input;
+                RegistrySelection::startup_adaptive(root, temperature_c, appearance, previous_state)
+                    .map(|(selection, scene)| (scene, Some(selection)))
+                    .map_err(|error| error.to_string())
+            } else {
+                load_scene(snapshot, registry_dir.as_deref()).map_err(|error| error.to_string())
+            }
+        })?
+        .join()
+        .map_err(|_| "startup scene worker panicked")?
+        .map_err(Into::into)
+}
+
+struct ConfigLoadWorker {
+    jobs: mpsc::SyncSender<PathBuf>,
+    completions: mpsc::Receiver<Result<PreparedAppConfig, String>>,
+    wakeups: Option<Channel<()>>,
+}
+
+impl ConfigLoadWorker {
+    fn new() -> Result<Self, Box<dyn Error>> {
+        Self::with_loader(|path| AppConfig::load_prepared(path).map_err(|error| error.to_string()))
+    }
+
+    fn with_loader(
+        loader: impl Fn(PathBuf) -> Result<PreparedAppConfig, String> + Send + 'static,
+    ) -> Result<Self, Box<dyn Error>> {
+        let (jobs, job_receiver) = mpsc::sync_channel::<PathBuf>(1);
+        let (completion_sender, completions) = mpsc::sync_channel(1);
+        let (wakeup_sender, wakeups) = channel::sync_channel(1);
+        thread::Builder::new()
+            .name("worldwall-config-load".to_owned())
+            .spawn(move || {
+                while let Ok(path) = job_receiver.recv() {
+                    let result = loader(path);
+                    if completion_sender.send(result).is_err() {
+                        break;
+                    }
+                    // A full wakeup channel means the owner is already scheduled
+                    // to drain the single bounded completion slot.
+                    let _ = wakeup_sender.try_send(());
+                }
+            })?;
+        Ok(Self {
+            jobs,
+            completions,
+            wakeups: Some(wakeups),
+        })
+    }
+
+    fn submit(&self, path: PathBuf) -> Result<(), String> {
+        self.jobs.try_send(path).map_err(|error| match error {
+            mpsc::TrySendError::Full(_) => "config-load worker queue is full".to_owned(),
+            mpsc::TrySendError::Disconnected(_) => "config-load worker is unavailable".to_owned(),
+        })
+    }
+
+    fn take_wakeup_channel(&mut self) -> Option<Channel<()>> {
+        self.wakeups.take()
+    }
+
+    fn try_recv(&self) -> Option<Result<PreparedAppConfig, String>> {
+        self.completions.try_recv().ok()
+    }
+}
+
+#[derive(Clone, Copy)]
+enum PendingIpcKind {
+    Config,
+    Scene { generation: u64 },
+}
+
+struct PendingIpc {
+    request: ControlRequest,
+    command_name: &'static str,
+    kind: PendingIpcKind,
+}
+
 #[cfg(debug_assertions)]
 fn test_exit_deadline(origin: Instant) -> Option<Instant> {
     let milliseconds = std::env::var("WORLDWALL_TEST_EXIT_AFTER_MS")
@@ -888,16 +1318,25 @@ fn render_renderer<'wayland>(
     extent: (u32, u32),
     animation_time_seconds: f32,
     civil_seconds: u32,
+    solar_sample: Option<ResolvedPaletteSample>,
 ) -> Result<RenderOutcome, Box<dyn Error>> {
     renderer.reconfigure(extent)?;
-    let outcome = renderer.render_at_with_civil_seconds(animation_time_seconds, civil_seconds)?;
+    let outcome = renderer.render_at_with_palette_sample(
+        animation_time_seconds,
+        civil_seconds,
+        solar_sample,
+    )?;
     match outcome {
         RenderOutcome::Presented | RenderOutcome::Timeout | RenderOutcome::Occluded => Ok(outcome),
         RenderOutcome::Reconfigure => {
             eprintln!("trace gpu-frame recovery=surface-recreate attempt=1");
             renderer.recreate_surface(connection)?;
             renderer.reconfigure(extent)?;
-            match renderer.render_at_with_civil_seconds(animation_time_seconds, civil_seconds)? {
+            match renderer.render_at_with_palette_sample(
+                animation_time_seconds,
+                civil_seconds,
+                solar_sample,
+            )? {
                 RenderOutcome::Presented => Ok(RenderOutcome::Presented),
                 outcome => Err(format!(
                     "surface recovery did not present one bounded retry: {outcome:?}"
@@ -1519,7 +1958,7 @@ struct MultiWaylandClient {
     timer_fired: bool,
     power_events: Vec<PowerEvent>,
     weather_timer_fired: bool,
-    ipc_requests: Vec<ControlRequest>,
+    ipc_requests: VecDeque<ControlRequest>,
     render_paused: bool,
     /// Outputs that failed capability validation remain degraded until their
     /// Wayland identity is removed or rediscovered. This prevents a missing
@@ -1545,7 +1984,7 @@ impl MultiWaylandClient {
             timer_fired: false,
             power_events: Vec::new(),
             weather_timer_fired: false,
-            ipc_requests: Vec::new(),
+            ipc_requests: VecDeque::new(),
             render_paused: false,
             degraded_outputs: BTreeSet::new(),
             fractional_globals,
@@ -1750,11 +2189,23 @@ impl MultiWaylandClient {
     }
 
     fn mark_ipc_request(&mut self, request: ControlRequest) {
-        self.ipc_requests.push(request);
+        const MAX_PENDING_IPC_REQUESTS: usize = 32;
+        if self.ipc_requests.len() >= MAX_PENDING_IPC_REQUESTS {
+            request.respond(ipc::error_response(
+                "busy",
+                "Worldwall command queue is full",
+            ));
+            return;
+        }
+        self.ipc_requests.push_back(request);
     }
 
-    fn take_ipc_requests(&mut self) -> Vec<ControlRequest> {
-        std::mem::take(&mut self.ipc_requests)
+    fn pop_ipc_request(&mut self) -> Option<ControlRequest> {
+        self.ipc_requests.pop_front()
+    }
+
+    fn has_ipc_requests(&self) -> bool {
+        !self.ipc_requests.is_empty()
     }
 
     fn take_power_events(&mut self) -> Vec<PowerEvent> {
@@ -2231,13 +2682,22 @@ fn render_multi_presenter<'wayland>(
     extent: (u32, u32),
     animation_time_seconds: f32,
     civil_seconds: u32,
+    solar_sample: Option<ResolvedPaletteSample>,
 ) -> Result<RenderOutcome, Box<dyn Error>> {
     presenter.reconfigure(extent)?;
-    match presenter.render_at_with_civil_seconds(animation_time_seconds, civil_seconds)? {
+    match presenter.render_at_with_palette_sample(
+        animation_time_seconds,
+        civil_seconds,
+        solar_sample,
+    )? {
         RenderOutcome::Reconfigure => {
             presenter.recreate_surface(connection)?;
             presenter.reconfigure(extent)?;
-            presenter.render_at_with_civil_seconds(animation_time_seconds, civil_seconds)
+            presenter.render_at_with_palette_sample(
+                animation_time_seconds,
+                civil_seconds,
+                solar_sample,
+            )
         }
         outcome => Ok(outcome),
     }
@@ -2285,19 +2745,259 @@ fn record_ipc_failure(diagnostics: &mut DiagnosticRateLimiter, response: &Value)
 }
 
 #[allow(clippy::too_many_arguments)]
-fn handle_ipc_requests<'wayland>(
+fn apply_config_candidate(
+    prepared: PreparedAppConfig,
+    active_config: &mut AppConfig,
+    selection: &mut Option<RegistrySelection>,
+    schedulers: &mut BTreeMap<u32, FrameScheduler>,
+    civil_time: &mut CivilTimeRuntime,
+    weather: &mut WeatherRuntime,
+) -> Result<Fps, String> {
+    apply_config_candidate_with_weather_factory(
+        prepared.config,
+        prepared.registry,
+        active_config,
+        selection,
+        schedulers,
+        civil_time,
+        weather,
+        WeatherRuntime::from_config,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn apply_config_candidate_with_weather_factory(
+    mut candidate: AppConfig,
+    prepared_registry: Option<SceneRegistry>,
+    active_config: &mut AppConfig,
+    selection: &mut Option<RegistrySelection>,
+    schedulers: &mut BTreeMap<u32, FrameScheduler>,
+    civil_time: &mut CivilTimeRuntime,
+    weather: &mut WeatherRuntime,
+    weather_factory: impl FnOnce(&AppConfig) -> Result<WeatherRuntime, Box<dyn Error>>,
+) -> Result<Fps, String> {
+    let registry_changed = candidate.registry_dir != active_config.registry_dir;
+    let civil_time_changed = candidate.location != active_config.location
+        || candidate.timezone != active_config.timezone;
+    let weather_changed = candidate.weather_provider != active_config.weather_provider
+        || candidate.weather_location != active_config.weather_location;
+
+    // FPS/registry/timezone-only edits do not invalidate a location-matched
+    // weather cache or restart its worker. A changed config generation is
+    // installed only when the provider/location settings actually change.
+    if !weather_changed {
+        candidate.cache_scope = active_config.cache_scope;
+    }
+
+    // Prepare every fallible replacement before mutating live state. In
+    // particular, a failed registry or provider setup leaves all current
+    // runtime inputs and scene-selection state untouched.
+    let replacement = prepared_registry;
+    let replacement_civil_time = civil_time_changed
+        .then(|| CivilTimeRuntime::from_config(&candidate))
+        .transpose()
+        .map_err(|error| error.to_string())?;
+    let replacement_weather = if weather_changed {
+        Some(weather_factory(&candidate).map_err(|error| error.to_string())?)
+    } else {
+        None
+    };
+
+    if registry_changed {
+        match replacement {
+            Some(registry) => {
+                if let Some(active) = selection.as_mut() {
+                    active.replace_registry(registry);
+                } else {
+                    *selection = Some(RegistrySelection::from_registry(registry));
+                }
+            }
+            None => {
+                // Keep the resident transaction alive while making future
+                // registry selections unavailable across a path change.
+                if let Some(active) = selection.as_mut() {
+                    active.disable_registry();
+                }
+            }
+        }
+    }
+    // A successful config reload must not allow a previously queued adaptive
+    // decode to swap a scene afterward. Invalidate only internal request
+    // tokens; this does not advance the user-visible selection generation or
+    // reselect the active scene.
+    if let Some(active) = selection.as_mut() {
+        active.invalidate_pending_adaptive_work();
+    }
+    for scheduler in schedulers.values_mut() {
+        scheduler.set_fps(candidate.fps, 0);
+    }
+    *active_config = candidate;
+    if let Some(replacement) = replacement_civil_time {
+        *civil_time = replacement;
+    }
+    if let Some(replacement) = replacement_weather {
+        // Drop/cancel the old worker before permitting the new provider to
+        // issue its one asynchronous startup request.
+        *weather = replacement;
+        weather.request_startup();
+    }
+    Ok(active_config.fps)
+}
+
+fn submit_scene_load_job(
+    worker: Option<&SceneLoadWorker>,
+    selection: &mut RegistrySelection,
+    job: SceneLoadJob,
+) {
+    let generation = job.request.generation;
+    let id = job.request.id.clone();
+    let trigger = job.request.trigger.clone();
+    let full_selection = matches!(
+        &trigger,
+        SelectionTrigger::Resume | SelectionTrigger::Reload
+    );
+    match worker {
+        Some(worker) => match worker.submit(job) {
+            Ok(()) => {
+                if full_selection {
+                    selection.mark_full_job_pending(generation);
+                }
+                println!(
+                    "trace adaptive-scene-load state=queued generation={generation} id={id} trigger={trigger:?}"
+                );
+            }
+            Err(error) => {
+                selection.clear_full_job_pending(generation);
+                eprintln!(
+                    "trace adaptive-scene-load state=error generation={generation} id={id} trigger={trigger:?} reason={error}"
+                );
+            }
+        },
+        None => {
+            selection.clear_full_job_pending(generation);
+            eprintln!(
+                "trace adaptive-scene-load state=error generation={generation} id={id} trigger={trigger:?} reason=worker-unavailable"
+            );
+        }
+    }
+}
+
+fn persist_adaptive_selection_state(
+    store: Option<&AdaptiveSelectionStateStore>,
+    selection: &RegistrySelection,
+) {
+    if let (Some(store), Some(state)) = (store, selection.adaptive_state.as_ref())
+        && let Err(error) = store.save(state)
+    {
+        eprintln!("trace adaptive-state state=error action=retain-in-memory reason={error}");
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn finish_config_reload(
+    prepared: PreparedAppConfig,
+    active_config: &mut AppConfig,
+    selection: &mut Option<RegistrySelection>,
+    schedulers: &mut BTreeMap<u32, FrameScheduler>,
+    civil_time: &mut CivilTimeRuntime,
+    weather: &mut WeatherRuntime,
+    adaptive_state_store: &mut Option<AdaptiveSelectionStateStore>,
+    scene_loader: &mut Option<SceneLoadWorker>,
+) -> Result<Fps, String> {
+    let adaptive_was_enabled = active_config.adaptive_scenes;
+    let candidate_adaptive = prepared.config.adaptive_scenes;
+    let mut prepared_loader = None;
+    let mut prepared_state_store = None;
+    if candidate_adaptive && scene_loader.is_none() {
+        prepared_loader = Some(SceneLoadWorker::new().map_err(|error| error.to_string())?);
+    }
+    if candidate_adaptive && adaptive_state_store.is_none() {
+        prepared_state_store =
+            Some(AdaptiveSelectionStateStore::default_path().map_err(|error| error.to_string())?);
+    }
+
+    let fps = apply_config_candidate(
+        prepared,
+        active_config,
+        selection,
+        schedulers,
+        civil_time,
+        weather,
+    )?;
+    if active_config.adaptive_scenes {
+        if scene_loader.is_none() {
+            *scene_loader = prepared_loader;
+        }
+        if adaptive_state_store.is_none() {
+            *adaptive_state_store = prepared_state_store;
+        }
+        if !adaptive_was_enabled {
+            let persisted = adaptive_state_store
+                .as_ref()
+                .and_then(|store| match store.load() {
+                    Ok(state) => state,
+                    Err(error) => {
+                        eprintln!(
+                            "trace adaptive-state state=error action=retain-active reason={error}"
+                        );
+                        None
+                    }
+                });
+            if let Some(active) = selection.as_mut() {
+                let active_state = active.transaction.active().and_then(|loaded| {
+                    active
+                        .controller
+                        .registry()
+                        .adaptive_state_for_scene(&loaded.id)
+                });
+                active.adaptive_state = active_state.or(persisted);
+            }
+        }
+    } else {
+        *adaptive_state_store = None;
+    }
+    Ok(fps)
+}
+
+fn scene_selection_response(
+    command_name: &str,
+    outcome: &Result<CommitOutcome, Box<dyn Error>>,
+) -> Value {
+    match outcome {
+        Ok(CommitOutcome::Applied { id, .. } | CommitOutcome::Unchanged { id, .. }) => {
+            ipc::success_response(
+                command_name,
+                json!({"applied": true, "scene": id, "outcome": format!("{:?}", outcome.as_ref().unwrap())}),
+            )
+        }
+        Ok(CommitOutcome::Failed { reason, .. }) => {
+            ipc::error_response("selection_failed", reason.clone())
+        }
+        Ok(CommitOutcome::Stale { .. }) => {
+            ipc::error_response("stale_request", "selection generation is stale")
+        }
+        Err(error) => ipc::error_response("selection_failed", error.to_string()),
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn handle_ipc_requests(
     client: &mut MultiWaylandClient,
     shared: &mut Option<SharedRenderer>,
-    presenters: &mut BTreeMap<u32, OutputRenderer<'wayland>>,
     selection: &mut Option<RegistrySelection>,
     config: &mut AppConfig,
-    schedulers: &mut BTreeMap<u32, FrameScheduler>,
-    civil_time: &CivilTimeRuntime,
-    weather: &WeatherRuntime,
+    civil_time: &mut CivilTimeRuntime,
+    weather: &mut WeatherRuntime,
+    adaptive_state_store: &mut Option<AdaptiveSelectionStateStore>,
+    ipc_scene_loader: &SceneLoadWorker,
+    config_loader: &ConfigLoadWorker,
+    pending_ipc: &mut Option<PendingIpc>,
     diagnostics: &mut DiagnosticRateLimiter,
 ) -> Option<Fps> {
-    let mut applied_fps = None;
-    for request in client.take_ipc_requests() {
+    if pending_ipc.is_some() {
+        return None;
+    }
+    while let Some(request) = client.pop_ipc_request() {
         let command_name = match &request.command {
             Command::Status => "status",
             Command::Reload => "reload",
@@ -2328,67 +3028,18 @@ fn handle_ipc_requests<'wayland>(
                 )
             }
             Command::Weather => ipc::success_response(command_name, weather.status_value()),
-            Command::ReloadConfig => match config.reload_path().and_then(AppConfig::load) {
-                Ok(candidate) => {
-                    let registry_changed = candidate.registry_dir != config.registry_dir;
-                    let replacement = candidate
-                        .registry_dir
-                        .as_ref()
-                        .map(SceneRegistry::load)
-                        .transpose();
-                    match replacement {
-                        Ok(replacement) if registry_changed => {
-                            match replacement {
-                                Some(registry) => {
-                                    if let Some(active) = selection.as_mut() {
-                                        active.replace_registry(registry);
-                                    } else {
-                                        *selection =
-                                            Some(RegistrySelection::from_registry(registry));
-                                    }
-                                }
-                                None => {
-                                    // Keep the resident transaction alive while
-                                    // making future registry selections
-                                    // unavailable. This preserves status for
-                                    // the current scene across a path change.
-                                    if let Some(active) = selection.as_mut() {
-                                        active.disable_registry();
-                                    }
-                                }
-                            }
-                            for scheduler in schedulers.values_mut() {
-                                scheduler.set_fps(candidate.fps, 0);
-                            }
-                            let fps = match candidate.fps {
-                                Fps::Fifteen => 15,
-                                Fps::Thirty => 30,
-                            };
-                            *config = candidate;
-                            applied_fps = Some(config.fps);
-                            ipc::success_response(
-                                command_name,
-                                json!({"applied": true, "reselected": false, "fps": fps}),
-                            )
-                        }
-                        Ok(_) => {
-                            for scheduler in schedulers.values_mut() {
-                                scheduler.set_fps(candidate.fps, 0);
-                            }
-                            let fps = match candidate.fps {
-                                Fps::Fifteen => 15,
-                                Fps::Thirty => 30,
-                            };
-                            *config = candidate;
-                            applied_fps = Some(config.fps);
-                            ipc::success_response(
-                                command_name,
-                                json!({"applied": true, "reselected": false, "fps": fps}),
-                            )
-                        }
-                        Err(error) => ipc::error_response("invalid_config", error.to_string()),
+            Command::ReloadConfig => match config.reload_path() {
+                Ok(path) => match config_loader.submit(path) {
+                    Ok(()) => {
+                        *pending_ipc = Some(PendingIpc {
+                            request,
+                            command_name,
+                            kind: PendingIpcKind::Config,
+                        });
+                        break;
                     }
-                }
+                    Err(error) => ipc::error_response("invalid_config", error),
+                },
                 Err(error) => ipc::error_response("invalid_config", error.to_string()),
             },
             trigger => {
@@ -2413,38 +3064,81 @@ fn handle_ipc_requests<'wayland>(
                             "the active scene has no validated registry selection",
                         )
                     }
-                    (Some(active), Some(renderer)) => {
-                        let snapshot = civil_time.snapshot(weather.weather());
-                        let seed = u64::from(civil_time.seconds());
-                        match active.begin_explicit_request(snapshot, seed, trigger) {
-                            Ok((request, token, manifest)) => {
-                                let candidate = manifest.load_scene();
-                                match active.complete_loaded_shared(
-                                    renderer, presenters, &request, token, candidate,
-                                ) {
-                                    Ok(outcome) => match outcome {
-                                        CommitOutcome::Applied { ref id, .. }
-                                        | CommitOutcome::Unchanged { ref id, .. } => {
-                                            ipc::success_response(
+                    (Some(active), Some(_renderer)) => {
+                        if config.adaptive_scenes && trigger == SelectionTrigger::Reload {
+                            let (temperature_c, appearance) = weather.adaptive_input();
+                            match active.begin_adaptive_full_job(
+                                temperature_c,
+                                appearance,
+                                SelectionTrigger::Reload,
+                            ) {
+                                Ok(Some(job)) => {
+                                    let generation = job.request.generation;
+                                    match ipc_scene_loader.submit(job) {
+                                        Ok(()) => {
+                                            active.mark_full_job_pending(generation);
+                                            *pending_ipc = Some(PendingIpc {
+                                                request,
                                                 command_name,
-                                                json!({"applied": true, "scene": id, "outcome": format!("{outcome:?}")}),
+                                                kind: PendingIpcKind::Scene { generation },
+                                            });
+                                            break;
+                                        }
+                                        Err(error) => {
+                                            active.clear_full_job_pending(generation);
+                                            ipc::error_response(
+                                                "selection_failed",
+                                                error.to_string(),
                                             )
                                         }
-                                        CommitOutcome::Failed { ref reason, .. } => {
-                                            ipc::error_response("selection_failed", reason.clone())
-                                        }
-                                        CommitOutcome::Stale { .. } => ipc::error_response(
-                                            "stale_request",
-                                            "selection generation is stale",
-                                        ),
-                                    },
-                                    Err(error) => {
-                                        ipc::error_response("selection_failed", error.to_string())
                                     }
                                 }
+                                Ok(None) => {
+                                    persist_adaptive_selection_state(
+                                        adaptive_state_store.as_ref(),
+                                        active,
+                                    );
+                                    let id = active.transaction.active().map_or_else(
+                                        || "unknown".to_owned(),
+                                        |scene| scene.id.clone(),
+                                    );
+                                    ipc::success_response(
+                                        command_name,
+                                        json!({"applied": true, "scene": id, "outcome": "unchanged"}),
+                                    )
+                                }
+                                Err(error) => ipc::error_response("selection_rejected", error),
                             }
-                            Err(error) => {
-                                ipc::error_response("selection_rejected", error.to_string())
+                        } else {
+                            let snapshot = civil_time.snapshot(weather.weather());
+                            let seed = u64::from(civil_time.seconds());
+                            match active.begin_explicit_request(snapshot, seed, trigger) {
+                                Ok((selection_request, token, manifest)) => {
+                                    let generation = selection_request.generation;
+                                    let job = SceneLoadJob {
+                                        request: selection_request,
+                                        token,
+                                        manifest,
+                                        resulting_state: None,
+                                    };
+                                    match ipc_scene_loader.submit(job) {
+                                        Ok(()) => {
+                                            *pending_ipc = Some(PendingIpc {
+                                                request,
+                                                command_name,
+                                                kind: PendingIpcKind::Scene { generation },
+                                            });
+                                            break;
+                                        }
+                                        Err(error) => ipc::error_response(
+                                            "selection_failed",
+                                            error.to_string(),
+                                        ),
+                                    }
+                                }
+                                Err(error) => {
+                                    ipc::error_response("selection_rejected", error.to_string())
+                                }
                             }
                         }
                     }
@@ -2454,7 +3148,7 @@ fn handle_ipc_requests<'wayland>(
         record_ipc_failure(diagnostics, &response);
         request.respond(response);
     }
-    applied_fps
+    None
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -2464,14 +3158,19 @@ fn run_multi_presenting<'wayland>(
     mut presenters: BTreeMap<u32, OutputRenderer<'wayland>>,
     shared: &mut Option<SharedRenderer>,
     selection: &mut Option<RegistrySelection>,
+    scene: &Scene,
     config: &mut AppConfig,
     connection: &'wayland Connection,
     queue_handle: &QueueHandle<MultiWaylandClient>,
     layers: &'wayland [(u32, LayerSurface)],
     schedulers: &mut BTreeMap<u32, FrameScheduler>,
     seen_generations: &mut BTreeMap<u32, u64>,
-    civil_time: &CivilTimeRuntime,
+    civil_time: &mut CivilTimeRuntime,
     weather: &mut WeatherRuntime,
+    adaptive_state_store: &mut Option<AdaptiveSelectionStateStore>,
+    scene_loader: &mut Option<SceneLoadWorker>,
+    ipc_scene_loader: &SceneLoadWorker,
+    config_loader: &ConfigLoadWorker,
     clock_origin: Instant,
     animation_clock: &mut PausedAnimationClock,
     power: &mut PowerStateMachine,
@@ -2485,6 +3184,9 @@ fn run_multi_presenting<'wayland>(
 ) -> Result<bool, Box<dyn Error>> {
     let mut fps = fps;
     let mut interval = interval;
+    let mut pending_ipc: Option<PendingIpc> = None;
+    let mut deferred_weather_reconsideration = false;
+    let mut deferred_resume_selection = false;
     // Bootstrap each newly-created presenter only after its callback request
     // is queued. The next steady-state draw is callback/deadline gated below.
     if !client.render_paused {
@@ -2493,7 +3195,18 @@ fn run_multi_presenting<'wayland>(
                 continue;
             };
             client.request_frame_for_surface(output_id, layer.wl_surface(), queue_handle);
-            match presenter.render_at_with_civil_seconds(0.0, civil_time.seconds())? {
+            let solar_sample = resolve_solar_palette_sample(
+                active_scene_or(selection.as_ref(), scene),
+                civil_time,
+            );
+            let bootstrap_now_ns =
+                clock_origin.elapsed().as_nanos().min(u128::from(u64::MAX)) as u64;
+            let animation_time_seconds = animation_clock.seconds(bootstrap_now_ns);
+            match presenter.render_at_with_palette_sample(
+                animation_time_seconds,
+                civil_time.seconds(),
+                solar_sample,
+            )? {
                 RenderOutcome::Presented => {
                     if let Some(scheduler) = schedulers.get_mut(&output_id) {
                         let _ = scheduler.submit_if_due(0);
@@ -2511,10 +3224,45 @@ fn run_multi_presenting<'wayland>(
     }
 
     loop {
+        if pending_ipc.is_none() && client.has_ipc_requests() {
+            let _ = handle_ipc_requests(
+                client,
+                shared,
+                selection,
+                config,
+                civil_time,
+                weather,
+                adaptive_state_store,
+                ipc_scene_loader,
+                config_loader,
+                &mut pending_ipc,
+                diagnostics,
+            );
+        }
         event_loop.dispatch(None, client)?;
         if client.weather_timer_fired {
             client.weather_timer_fired = false;
-            weather.poll();
+            let fresh_result = weather.poll_for_update();
+            if fresh_result && config.adaptive_scenes && !client.render_paused {
+                if pending_ipc.is_some() {
+                    deferred_weather_reconsideration = true;
+                } else {
+                    let (_, appearance) = weather.adaptive_input();
+                    if appearance != PrecipitationAppearance::Unknown
+                        && let Some(active) = selection.as_mut()
+                    {
+                        match active.begin_adaptive_variant_job(appearance) {
+                            Ok(Some(job)) => {
+                                submit_scene_load_job(scene_loader.as_ref(), active, job)
+                            }
+                            Ok(None) => {}
+                            Err(error) => eprintln!(
+                                "trace adaptive-scene-selection state=error trigger=weather reason={error}"
+                            ),
+                        }
+                    }
+                }
+            }
         }
         let now_ns = clock_origin.elapsed().as_nanos().min(u128::from(u64::MAX)) as u64;
         for event in client.take_power_events() {
@@ -2548,17 +3296,56 @@ fn run_multi_presenting<'wayland>(
                 PowerAction::Ignored => {}
             }
         }
-        if let Some(applied_fps) = handle_ipc_requests(
+        let mut applied_fps = handle_ipc_requests(
             client,
             shared,
-            &mut presenters,
             selection,
             config,
-            schedulers,
             civil_time,
             weather,
+            adaptive_state_store,
+            ipc_scene_loader,
+            config_loader,
+            &mut pending_ipc,
             diagnostics,
-        ) {
+        );
+        if let Some(PendingIpc {
+            kind: PendingIpcKind::Config,
+            ..
+        }) = pending_ipc.as_ref()
+            && let Some(result) = config_loader.try_recv()
+        {
+            let pending = pending_ipc.take().expect("checked pending config request");
+            let response = match result {
+                Ok(prepared) => match finish_config_reload(
+                    prepared,
+                    config,
+                    selection,
+                    schedulers,
+                    civil_time,
+                    weather,
+                    adaptive_state_store,
+                    scene_loader,
+                ) {
+                    Ok(fps) => {
+                        applied_fps = Some(fps);
+                        ipc::success_response(
+                            pending.command_name,
+                            json!({
+                                "applied": true,
+                                "reselected": false,
+                                "fps": match fps { Fps::Fifteen => 15, Fps::Thirty => 30 },
+                            }),
+                        )
+                    }
+                    Err(error) => ipc::error_response("invalid_config", error),
+                },
+                Err(error) => ipc::error_response("invalid_config", error),
+            };
+            record_ipc_failure(diagnostics, &response);
+            pending.request.respond(response);
+        }
+        if let Some(applied_fps) = applied_fps.take() {
             if applied_fps != fps {
                 fps = applied_fps;
                 interval = Duration::from_nanos(fps.interval_nanos());
@@ -2571,6 +3358,8 @@ fn run_multi_presenting<'wayland>(
                 println!("trace config-fps-reconfigured fps={:?}", fps);
             }
         }
+        let clock_now_ns = clock_origin.elapsed().as_nanos().min(u128::from(u64::MAX)) as u64;
+        animation_clock.set_multiplier(config.animation_speed_multiplier, clock_now_ns);
         if let Some(generation) = power.begin_resume_if_ready(!client.ready_output_ids().is_empty())
         {
             client.resume_rendering();
@@ -2591,10 +3380,167 @@ fn run_multi_presenting<'wayland>(
             println!(
                 "trace resume state=active generation={generation} shared-scene-retained=true"
             );
+            weather.refresh_for_resume();
+            if config.adaptive_scenes {
+                if pending_ipc.is_some() {
+                    deferred_resume_selection = true;
+                } else {
+                    let (temperature_c, appearance) = weather.adaptive_input();
+                    if let Some(active) = selection.as_mut() {
+                        match active.begin_adaptive_full_job(
+                            temperature_c,
+                            appearance,
+                            SelectionTrigger::Resume,
+                        ) {
+                            Ok(Some(job)) => {
+                                submit_scene_load_job(scene_loader.as_ref(), active, job)
+                            }
+                            Ok(None) => {
+                                persist_adaptive_selection_state(
+                                    adaptive_state_store.as_ref(),
+                                    active,
+                                );
+                            }
+                            Err(error) => eprintln!(
+                                "trace adaptive-scene-selection state=error trigger=resume reason={error}"
+                            ),
+                        }
+                    }
+                }
+            }
             println!(
                 "trace resume-presented generation={generation} output-ready={}",
                 !presenters.is_empty()
             );
+        }
+        if !pending_ipc
+            .as_ref()
+            .is_some_and(|pending| matches!(pending.kind, PendingIpcKind::Config))
+            && let (Some(renderer), Some(active)) = (shared.as_mut(), selection.as_mut())
+        {
+            let mut completions = Vec::new();
+            if let Some(worker) = scene_loader.as_ref() {
+                while let Some(completion) = worker.try_recv() {
+                    completions.push(completion);
+                }
+            }
+            while let Some(completion) = ipc_scene_loader.try_recv() {
+                completions.push(completion);
+            }
+            for completion in completions {
+                let SceneLoadCompletion {
+                    request,
+                    token,
+                    candidate,
+                    resulting_state,
+                } = completion;
+                let trigger = request.trigger.clone();
+                let is_full_selection = matches!(
+                    &trigger,
+                    SelectionTrigger::Resume | SelectionTrigger::Reload
+                );
+                let generation = request.generation;
+                let outcome = active.complete_loaded_shared(
+                    renderer,
+                    &mut presenters,
+                    &request,
+                    token,
+                    candidate,
+                );
+                if is_full_selection {
+                    active.clear_full_job_pending(generation);
+                }
+                match &outcome {
+                    Ok(CommitOutcome::Applied { .. } | CommitOutcome::Unchanged { .. }) => {
+                        if let Some(state) = resulting_state {
+                            active.adaptive_state = Some(state);
+                        }
+                        if config.adaptive_scenes && trigger != SelectionTrigger::WeatherUpdated {
+                            persist_adaptive_selection_state(adaptive_state_store.as_ref(), active);
+                        }
+                    }
+                    Ok(CommitOutcome::Failed { reason, .. }) => eprintln!(
+                        "trace adaptive-scene-load state=failed trigger={trigger:?} reason={reason}"
+                    ),
+                    Ok(CommitOutcome::Stale { generation }) => println!(
+                        "trace adaptive-scene-load state=stale trigger={trigger:?} generation={generation}"
+                    ),
+                    Err(error) => eprintln!(
+                        "trace adaptive-scene-load state=error trigger={trigger:?} reason={error}"
+                    ),
+                }
+                let matching_ipc_scene = pending_ipc.as_ref().is_some_and(|pending| {
+                    matches!(pending.kind, PendingIpcKind::Scene { generation: pending_generation } if pending_generation == generation)
+                });
+                if matching_ipc_scene {
+                    let pending = pending_ipc.take().expect("matched pending scene request");
+                    let response = scene_selection_response(pending.command_name, &outcome);
+                    record_ipc_failure(diagnostics, &response);
+                    pending.request.respond(response);
+                }
+                if is_full_selection
+                    && config.adaptive_scenes
+                    && matches!(
+                        &outcome,
+                        Ok(CommitOutcome::Applied { .. } | CommitOutcome::Unchanged { .. })
+                    )
+                {
+                    let (_, appearance) = weather.adaptive_input();
+                    if appearance != PrecipitationAppearance::Unknown {
+                        match active.begin_adaptive_variant_job(appearance) {
+                            Ok(Some(job)) => {
+                                submit_scene_load_job(scene_loader.as_ref(), active, job)
+                            }
+                            Ok(None) => {}
+                            Err(error) => eprintln!(
+                                "trace adaptive-scene-selection state=error trigger=weather-after-full reason={error}"
+                            ),
+                        }
+                    }
+                }
+            }
+        }
+        if pending_ipc.is_none() {
+            if config.adaptive_scenes && !client.render_paused && deferred_resume_selection {
+                deferred_resume_selection = false;
+                deferred_weather_reconsideration = false;
+                let (temperature_c, appearance) = weather.adaptive_input();
+                if let Some(active) = selection.as_mut() {
+                    match active.begin_adaptive_full_job(
+                        temperature_c,
+                        appearance,
+                        SelectionTrigger::Resume,
+                    ) {
+                        Ok(Some(job)) => submit_scene_load_job(scene_loader.as_ref(), active, job),
+                        Ok(None) => {
+                            persist_adaptive_selection_state(adaptive_state_store.as_ref(), active)
+                        }
+                        Err(error) => eprintln!(
+                            "trace adaptive-scene-selection state=error trigger=deferred-resume reason={error}"
+                        ),
+                    }
+                }
+            } else if config.adaptive_scenes
+                && !client.render_paused
+                && deferred_weather_reconsideration
+            {
+                deferred_weather_reconsideration = false;
+                let (_, appearance) = weather.adaptive_input();
+                if appearance != PrecipitationAppearance::Unknown
+                    && let Some(active) = selection.as_mut()
+                {
+                    match active.begin_adaptive_variant_job(appearance) {
+                        Ok(Some(job)) => submit_scene_load_job(scene_loader.as_ref(), active, job),
+                        Ok(None) => {}
+                        Err(error) => eprintln!(
+                            "trace adaptive-scene-selection state=error trigger=deferred-weather reason={error}"
+                        ),
+                    }
+                }
+            } else if !config.adaptive_scenes {
+                deferred_weather_reconsideration = false;
+                deferred_resume_selection = false;
+            }
         }
         // A configure can make a newly-created output ready after this
         // topology pass has already built presenters for the outputs that
@@ -2620,6 +3566,8 @@ fn run_multi_presenting<'wayland>(
             continue;
         }
         let animation_time_seconds = animation_clock.seconds(now_ns);
+        let solar_sample =
+            resolve_solar_palette_sample(active_scene_or(selection.as_ref(), scene), civil_time);
         for output_id in client.ready_output_ids() {
             let Some(presenter) = presenters.get_mut(&output_id) else {
                 continue;
@@ -2658,6 +3606,7 @@ fn run_multi_presenting<'wayland>(
                 extent,
                 animation_time_seconds,
                 civil_time.seconds(),
+                solar_sample,
             )? {
                 RenderOutcome::Presented => {
                     let _ = scheduler.submit_if_due(now_ns);
@@ -2701,8 +3650,12 @@ fn run_multi_session<'owners>(
     schedulers: &mut BTreeMap<u32, FrameScheduler>,
     seen_generations: &mut BTreeMap<u32, u64>,
     scene: &Scene,
-    civil_time: &CivilTimeRuntime,
+    civil_time: &mut CivilTimeRuntime,
     weather: &mut WeatherRuntime,
+    adaptive_state_store: &mut Option<AdaptiveSelectionStateStore>,
+    scene_loader: &mut Option<SceneLoadWorker>,
+    ipc_scene_loader: &SceneLoadWorker,
+    config_loader: &ConfigLoadWorker,
     clock_origin: Instant,
     animation_clock: &mut PausedAnimationClock,
     power: &mut PowerStateMachine,
@@ -2752,6 +3705,7 @@ fn run_multi_session<'owners>(
             presenters,
             shared,
             selection,
+            scene,
             config,
             connection,
             queue_handle,
@@ -2760,6 +3714,10 @@ fn run_multi_session<'owners>(
             seen_generations,
             civil_time,
             weather,
+            adaptive_state_store,
+            scene_loader,
+            ipc_scene_loader,
+            config_loader,
             clock_origin,
             animation_clock,
             power,
@@ -2802,6 +3760,7 @@ fn run_multi_session<'owners>(
 /// scheduler is keyed by wl_output identity. Output changes only rebuild
 /// presentation; the selected scene transaction is never touched.
 pub fn run_multi() -> Result<(), Box<dyn Error>> {
+    let mut config = load_startup_config_off_thread()?;
     let connection = Connection::connect_to_env()?;
     let (globals, mut event_queue) = registry_queue_init(&connection)?;
     let queue_handle = event_queue.handle();
@@ -2837,13 +3796,48 @@ pub fn run_multi() -> Result<(), Box<dyn Error>> {
         &mut layers,
     )?;
     event_queue.roundtrip(&mut client)?;
-    let civil_time = CivilTimeRuntime::startup()?;
-    let mut weather = WeatherRuntime::startup()?;
-    let mut config = AppConfig::from_environment()?;
-    let (scene, mut selection) = load_scene(
+    let mut civil_time = CivilTimeRuntime::from_config(&config)?;
+    let mut weather = WeatherRuntime::from_config(&config)?;
+    let mut adaptive_state_store = if config.adaptive_scenes {
+        Some(AdaptiveSelectionStateStore::default_path()?)
+    } else {
+        None
+    };
+    let previous_adaptive_state = match adaptive_state_store.as_ref() {
+        Some(store) => match store.load() {
+            Ok(state) => state,
+            Err(error) => {
+                eprintln!(
+                    "trace adaptive-state state=error action=use-offline-fallback reason={error}"
+                );
+                None
+            }
+        },
+        None => None,
+    };
+    weather.request_startup();
+    let (scene, mut selection) = load_startup_scene_off_thread(
+        &config,
         civil_time.snapshot(weather.weather()),
-        config.registry_dir.as_deref(),
+        weather.adaptive_input(),
+        previous_adaptive_state,
     )?;
+    if let (Some(store), Some(state)) = (
+        adaptive_state_store.as_ref(),
+        selection
+            .as_ref()
+            .and_then(|value| value.adaptive_state.as_ref()),
+    ) && let Err(error) = store.save(state)
+    {
+        eprintln!("trace adaptive-state state=error action=retain-in-memory reason={error}");
+    }
+    // Adaptive triggers and explicit IPC selections use separate bounded
+    // workers, so internal work cannot reject a user command as queue-full.
+    // Keep the internal worker registered across config toggles; it remains
+    // idle while adaptive selection is disabled.
+    let mut scene_loader = Some(SceneLoadWorker::new()?);
+    let mut ipc_scene_loader = SceneLoadWorker::new()?;
+    let mut config_loader = ConfigLoadWorker::new()?;
     // A compositor may start with no complete outputs. Keep dispatching with
     // no timer and create the shared device only when the first layer reaches
     // a nonzero configure; a later output arrival reuses this device/scene.
@@ -2864,6 +3858,26 @@ pub fn run_multi() -> Result<(), Box<dyn Error>> {
     let mut event_loop: EventLoop<MultiWaylandClient> = EventLoop::try_new()?;
     let interval = Duration::from_nanos(fps.interval_nanos());
     WaylandSource::new(connection.clone(), event_queue).insert(event_loop.handle())?;
+    let config_wakeup = config_loader
+        .take_wakeup_channel()
+        .ok_or("config-load worker wakeup source was already registered")?;
+    event_loop
+        .handle()
+        .insert_source(config_wakeup, |_, _, _| {})?;
+    if let Some(scene_wakeup) = scene_loader
+        .as_mut()
+        .and_then(SceneLoadWorker::take_wakeup_channel)
+    {
+        event_loop
+            .handle()
+            .insert_source(scene_wakeup, |_, _, _| {})?;
+    }
+    let ipc_scene_wakeup = ipc_scene_loader
+        .take_wakeup_channel()
+        .ok_or("IPC scene-load worker wakeup source was already registered")?;
+    event_loop
+        .handle()
+        .insert_source(ipc_scene_wakeup, |_, _, _| {})?;
     let ipc_server = match IpcServer::start_default() {
         Ok((server, source)) => {
             event_loop
@@ -2892,7 +3906,8 @@ pub fn run_multi() -> Result<(), Box<dyn Error>> {
         weather_timer_interval,
     )?);
     let mut power = PowerStateMachine::new();
-    let mut animation_clock = PausedAnimationClock::new(0);
+    let mut animation_clock =
+        PausedAnimationClock::new_with_multiplier(0, config.animation_speed_multiplier);
     let mut frame_timer = None;
     run_multi_session(
         &mut event_loop,
@@ -2908,8 +3923,12 @@ pub fn run_multi() -> Result<(), Box<dyn Error>> {
         &mut schedulers,
         &mut seen_generations,
         &scene,
-        &civil_time,
+        &mut civil_time,
         &mut weather,
+        &mut adaptive_state_store,
+        &mut scene_loader,
+        &ipc_scene_loader,
+        &config_loader,
         clock_origin,
         &mut animation_clock,
         &mut power,
@@ -2933,6 +3952,475 @@ pub fn run_multi() -> Result<(), Box<dyn Error>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::{
+        Arc, Mutex,
+        atomic::{AtomicBool, Ordering as AtomicOrdering},
+    };
+
+    struct TestWeatherProvider {
+        requests: Arc<Mutex<Vec<Location>>>,
+        started: Arc<AtomicBool>,
+        cancelled: Arc<AtomicBool>,
+        wait_for_cancellation: bool,
+        capture_cancellation: Option<Arc<Mutex<Option<crate::weather::CancellationToken>>>>,
+        previous_cancellation: Option<Arc<Mutex<Option<crate::weather::CancellationToken>>>>,
+        previous_cancelled_at_fetch: Option<Arc<AtomicBool>>,
+    }
+
+    impl WeatherProvider for TestWeatherProvider {
+        fn fetch(
+            &self,
+            request: crate::weather::ProviderRequest,
+            cancellation: &crate::weather::CancellationToken,
+        ) -> Result<crate::weather::ProviderPayload, crate::weather::ProviderError> {
+            self.requests.lock().unwrap().push(request.location);
+            if let Some(capture) = &self.capture_cancellation {
+                *capture.lock().unwrap() = Some(cancellation.clone());
+            }
+            if let Some(previous) = &self.previous_cancellation {
+                let cancelled = previous
+                    .lock()
+                    .unwrap()
+                    .as_ref()
+                    .is_some_and(crate::weather::CancellationToken::is_cancelled);
+                if let Some(observed) = &self.previous_cancelled_at_fetch {
+                    observed.store(cancelled, AtomicOrdering::Release);
+                }
+            }
+            self.started.store(true, AtomicOrdering::Release);
+            if self.wait_for_cancellation {
+                while !cancellation.is_cancelled() {
+                    std::thread::sleep(Duration::from_millis(1));
+                }
+                self.cancelled.store(true, AtomicOrdering::Release);
+                return Err(crate::weather::ProviderError {
+                    kind: crate::weather::ProviderErrorKind::Cancelled,
+                    message: "test provider cancelled".into(),
+                });
+            }
+            Ok(crate::weather::ProviderPayload {
+                condition: crate::weather::ProviderCondition::Clear,
+                temperature_c: Some(18.0),
+                precipitation: false,
+                observed_at_utc: request.requested_at_utc,
+            })
+        }
+    }
+
+    fn resident_selection() -> RegistrySelection {
+        let mut selection = RegistrySelection::from_registry(SceneRegistry::empty());
+        let loaded = LoadedScene {
+            id: "resident-scene".into(),
+            scene: Scene::reference(),
+            content_key: 17,
+        };
+        let request = SelectionRequest {
+            generation: 1,
+            id: loaded.id.clone(),
+            trigger: SelectionTrigger::Startup,
+            rationale: "test resident scene".into(),
+        };
+        let token = selection.transaction.begin(&request);
+        assert!(matches!(
+            selection.transaction.complete(token, Ok(loaded)),
+            CommitOutcome::Applied { .. }
+        ));
+        selection
+    }
+
+    fn adaptive_test_selection() -> RegistrySelection {
+        use crate::scene_registry::TemperatureBand;
+
+        let families = [
+            ("v26-alpine", TemperatureBand::Cold),
+            ("v19-cold", TemperatureBand::Cool),
+            ("v30-meadow", TemperatureBand::Mild),
+            ("v29-seascape", TemperatureBand::Warm),
+            ("v25-desert", TemperatureBand::Hot),
+        ];
+        let manifests = families.into_iter().map(|(id, band)| SceneManifest {
+            schema_version: 2,
+            id: id.into(),
+            package_dir: std::path::PathBuf::new(),
+            image_path: std::path::PathBuf::new(),
+            palette_path: std::path::PathBuf::new(),
+            animation_path: None,
+            time_of_day_path: None,
+            times: Vec::new(),
+            weather: vec![Weather::Clear],
+            seasons: Vec::new(),
+            family_id: Some(id.into()),
+            temperature_band: Some(band),
+        });
+        let registry =
+            SceneRegistry::from_manifests(Some("v29-seascape".into()), manifests).unwrap();
+        let mut selection = RegistrySelection::from_registry(registry);
+        let request = selection
+            .controller
+            .request_selected(
+                "v29-seascape",
+                SelectionTrigger::Startup,
+                "adaptive test resident",
+            )
+            .unwrap();
+        let token = selection.transaction.begin(&request);
+        selection.transaction.complete(
+            token,
+            Ok(LoadedScene {
+                id: "v29-seascape".into(),
+                scene: Scene::reference(),
+                content_key: 29,
+            }),
+        );
+        selection.controller.mark_active("v29-seascape").unwrap();
+        selection.adaptive_state = Some(AdaptiveSelectionState {
+            family_id: "v29-seascape".into(),
+            temperature_band: TemperatureBand::Warm,
+        });
+        selection
+    }
+
+    fn weather_test_config(location: Location, timezone: &str, cache_scope: u128) -> AppConfig {
+        AppConfig {
+            schema_version: 2,
+            registry_dir: None,
+            fps: Fps::Thirty,
+            animation_speed_multiplier: 0.5,
+            location: Some(location),
+            timezone: Some(crate::config::ConfiguredTimeZone::Iana(
+                timezone.parse().unwrap(),
+            )),
+            weather_provider: crate::config::WeatherProvider::OpenMeteo,
+            adaptive_scenes: false,
+            weather_location: Some(location),
+            cache_scope: Some(cache_scope),
+            source_path: None,
+        }
+    }
+
+    #[test]
+    fn config_candidate_updates_location_timezone_without_selecting_and_rolls_back_failures() {
+        use std::time::{SystemTime, UNIX_EPOCH};
+
+        let path = std::env::temp_dir().join(format!(
+            "worldwall-config-reload-{}",
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::write(
+            &path,
+            "schema_version = 2\nfps = 30\nregistry_dir = \"none\"\n[location]\nlatitude = 10.0\nlongitude = 20.0\ntimezone = \"America/Los_Angeles\"\n[weather]\nprovider = \"disabled\"\n",
+        )
+        .unwrap();
+        let mut active_config = AppConfig::load(&path).unwrap();
+        let original_cache_scope = active_config.cache_scope;
+        let mut civil_time = CivilTimeRuntime::from_config(&active_config).unwrap();
+        let mut weather = WeatherRuntime::from_config(&active_config).unwrap();
+        let mut selection = Some(resident_selection());
+        let resident_generation = selection.as_ref().unwrap().controller.generation();
+        let pending_generation = {
+            let active = selection.as_mut().unwrap();
+            active.controller.invalidate_requests();
+            active.controller.request_generation()
+        };
+        let pending_request = SelectionRequest {
+            generation: pending_generation,
+            id: "queued-candidate".into(),
+            trigger: SelectionTrigger::WeatherUpdated,
+            rationale: "test queued adaptive decode".into(),
+        };
+        let pending_token = selection
+            .as_mut()
+            .unwrap()
+            .transaction
+            .begin(&pending_request);
+        selection
+            .as_mut()
+            .unwrap()
+            .mark_full_job_pending(pending_generation);
+        let mut schedulers = BTreeMap::new();
+
+        let mut candidate = active_config.clone();
+        candidate.fps = Fps::Fifteen;
+        candidate.animation_speed_multiplier = 0.75;
+        candidate.location = Some(Location::new(0.0, 0.0).unwrap());
+        candidate.timezone = Some(crate::config::ConfiguredTimeZone::Iana(
+            "Etc/UTC".parse().unwrap(),
+        ));
+        candidate.cache_scope = original_cache_scope.map(|scope| scope.saturating_add(1));
+        assert_eq!(
+            apply_config_candidate(
+                PreparedAppConfig {
+                    config: candidate,
+                    registry: None,
+                },
+                &mut active_config,
+                &mut selection,
+                &mut schedulers,
+                &mut civil_time,
+                &mut weather,
+            )
+            .unwrap(),
+            Fps::Fifteen
+        );
+        assert_eq!(active_config.location.unwrap().latitude_degrees(), 0.0);
+        assert_eq!(active_config.cache_scope, original_cache_scope);
+        assert_eq!(active_config.fps, Fps::Fifteen);
+        assert_eq!(active_config.animation_speed_multiplier, 0.75);
+        let resident = selection.as_mut().unwrap();
+        assert_eq!(resident.controller.generation(), resident_generation);
+        assert_eq!(resident.transaction.active().unwrap().id, "resident-scene");
+        assert_eq!(resident.pending_full_generation, None);
+        assert!(matches!(
+            resident.transaction.complete(
+                pending_token,
+                Ok(LoadedScene {
+                    id: "queued-candidate".into(),
+                    scene: Scene::reference(),
+                    content_key: 18,
+                }),
+            ),
+            CommitOutcome::Stale { .. }
+        ));
+        assert_eq!(civil_time.timezone.as_ref().unwrap().offset_at(0), 0);
+        assert_eq!(weather.weather(), Weather::Unknown);
+
+        let stable_config = active_config.clone();
+        let stable_timezone = civil_time.timezone.clone();
+        let invalid_path = path.with_extension("invalid-registry");
+        std::fs::write(
+            &invalid_path,
+            "schema_version = 2\nfps = 30\nregistry_dir = \"missing-registry\"\n[weather]\nprovider = \"disabled\"\n",
+        )
+        .unwrap();
+        assert!(AppConfig::load_prepared(&invalid_path).is_err());
+        assert_eq!(active_config, stable_config);
+        assert_eq!(civil_time.timezone, stable_timezone);
+        assert_eq!(weather.weather(), Weather::Unknown);
+        let resident = selection.as_ref().unwrap();
+        assert_eq!(resident.controller.generation(), resident_generation);
+        assert_eq!(resident.transaction.active().unwrap().id, "resident-scene");
+        std::fs::remove_file(path).unwrap();
+        std::fs::remove_file(invalid_path).unwrap();
+    }
+
+    #[test]
+    fn newer_noop_full_selection_invalidates_pending_family_candidate() {
+        use crate::scene_registry::TemperatureBand;
+
+        let mut selection = adaptive_test_selection();
+        let pending = selection
+            .begin_adaptive_full_job(
+                Some(0.0),
+                PrecipitationAppearance::Clear,
+                SelectionTrigger::Resume,
+            )
+            .unwrap()
+            .expect("cold full selection should load another family");
+        selection.mark_full_job_pending(pending.request.generation);
+        let selection_generation = selection.controller.generation();
+        assert!(
+            selection
+                .begin_adaptive_variant_job(PrecipitationAppearance::Rain)
+                .unwrap()
+                .is_none(),
+            "weather-only work must not supersede a pending family choice"
+        );
+
+        assert!(
+            selection
+                .begin_adaptive_full_job(
+                    Some(20.0),
+                    PrecipitationAppearance::Clear,
+                    SelectionTrigger::Reload,
+                )
+                .unwrap()
+                .is_none(),
+            "the latest full decision retains the active warm family"
+        );
+        assert_eq!(selection.pending_full_generation, None);
+        assert_eq!(selection.controller.generation(), selection_generation);
+        assert_eq!(
+            selection.adaptive_state,
+            Some(AdaptiveSelectionState {
+                family_id: "v29-seascape".into(),
+                temperature_band: TemperatureBand::Warm,
+            })
+        );
+        assert!(matches!(
+            selection.transaction.complete(
+                pending.token,
+                Ok(LoadedScene {
+                    id: pending.request.id,
+                    scene: Scene::reference(),
+                    content_key: 26,
+                }),
+            ),
+            CommitOutcome::Stale { .. }
+        ));
+    }
+
+    #[test]
+    fn weather_config_reload_replaces_cancelled_fake_worker_without_reselection() {
+        let old_location = Location::new(10.0, 20.0).unwrap();
+        let new_location = Location::new(11.0, 21.0).unwrap();
+        let mut active_config = weather_test_config(old_location, "America/Toronto", 101);
+        let mut civil_time = CivilTimeRuntime::from_config(&active_config).unwrap();
+        let old_requests = Arc::new(Mutex::new(Vec::new()));
+        let old_started = Arc::new(AtomicBool::new(false));
+        let old_cancelled = Arc::new(AtomicBool::new(false));
+        let old_token = Arc::new(Mutex::new(None));
+        let mut weather = WeatherRuntime::from_config_with_provider(
+            &active_config,
+            TestWeatherProvider {
+                requests: Arc::clone(&old_requests),
+                started: Arc::clone(&old_started),
+                cancelled: Arc::clone(&old_cancelled),
+                wait_for_cancellation: true,
+                capture_cancellation: Some(Arc::clone(&old_token)),
+                previous_cancellation: None,
+                previous_cancelled_at_fetch: None,
+            },
+        )
+        .unwrap();
+        weather.request_startup();
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while !old_started.load(AtomicOrdering::Acquire) && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        assert!(
+            old_started.load(AtomicOrdering::Acquire),
+            "fake request did not start"
+        );
+
+        let mut selection = Some(resident_selection());
+        let resident_generation = selection.as_ref().unwrap().controller.generation();
+        let resident_scene_id = selection
+            .as_ref()
+            .unwrap()
+            .transaction
+            .active()
+            .unwrap()
+            .id
+            .clone();
+        let mut schedulers = BTreeMap::new();
+        let mut candidate = weather_test_config(new_location, "Etc/UTC", 202);
+        candidate.fps = Fps::Fifteen;
+
+        let new_requests = Arc::new(Mutex::new(Vec::new()));
+        let new_started = Arc::new(AtomicBool::new(false));
+        let new_cancelled = Arc::new(AtomicBool::new(false));
+        let previous_cancelled_at_fetch = Arc::new(AtomicBool::new(false));
+        let factory_requests = Arc::clone(&new_requests);
+        let factory_started = Arc::clone(&new_started);
+        let factory_cancelled = Arc::clone(&new_cancelled);
+        let factory_old_token = Arc::clone(&old_token);
+        let factory_previous_cancelled = Arc::clone(&previous_cancelled_at_fetch);
+        apply_config_candidate_with_weather_factory(
+            candidate,
+            None,
+            &mut active_config,
+            &mut selection,
+            &mut schedulers,
+            &mut civil_time,
+            &mut weather,
+            move |config| {
+                WeatherRuntime::from_config_with_provider(
+                    config,
+                    TestWeatherProvider {
+                        requests: factory_requests,
+                        started: factory_started,
+                        cancelled: factory_cancelled,
+                        wait_for_cancellation: false,
+                        capture_cancellation: None,
+                        previous_cancellation: Some(factory_old_token),
+                        previous_cancelled_at_fetch: Some(factory_previous_cancelled),
+                    },
+                )
+            },
+        )
+        .unwrap();
+
+        assert_eq!(active_config.cache_scope, Some(202));
+        assert_eq!(active_config.weather_location, Some(new_location));
+        assert_eq!(civil_time.timezone.as_ref().unwrap().offset_at(0), 0);
+        let cancel_deadline = Instant::now() + Duration::from_secs(2);
+        while !old_cancelled.load(AtomicOrdering::Acquire) && Instant::now() < cancel_deadline {
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        assert!(old_cancelled.load(AtomicOrdering::Acquire));
+        assert!(new_started.load(AtomicOrdering::Acquire));
+        assert!(previous_cancelled_at_fetch.load(AtomicOrdering::Acquire));
+        assert_eq!(*old_requests.lock().unwrap(), vec![old_location]);
+        assert_eq!(*new_requests.lock().unwrap(), vec![new_location]);
+        let resident = selection.as_ref().unwrap();
+        assert_eq!(resident.controller.generation(), resident_generation);
+        assert_eq!(resident.transaction.active().unwrap().id, resident_scene_id);
+
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while weather.status_value()["state"] != "fresh" && Instant::now() < deadline {
+            weather.poll();
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        assert_eq!(weather.status_value()["state"], "fresh");
+        assert!(new_requests.lock().unwrap().len() == 1);
+    }
+
+    #[test]
+    fn solar_palette_uses_base_when_location_or_timezone_is_unavailable() {
+        let config = AppConfig {
+            schema_version: 2,
+            registry_dir: None,
+            fps: Fps::Thirty,
+            animation_speed_multiplier: 0.5,
+            location: None,
+            timezone: None,
+            weather_provider: crate::config::WeatherProvider::Disabled,
+            adaptive_scenes: false,
+            weather_location: None,
+            cache_scope: None,
+            source_path: None,
+        };
+        let mut civil_time = CivilTimeRuntime::from_config(&config).unwrap();
+        let timeline = crate::scene::TimeOfDayPalette::new_solar(
+            2,
+            vec![255; 2 * 256 * 4],
+            vec![
+                crate::scene::SolarTimeOfDayKeyframe {
+                    event: crate::scene::SolarEvent::Sunrise,
+                    offset_minutes: 0,
+                    row: 0,
+                },
+                crate::scene::SolarTimeOfDayKeyframe {
+                    event: crate::scene::SolarEvent::Sunset,
+                    offset_minutes: 0,
+                    row: 1,
+                },
+            ],
+        )
+        .unwrap();
+        let mut palette = [0u8; 256 * 4];
+        for entry in palette.chunks_exact_mut(4) {
+            entry[3] = 255;
+        }
+        let scene = Scene::with_resources(
+            crate::scene::IndexedImage {
+                width: 1,
+                height: 1,
+                indices: vec![0],
+            },
+            crate::scene::Palette { rgba: palette },
+            crate::animation::Animation::static_default(),
+            Some(timeline),
+        )
+        .unwrap();
+        assert_eq!(
+            resolve_solar_palette_sample(&scene, &mut civil_time),
+            Some(ResolvedPaletteSample::Base)
+        );
+    }
 
     #[test]
     fn zero_configure_uses_known_output_size_and_integer_scale() {
@@ -3071,6 +4559,72 @@ mod tests {
         let second = output_sort_key(3, (0, 0), Some("DP-1"));
 
         assert_eq!(first.cmp(&second), Ordering::Greater);
+    }
+
+    #[test]
+    fn config_worker_is_bounded_and_event_loop_dispatches_during_slow_validation() {
+        let (started_sender, started_receiver) = mpsc::channel();
+        let (release_sender, release_receiver) = mpsc::channel();
+        let mut worker = ConfigLoadWorker::with_loader(move |_| {
+            started_sender.send(()).unwrap();
+            release_receiver.recv().unwrap();
+            Err("synthetic validation failure".to_owned())
+        })
+        .unwrap();
+        let mut event_loop: EventLoop<usize> = EventLoop::try_new().unwrap();
+        let wakeups = worker.take_wakeup_channel().unwrap();
+        event_loop
+            .handle()
+            .insert_source(wakeups, |event, _, count| {
+                if matches!(event, ChannelEvent::Msg(())) {
+                    *count += 1;
+                }
+            })
+            .unwrap();
+        event_loop
+            .handle()
+            .insert_source(
+                Timer::from_duration(Duration::from_millis(1)),
+                |_, _, count| {
+                    *count += 1;
+                    TimeoutAction::Drop
+                },
+            )
+            .unwrap();
+
+        worker.submit(PathBuf::from("first-config")).unwrap();
+        started_receiver
+            .recv_timeout(Duration::from_secs(1))
+            .unwrap();
+        worker.submit(PathBuf::from("queued-config")).unwrap();
+        assert!(worker.submit(PathBuf::from("overflow-config")).is_err());
+
+        let mut dispatched = 0;
+        event_loop
+            .dispatch(Some(Duration::from_secs(1)), &mut dispatched)
+            .unwrap();
+        assert_eq!(
+            dispatched, 1,
+            "owner timer should run while loader is blocked"
+        );
+        assert!(worker.try_recv().is_none());
+
+        release_sender.send(()).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(1);
+        let completion = loop {
+            event_loop
+                .dispatch(Some(Duration::from_millis(50)), &mut dispatched)
+                .unwrap();
+            if let Some(completion) = worker.try_recv() {
+                break completion;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "worker completion was not signaled"
+            );
+        };
+        assert!(matches!(completion, Err(message) if message == "synthetic validation failure"));
+        drop(worker);
     }
 
     #[test]

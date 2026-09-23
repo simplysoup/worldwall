@@ -9,6 +9,7 @@
 //! stage-local integration increment.
 #![allow(dead_code)]
 
+use calloop::channel::{self, Channel};
 use std::{
     collections::{BTreeMap, BTreeSet},
     error::Error,
@@ -17,6 +18,8 @@ use std::{
     hash::{Hash, Hasher},
     io::Read,
     path::{Component, Path, PathBuf},
+    sync::mpsc::{self, Receiver, SyncSender, TrySendError},
+    thread,
 };
 
 use crate::{
@@ -26,13 +29,134 @@ use crate::{
 
 pub use crate::environment::{EnvironmentSnapshot, Season, TimeOfDay, Weather};
 
-pub const SCENE_SCHEMA_VERSION: u32 = 1;
+pub const SCENE_SCHEMA_VERSION: u32 = 2;
 pub const REGISTRY_SCHEMA_VERSION: u32 = 1;
+const MIN_SCENE_SCHEMA_VERSION: u32 = 1;
 const MAX_REGISTRY_BYTES: usize = 1024 * 1024;
 const MAX_ANIMATION_BYTES: usize = 1024 * 1024;
 const TIME_WEIGHT: u32 = 5;
 const WEATHER_WEIGHT: u32 = 4;
 const SEASON_WEIGHT: u32 = 2;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Ord, PartialOrd)]
+pub enum TemperatureBand {
+    Cold,
+    Cool,
+    Mild,
+    Warm,
+    Hot,
+}
+
+impl TemperatureBand {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Cold => "cold",
+            Self::Cool => "cool",
+            Self::Mild => "mild",
+            Self::Warm => "warm",
+            Self::Hot => "hot",
+        }
+    }
+
+    fn parse(value: &str) -> Option<Self> {
+        Some(match value {
+            "cold" => Self::Cold,
+            "cool" => Self::Cool,
+            "mild" => Self::Mild,
+            "warm" => Self::Warm,
+            "hot" => Self::Hot,
+            _ => return None,
+        })
+    }
+
+    pub fn classify(celsius: f32) -> Option<Self> {
+        if !celsius.is_finite() || !(-100.0..=100.0).contains(&celsius) {
+            return None;
+        }
+        Some(if celsius <= 0.0 {
+            Self::Cold
+        } else if celsius <= 10.0 {
+            Self::Cool
+        } else if celsius <= 20.0 {
+            Self::Mild
+        } else if celsius <= 28.0 {
+            Self::Warm
+        } else {
+            Self::Hot
+        })
+    }
+
+    /// Keep the prior band until temperature crosses its adjacent boundary by
+    /// more than the approved 2°C hysteresis. Large jumps may cross multiple
+    /// bands, but never skip the same boundary rule.
+    pub fn with_hysteresis(celsius: f32, previous: Option<Self>) -> Option<Self> {
+        if !celsius.is_finite() || !(-100.0..=100.0).contains(&celsius) {
+            return None;
+        }
+        let Some(mut band) = previous else {
+            return Self::classify(celsius);
+        };
+        loop {
+            let next = match band {
+                Self::Cold if celsius > 2.0 => Self::Cool,
+                Self::Cool if celsius <= -2.0 => Self::Cold,
+                Self::Cool if celsius > 12.0 => Self::Mild,
+                Self::Mild if celsius <= 8.0 => Self::Cool,
+                Self::Mild if celsius > 22.0 => Self::Warm,
+                Self::Warm if celsius <= 18.0 => Self::Mild,
+                Self::Warm if celsius > 30.0 => Self::Hot,
+                Self::Hot if celsius <= 26.0 => Self::Warm,
+                _ => return Some(band),
+            };
+            band = next;
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PrecipitationAppearance {
+    Clear,
+    Cloudy,
+    Rain,
+    Snow,
+    Unknown,
+}
+
+impl PrecipitationAppearance {
+    pub fn from_weather(condition: Weather, precipitation: bool) -> Self {
+        match condition {
+            Weather::Clear => Self::Clear,
+            Weather::Cloudy | Weather::Fog => Self::Cloudy,
+            Weather::Rain => Self::Rain,
+            Weather::Snow => Self::Snow,
+            Weather::Storm if precipitation => Self::Rain,
+            Weather::Storm | Weather::Unknown => Self::Unknown,
+        }
+    }
+
+    fn preferences(self) -> &'static [Weather] {
+        match self {
+            Self::Clear => &[Weather::Clear],
+            Self::Cloudy => &[Weather::Cloudy, Weather::Clear],
+            Self::Rain => &[Weather::Rain, Weather::Cloudy, Weather::Clear],
+            Self::Snow => &[Weather::Snow, Weather::Cloudy, Weather::Clear],
+            Self::Unknown => &[Weather::Clear],
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AdaptiveSelectionState {
+    pub family_id: String,
+    pub temperature_band: TemperatureBand,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AdaptiveSelectionDecision {
+    pub scene_id: String,
+    pub state: AdaptiveSelectionState,
+    pub rationale: String,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RegistryError(String);
@@ -57,6 +181,8 @@ pub struct SceneManifest {
     pub times: Vec<TimeOfDay>,
     pub weather: Vec<Weather>,
     pub seasons: Vec<Season>,
+    pub family_id: Option<String>,
+    pub temperature_band: Option<TemperatureBand>,
 }
 
 impl SceneManifest {
@@ -128,9 +254,9 @@ impl SceneManifest {
         let schema_version = values
             .schema_version
             .ok_or_else(|| error("scene schema_version is required"))?;
-        if schema_version != SCENE_SCHEMA_VERSION {
+        if !(MIN_SCENE_SCHEMA_VERSION..=SCENE_SCHEMA_VERSION).contains(&schema_version) {
             return Err(error(format!(
-                "unsupported scene schema_version {schema_version}; expected {SCENE_SCHEMA_VERSION}"
+                "unsupported scene schema_version {schema_version}; expected 1 or {SCENE_SCHEMA_VERSION}"
             )));
         }
         let id = values
@@ -156,6 +282,25 @@ impl SceneManifest {
         reject_duplicates(&values.times, "time")?;
         reject_duplicates(&values.weather, "weather")?;
         reject_duplicates(&values.seasons, "season")?;
+        let (family_id, temperature_band) = match schema_version {
+            1 if values.family_id.is_none() && values.temperature_band.is_none() => (None, None),
+            1 => {
+                return Err(error(
+                    "scene schema_version 1 does not support family metadata",
+                ));
+            }
+            2 => {
+                let family_id = values
+                    .family_id
+                    .filter(|value| valid_id(value))
+                    .ok_or_else(|| error("scene schema_version 2 requires a safe family ID"))?;
+                let temperature_band = values
+                    .temperature_band
+                    .ok_or_else(|| error("scene schema_version 2 requires temperature_band"))?;
+                (Some(family_id), Some(temperature_band))
+            }
+            _ => unreachable!("schema version range was checked"),
+        };
         Ok(Self {
             schema_version,
             id,
@@ -167,6 +312,8 @@ impl SceneManifest {
             times: values.times,
             weather: values.weather,
             seasons: values.seasons,
+            family_id,
+            temperature_band,
         })
     }
 
@@ -193,9 +340,16 @@ pub struct LoadedScene {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+struct SceneFamily {
+    temperature_band: TemperatureBand,
+    variants: BTreeMap<Weather, String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SceneRegistry {
     scenes: BTreeMap<String, SceneManifest>,
     fallback: Option<String>,
+    families: BTreeMap<String, SceneFamily>,
 }
 
 impl SceneRegistry {
@@ -251,7 +405,38 @@ impl SceneRegistry {
         manifests: impl IntoIterator<Item = SceneManifest>,
     ) -> Result<Self, RegistryError> {
         let mut scenes = BTreeMap::new();
+        let mut families: BTreeMap<String, SceneFamily> = BTreeMap::new();
         for manifest in manifests {
+            if let (Some(family_id), Some(temperature_band)) =
+                (&manifest.family_id, manifest.temperature_band)
+            {
+                let family = families
+                    .entry(family_id.clone())
+                    .or_insert_with(|| SceneFamily {
+                        temperature_band,
+                        variants: BTreeMap::new(),
+                    });
+                if family.temperature_band != temperature_band {
+                    return Err(error(format!(
+                        "family {family_id:?} has inconsistent temperature bands"
+                    )));
+                }
+                if manifest.weather.len() == 1 {
+                    let weather = manifest.weather[0];
+                    if matches!(
+                        weather,
+                        Weather::Clear | Weather::Cloudy | Weather::Rain | Weather::Snow
+                    ) && family
+                        .variants
+                        .insert(weather, manifest.id.clone())
+                        .is_some()
+                    {
+                        return Err(error(format!(
+                            "family {family_id:?} has duplicate {weather:?} variants"
+                        )));
+                    }
+                }
+            }
             if scenes.insert(manifest.id.clone(), manifest).is_some() {
                 return Err(error("scene manifest IDs must be unique"));
             }
@@ -265,7 +450,11 @@ impl SceneRegistry {
         } else if !scenes.is_empty() {
             return Err(error("a non-empty scene registry requires a fallback"));
         }
-        Ok(Self { scenes, fallback })
+        Ok(Self {
+            scenes,
+            fallback,
+            families,
+        })
     }
 
     /// Empty is useful as a pure selector input and is not accepted by the
@@ -274,6 +463,7 @@ impl SceneRegistry {
         Self {
             scenes: BTreeMap::new(),
             fallback: None,
+            families: BTreeMap::new(),
         }
     }
 
@@ -291,6 +481,207 @@ impl SceneRegistry {
 
     pub fn fallback_id(&self) -> Option<&str> {
         self.fallback.as_deref()
+    }
+
+    /// Validate the stronger metadata contract required by the opt-in
+    /// weather-adaptive policy. Ordinary schema-v1/v2 registries are not
+    /// required to opt in or carry family metadata.
+    pub fn validate_adaptive(&self) -> Result<(), RegistryError> {
+        if self.scenes.is_empty() {
+            return Err(error("adaptive selection requires a non-empty registry"));
+        }
+        for manifest in self.scenes.values() {
+            let (Some(family_id), Some(band)) = (&manifest.family_id, manifest.temperature_band)
+            else {
+                return Err(error(format!(
+                    "adaptive selection requires family metadata for scene {:?}",
+                    manifest.id
+                )));
+            };
+            if !valid_id(family_id)
+                || manifest.weather.len() != 1
+                || !matches!(
+                    manifest.weather[0],
+                    Weather::Clear | Weather::Cloudy | Weather::Rain | Weather::Snow
+                )
+            {
+                return Err(error(format!(
+                    "adaptive scene {:?} requires one clear/cloudy/rain/snow variant tag",
+                    manifest.id
+                )));
+            }
+            let family = self
+                .families
+                .get(family_id)
+                .ok_or_else(|| error(format!("adaptive family {family_id:?} is empty")))?;
+            if family.temperature_band != band {
+                return Err(error(format!(
+                    "adaptive family {family_id:?} has inconsistent metadata"
+                )));
+            }
+        }
+        for family_id in self.families.keys() {
+            if !self.families[family_id]
+                .variants
+                .contains_key(&Weather::Clear)
+            {
+                return Err(error(format!(
+                    "adaptive family {family_id:?} requires a clear fallback variant"
+                )));
+            }
+        }
+        for required in [
+            TemperatureBand::Cold,
+            TemperatureBand::Cool,
+            TemperatureBand::Mild,
+            TemperatureBand::Warm,
+            TemperatureBand::Hot,
+        ] {
+            if !self
+                .families
+                .values()
+                .any(|family| family.temperature_band == required)
+            {
+                return Err(error(format!(
+                    "adaptive registry has no family for the {:?} temperature band",
+                    required
+                )));
+            }
+        }
+        let fallback = self
+            .fallback
+            .as_deref()
+            .and_then(|id| self.scenes.get(id))
+            .ok_or_else(|| error("adaptive registry requires a valid V29 offline fallback"))?;
+        if fallback.id != "v29-seascape"
+            || fallback.family_id.as_deref() != Some("v29-seascape")
+            || fallback.temperature_band != Some(TemperatureBand::Warm)
+        {
+            return Err(error(
+                "adaptive registry fallback must be the clear V29 Seascape package",
+            ));
+        }
+        Ok(())
+    }
+
+    pub fn adaptive_state_for_scene(&self, scene_id: &str) -> Option<AdaptiveSelectionState> {
+        let manifest = self.scenes.get(scene_id)?;
+        Some(AdaptiveSelectionState {
+            family_id: manifest.family_id.clone()?,
+            temperature_band: manifest.temperature_band?,
+        })
+    }
+
+    pub fn adaptive_full_selection(
+        &self,
+        temperature_c: Option<f32>,
+        appearance: PrecipitationAppearance,
+        previous: Option<&AdaptiveSelectionState>,
+        active_scene_id: Option<&str>,
+    ) -> Result<AdaptiveSelectionDecision, RegistryError> {
+        self.validate_adaptive()?;
+        let previous = previous.filter(|state| {
+            self.families
+                .get(&state.family_id)
+                .is_some_and(|family| family.temperature_band == state.temperature_band)
+        });
+        let fallback_id = self
+            .fallback
+            .as_deref()
+            .ok_or_else(|| error("adaptive registry has no offline fallback"))?;
+        let fallback_state = self
+            .adaptive_state_for_scene(fallback_id)
+            .ok_or_else(|| error("adaptive fallback has no family metadata"))?;
+        let valid_temperature =
+            temperature_c.filter(|value| value.is_finite() && (-100.0..=100.0).contains(value));
+        let target_band = match (valid_temperature, previous) {
+            (Some(value), Some(state)) => {
+                TemperatureBand::with_hysteresis(value, Some(state.temperature_band))
+                    .unwrap_or(state.temperature_band)
+            }
+            (Some(value), None) => TemperatureBand::classify(value)
+                .ok_or_else(|| error("adaptive temperature cannot be classified"))?,
+            (None, Some(state)) => state.temperature_band,
+            (None, None) => fallback_state.temperature_band,
+        };
+        let family_id =
+            if let Some(state) = previous.filter(|state| state.temperature_band == target_band) {
+                state.family_id.as_str()
+            } else if valid_temperature.is_none() && previous.is_none() {
+                fallback_state.family_id.as_str()
+            } else {
+                self.best_family_for_band(target_band, appearance)
+                    .ok_or_else(|| error(format!("no family matches {:?} band", target_band)))?
+            };
+        let active_in_family = active_scene_id.filter(|id| {
+            self.scenes
+                .get(*id)
+                .and_then(|manifest| manifest.family_id.as_deref())
+                == Some(family_id)
+        });
+        let scene_id = if appearance == PrecipitationAppearance::Unknown {
+            active_in_family.map(str::to_owned)
+        } else {
+            None
+        }
+        .or_else(|| self.variant_id(family_id, appearance).map(str::to_owned))
+        .or_else(|| active_in_family.map(str::to_owned))
+        .ok_or_else(|| error(format!("family {family_id:?} has no usable variant")))?;
+        let state = self
+            .adaptive_state_for_scene(&scene_id)
+            .ok_or_else(|| error(format!("selected scene {scene_id:?} lacks family metadata")))?;
+        Ok(AdaptiveSelectionDecision {
+            scene_id,
+            state,
+            rationale: format!(
+                "temperature band {:?}; family held or selected by policy",
+                target_band
+            ),
+        })
+    }
+
+    pub fn adaptive_variant_in_family(
+        &self,
+        family_id: &str,
+        appearance: PrecipitationAppearance,
+    ) -> Option<&SceneManifest> {
+        if appearance == PrecipitationAppearance::Unknown {
+            return None;
+        }
+        let family = self.families.get(family_id)?;
+        appearance
+            .preferences()
+            .iter()
+            .find_map(|weather| family.variants.get(weather))
+            .and_then(|id| self.scenes.get(id))
+    }
+
+    fn best_family_for_band(
+        &self,
+        band: TemperatureBand,
+        appearance: PrecipitationAppearance,
+    ) -> Option<&str> {
+        self.families
+            .iter()
+            .filter(|(_, family)| family.temperature_band == band)
+            .filter_map(|(id, family)| {
+                let rank = appearance
+                    .preferences()
+                    .iter()
+                    .position(|weather| family.variants.contains_key(weather))?;
+                Some((rank, id.as_str()))
+            })
+            .min_by(|left, right| left.0.cmp(&right.0).then_with(|| left.1.cmp(right.1)))
+            .map(|(_, id)| id)
+    }
+
+    fn variant_id(&self, family_id: &str, appearance: PrecipitationAppearance) -> Option<&str> {
+        let family = self.families.get(family_id)?;
+        appearance
+            .preferences()
+            .iter()
+            .find_map(|weather| family.variants.get(weather))
+            .map(String::as_str)
     }
 
     pub fn manifests(&self) -> impl Iterator<Item = &SceneManifest> {
@@ -471,6 +862,7 @@ pub struct SelectionController {
     registry: SceneRegistry,
     active_id: Option<String>,
     next_generation: u64,
+    selection_generation: u64,
 }
 
 impl SelectionController {
@@ -479,6 +871,7 @@ impl SelectionController {
             registry,
             active_id: None,
             next_generation: 0,
+            selection_generation: 0,
         }
     }
 
@@ -500,6 +893,7 @@ impl SelectionController {
         match result {
             SelectionResult::Selected(decision) => {
                 self.next_generation = self.next_generation.saturating_add(1);
+                self.selection_generation = self.selection_generation.saturating_add(1);
                 Ok(SelectionRequest {
                     generation: self.next_generation,
                     id: decision.id,
@@ -509,6 +903,30 @@ impl SelectionController {
             }
             other => Err(other),
         }
+    }
+
+    pub(crate) fn request_selected(
+        &mut self,
+        id: &str,
+        trigger: SelectionTrigger,
+        rationale: impl Into<String>,
+    ) -> Result<SelectionRequest, SelectionResult> {
+        if !trigger.is_explicit() && trigger != SelectionTrigger::WeatherUpdated {
+            return Err(SelectionResult::Ignored);
+        }
+        if self.registry.get(id).is_none() {
+            return Err(SelectionResult::Rejected(format!(
+                "scene ID {id:?} is not registered"
+            )));
+        }
+        self.next_generation = self.next_generation.saturating_add(1);
+        self.selection_generation = self.selection_generation.saturating_add(1);
+        Ok(SelectionRequest {
+            generation: self.next_generation,
+            id: id.to_owned(),
+            trigger,
+            rationale: rationale.into(),
+        })
     }
 
     pub fn mark_active(&mut self, id: &str) -> Result<(), RegistryError> {
@@ -524,7 +942,15 @@ impl SelectionController {
     }
 
     pub fn generation(&self) -> u64 {
+        self.selection_generation
+    }
+
+    pub(crate) fn request_generation(&self) -> u64 {
         self.next_generation
+    }
+
+    pub fn invalidate_requests(&mut self) {
+        self.next_generation = self.next_generation.saturating_add(1);
     }
 
     pub fn registry(&self) -> &SceneRegistry {
@@ -542,6 +968,89 @@ impl SelectionController {
 pub struct SceneLoadToken {
     pub generation: u64,
     pub id: String,
+}
+
+pub struct SceneLoadJob {
+    pub request: SelectionRequest,
+    pub token: SceneLoadToken,
+    pub manifest: SceneManifest,
+    pub resulting_state: Option<AdaptiveSelectionState>,
+}
+
+pub struct SceneLoadCompletion {
+    pub request: SelectionRequest,
+    pub token: SceneLoadToken,
+    pub candidate: Result<LoadedScene, RegistryError>,
+    pub resulting_state: Option<AdaptiveSelectionState>,
+}
+
+/// One bounded background worker for scene decoding. Wayland and renderer
+/// state never leave the event-loop owner; only validated package manifests
+/// and decoded CPU scene bundles cross this channel.
+pub struct SceneLoadWorker {
+    jobs: SyncSender<SceneLoadJob>,
+    completions: Receiver<SceneLoadCompletion>,
+    wakeups: Option<Channel<()>>,
+}
+
+impl SceneLoadWorker {
+    pub fn new() -> Result<Self, RegistryError> {
+        Self::with_loader(|manifest| manifest.load_scene())
+    }
+
+    fn with_loader(
+        loader: impl Fn(SceneManifest) -> Result<LoadedScene, RegistryError> + Send + 'static,
+    ) -> Result<Self, RegistryError> {
+        let (jobs, job_receiver) = mpsc::sync_channel::<SceneLoadJob>(1);
+        let (completion_sender, completions) = mpsc::sync_channel::<SceneLoadCompletion>(1);
+        let (wakeup_sender, wakeups) = channel::sync_channel(1);
+        thread::Builder::new()
+            .name("worldwall-scene-load".to_owned())
+            .spawn(move || {
+                while let Ok(job) = job_receiver.recv() {
+                    let candidate = loader(job.manifest);
+                    if completion_sender
+                        .send(SceneLoadCompletion {
+                            request: job.request,
+                            token: job.token,
+                            candidate,
+                            resulting_state: job.resulting_state,
+                        })
+                        .is_err()
+                    {
+                        break;
+                    }
+                    // The owner is woken even when no frame or weather timer is
+                    // armed, so final IPC results are not tied to presentation.
+                    let _ = wakeup_sender.try_send(());
+                }
+            })
+            .map_err(|error_value| {
+                error(format!("starting scene-load worker failed: {error_value}"))
+            })?;
+        Ok(Self {
+            jobs,
+            completions,
+            wakeups: Some(wakeups),
+        })
+    }
+
+    pub fn submit(&self, job: SceneLoadJob) -> Result<(), RegistryError> {
+        self.jobs
+            .try_send(job)
+            .map_err(|error_value| match error_value {
+                TrySendError::Full(_) => error("scene-load worker queue is full"),
+                TrySendError::Disconnected(_) => error("scene-load worker is unavailable"),
+            })
+    }
+
+    pub fn try_recv(&self) -> Option<SceneLoadCompletion> {
+        self.completions.try_recv().ok()
+    }
+
+    pub fn take_wakeup_channel(&mut self) -> Option<Channel<()>> {
+        self.wakeups.take()
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -573,6 +1082,10 @@ pub struct SceneTransaction {
 impl SceneTransaction {
     pub fn active(&self) -> Option<&LoadedScene> {
         self.active.as_ref()
+    }
+
+    pub fn invalidate_through(&mut self, generation: u64) {
+        self.latest_generation = self.latest_generation.max(generation);
     }
 
     pub fn begin(&mut self, request: &SelectionRequest) -> SceneLoadToken {
@@ -660,6 +1173,8 @@ struct ManifestValues {
     times: Vec<TimeOfDay>,
     weather: Vec<Weather>,
     seasons: Vec<Season>,
+    family_id: Option<String>,
+    temperature_band: Option<TemperatureBand>,
     times_seen: bool,
     weather_seen: bool,
     seasons_seen: bool,
@@ -719,6 +1234,21 @@ fn parse_manifest(input: &str) -> Result<ManifestValues, RegistryError> {
                 key,
                 line_number,
             )?,
+            "family" => assign_once(
+                &mut values.family_id,
+                parse_string(value, line_number, key)?,
+                key,
+                line_number,
+            )?,
+            "temperature_band" => {
+                let value = parse_string(value, line_number, key)?;
+                let band = TemperatureBand::parse(&value).ok_or_else(|| {
+                    error(format!(
+                        "line {line_number}: unsupported temperature_band {value:?}"
+                    ))
+                })?;
+                assign_once(&mut values.temperature_band, band, key, line_number)?;
+            }
             "times" => {
                 if values.times_seen {
                     return Err(error(format!("line {line_number}: duplicate key {key:?}")));
@@ -1025,7 +1555,7 @@ fn error(message: impl Into<String>) -> RegistryError {
 mod tests {
     use super::*;
     use png::{BitDepth, ColorType, Encoder};
-    use std::time::{SystemTime, UNIX_EPOCH};
+    use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
     fn package_root(name: &str) -> PathBuf {
         let unique = SystemTime::now()
@@ -1095,6 +1625,79 @@ mod tests {
         if let Some(animation) = animation {
             std::fs::write(directory.join("animation.toml"), animation).unwrap();
         }
+    }
+
+    fn write_adaptive_package(
+        root: &Path,
+        id: &str,
+        family: &str,
+        band: TemperatureBand,
+        weather: Weather,
+    ) {
+        let directory = root.join(id);
+        std::fs::create_dir_all(&directory).unwrap();
+        std::fs::write(directory.join("scene.png"), png_scene(&[0, 255])).unwrap();
+        std::fs::write(directory.join("palette.png"), png_palette([20, 30, 40])).unwrap();
+        std::fs::write(
+            directory.join("scene.toml"),
+            format!(
+                "schema_version = 2\nid = \"{id}\"\nimage = \"scene.png\"\npalette = \"palette.png\"\nfamily = \"{family}\"\ntemperature_band = \"{}\"\nweather = [\"{}\"]\n",
+                band.as_str(),
+                weather_name(weather),
+            ),
+        )
+        .unwrap();
+    }
+
+    fn weather_name(weather: Weather) -> &'static str {
+        match weather {
+            Weather::Clear => "clear",
+            Weather::Cloudy => "cloudy",
+            Weather::Rain => "rain",
+            Weather::Snow => "snow",
+            _ => panic!("unsupported adaptive weather fixture"),
+        }
+    }
+
+    fn adaptive_registry() -> (PathBuf, SceneRegistry) {
+        let root = package_root("adaptive");
+        std::fs::create_dir_all(&root).unwrap();
+        let mut ids = Vec::new();
+        let families = [
+            ("v26-winter-forest", TemperatureBand::Cold),
+            ("v19-mountain-stream", TemperatureBand::Cool),
+            ("v16-mirror-pond", TemperatureBand::Cool),
+            ("v30-deep-forest", TemperatureBand::Mild),
+            ("vw3b-monolith-plains", TemperatureBand::Mild),
+            ("v20-crystal-caves", TemperatureBand::Mild),
+            ("v08-jungle-waterfall", TemperatureBand::Warm),
+            ("v29-seascape", TemperatureBand::Warm),
+            ("coral-aquarius", TemperatureBand::Warm),
+            ("v25-desert", TemperatureBand::Hot),
+        ];
+        for (family, band) in families {
+            let variants: &[Weather] = match family {
+                "v26-winter-forest" => &[Weather::Clear, Weather::Snow],
+                "v19-mountain-stream" | "v08-jungle-waterfall" | "v29-seascape" | "v25-desert" => {
+                    &[Weather::Clear, Weather::Cloudy]
+                }
+                "v30-deep-forest" | "v16-mirror-pond" => &[Weather::Clear, Weather::Rain],
+                _ => &[Weather::Clear],
+            };
+            for weather in variants {
+                let id = if *weather == Weather::Clear {
+                    family.to_owned()
+                } else {
+                    format!("{family}--{}", weather_name(*weather))
+                };
+                write_adaptive_package(&root, &id, family, band, *weather);
+                ids.push(id);
+            }
+        }
+        let scene_ids = ids.iter().map(String::as_str).collect::<Vec<_>>();
+        write_registry(&root, "v29-seascape", &scene_ids);
+        let registry = SceneRegistry::load(&root).unwrap();
+        (root, registry)
     }
 
     fn write_registry(root: &Path, fallback: &str, scenes: &[&str]) {
@@ -1282,10 +1885,13 @@ phase = 0.25
             Err(SelectionResult::Ignored)
         ));
         assert_eq!(controller.generation(), 1);
+        controller.invalidate_requests();
+        assert_eq!(controller.generation(), 1);
         let reload = controller
             .request(changed, 2, SelectionTrigger::Reload)
             .unwrap();
-        assert_eq!(reload.generation, 2);
+        assert_eq!(reload.generation, 3);
+        assert_eq!(controller.generation(), 2);
         std::fs::remove_dir_all(root).unwrap();
     }
 
@@ -1497,6 +2103,368 @@ phase = 0.25
         ));
         assert_eq!(swap_calls, 0);
         assert_eq!(current.generation, 3);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn scene_load_worker_decodes_and_transactions_reject_invalidated_work() {
+        let (root, registry) = loaded_registry();
+        let manifest = registry.get("day").unwrap().clone();
+        let request = SelectionRequest {
+            generation: 1,
+            id: "day".into(),
+            trigger: SelectionTrigger::WeatherUpdated,
+            rationale: "same-family variant test".into(),
+        };
+        let token = SceneLoadToken {
+            generation: request.generation,
+            id: request.id.clone(),
+        };
+        let worker = SceneLoadWorker::new().unwrap();
+        worker
+            .submit(SceneLoadJob {
+                request,
+                token,
+                manifest,
+                resulting_state: Some(AdaptiveSelectionState {
+                    family_id: "test-family".into(),
+                    temperature_band: TemperatureBand::Mild,
+                }),
+            })
+            .unwrap();
+        let deadline = Instant::now() + Duration::from_secs(2);
+        let completion = loop {
+            if let Some(completion) = worker.try_recv() {
+                break completion;
+            }
+            assert!(Instant::now() < deadline, "scene-load worker timed out");
+            std::thread::yield_now();
+        };
+        assert_eq!(completion.candidate.unwrap().id, "day");
+        assert_eq!(
+            completion.resulting_state,
+            Some(AdaptiveSelectionState {
+                family_id: "test-family".into(),
+                temperature_band: TemperatureBand::Mild,
+            })
+        );
+
+        let mut transaction = SceneTransaction::default();
+        let request = SelectionRequest {
+            generation: 2,
+            id: "day".into(),
+            trigger: SelectionTrigger::WeatherUpdated,
+            rationale: "queued completion".into(),
+        };
+        let token = transaction.begin(&request);
+        transaction.invalidate_through(3);
+        assert!(matches!(
+            transaction.complete(token, registry.get("day").unwrap().load_scene()),
+            CommitOutcome::Stale { generation: 2 }
+        ));
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn scene_load_worker_queue_is_bounded_and_decode_errors_are_reported() {
+        use calloop::{
+            EventLoop,
+            timer::{TimeoutAction, Timer},
+        };
+        use std::sync::{
+            Arc,
+            atomic::{AtomicUsize, Ordering},
+        };
+
+        let (started_sender, started_receiver) = mpsc::channel();
+        let (release_sender, release_receiver) = mpsc::channel();
+        let calls = Arc::new(AtomicUsize::new(0));
+        let worker_calls = Arc::clone(&calls);
+        let mut worker = SceneLoadWorker::with_loader(move |_| {
+            if worker_calls.fetch_add(1, Ordering::AcqRel) == 0 {
+                started_sender.send(()).unwrap();
+                release_receiver.recv().unwrap();
+            }
+            Err(error("synthetic scene decode failure"))
+        })
+        .unwrap();
+        let job = |generation| {
+            let request = SelectionRequest {
+                generation,
+                id: "blocked-scene".into(),
+                trigger: SelectionTrigger::ManualId("blocked-scene".into()),
+                rationale: "bounded worker test".into(),
+            };
+            SceneLoadJob {
+                token: SceneLoadToken {
+                    generation,
+                    id: request.id.clone(),
+                },
+                request,
+                manifest: SceneManifest {
+                    schema_version: 2,
+                    id: "blocked-scene".into(),
+                    package_dir: PathBuf::new(),
+                    image_path: PathBuf::new(),
+                    palette_path: PathBuf::new(),
+                    animation_path: None,
+                    time_of_day_path: None,
+                    times: Vec::new(),
+                    weather: vec![Weather::Clear],
+                    seasons: Vec::new(),
+                    family_id: None,
+                    temperature_band: None,
+                },
+                resulting_state: None,
+            }
+        };
+
+        let mut event_loop: EventLoop<usize> = EventLoop::try_new().unwrap();
+        let wakeups = worker.take_wakeup_channel().unwrap();
+        event_loop
+            .handle()
+            .insert_source(wakeups, |event, _, count| {
+                if matches!(event, calloop::channel::Event::Msg(())) {
+                    *count += 1;
+                }
+            })
+            .unwrap();
+        event_loop
+            .handle()
+            .insert_source(
+                Timer::from_duration(Duration::from_millis(1)),
+                |_, _, count| {
+                    *count += 10;
+                    TimeoutAction::Drop
+                },
+            )
+            .unwrap();
+
+        worker.submit(job(1)).unwrap();
+        started_receiver
+            .recv_timeout(Duration::from_secs(1))
+            .unwrap();
+        worker.submit(job(2)).unwrap();
+        assert!(worker.submit(job(3)).is_err());
+        let mut dispatched = 0;
+        event_loop
+            .dispatch(Some(Duration::from_secs(1)), &mut dispatched)
+            .unwrap();
+        assert_eq!(dispatched, 10, "owner timer should run during slow decode");
+        assert!(worker.try_recv().is_none());
+        release_sender.send(()).unwrap();
+
+        let deadline = Instant::now() + Duration::from_secs(1);
+        let first = loop {
+            event_loop
+                .dispatch(Some(Duration::from_millis(50)), &mut dispatched)
+                .unwrap();
+            if let Some(completion) = worker.try_recv() {
+                break completion;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "scene worker completion timed out"
+            );
+        };
+        assert_eq!(first.request.generation, 1);
+        assert!(first.candidate.is_err());
+        let deadline = Instant::now() + Duration::from_secs(1);
+        let second = loop {
+            event_loop
+                .dispatch(Some(Duration::from_millis(50)), &mut dispatched)
+                .unwrap();
+            if let Some(completion) = worker.try_recv() {
+                break completion;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "queued scene worker completion timed out"
+            );
+        };
+        assert_eq!(second.request.generation, 2);
+        assert!(second.candidate.is_err());
+    }
+
+    #[test]
+    fn temperature_bands_follow_approved_thresholds_and_hysteresis() {
+        assert_eq!(TemperatureBand::classify(0.0), Some(TemperatureBand::Cold));
+        assert_eq!(TemperatureBand::classify(0.1), Some(TemperatureBand::Cool));
+        assert_eq!(TemperatureBand::classify(10.0), Some(TemperatureBand::Cool));
+        assert_eq!(TemperatureBand::classify(10.1), Some(TemperatureBand::Mild));
+        assert_eq!(TemperatureBand::classify(20.0), Some(TemperatureBand::Mild));
+        assert_eq!(TemperatureBand::classify(20.1), Some(TemperatureBand::Warm));
+        assert_eq!(TemperatureBand::classify(28.0), Some(TemperatureBand::Warm));
+        assert_eq!(TemperatureBand::classify(28.1), Some(TemperatureBand::Hot));
+        assert_eq!(TemperatureBand::classify(f32::NAN), None);
+        assert_eq!(TemperatureBand::classify(101.0), None);
+
+        assert_eq!(
+            TemperatureBand::with_hysteresis(2.0, Some(TemperatureBand::Cold)),
+            Some(TemperatureBand::Cold)
+        );
+        assert_eq!(
+            TemperatureBand::with_hysteresis(2.01, Some(TemperatureBand::Cold)),
+            Some(TemperatureBand::Cool)
+        );
+        assert_eq!(
+            TemperatureBand::with_hysteresis(-1.99, Some(TemperatureBand::Cool)),
+            Some(TemperatureBand::Cool)
+        );
+        assert_eq!(
+            TemperatureBand::with_hysteresis(-2.0, Some(TemperatureBand::Cool)),
+            Some(TemperatureBand::Cold)
+        );
+        assert_eq!(
+            TemperatureBand::with_hysteresis(12.0, Some(TemperatureBand::Cool)),
+            Some(TemperatureBand::Cool)
+        );
+        assert_eq!(
+            TemperatureBand::with_hysteresis(12.01, Some(TemperatureBand::Cool)),
+            Some(TemperatureBand::Mild)
+        );
+        assert_eq!(
+            TemperatureBand::with_hysteresis(18.0, Some(TemperatureBand::Warm)),
+            Some(TemperatureBand::Mild)
+        );
+        assert_eq!(
+            TemperatureBand::with_hysteresis(31.0, Some(TemperatureBand::Cold)),
+            Some(TemperatureBand::Hot)
+        );
+    }
+
+    #[test]
+    fn adaptive_registry_selects_by_exact_variant_then_stable_family_and_holds_hysteresis() {
+        let (root, registry) = adaptive_registry();
+        registry.validate_adaptive().unwrap();
+
+        let cool = registry
+            .adaptive_full_selection(Some(8.0), PrecipitationAppearance::Cloudy, None, None)
+            .unwrap();
+        assert_eq!(cool.scene_id, "v19-mountain-stream--cloudy");
+        assert_eq!(cool.state.family_id, "v19-mountain-stream");
+        assert_eq!(cool.state.temperature_band, TemperatureBand::Cool);
+
+        let mild = registry
+            .adaptive_full_selection(Some(19.0), PrecipitationAppearance::Rain, None, None)
+            .unwrap();
+        assert_eq!(mild.scene_id, "v30-deep-forest--rain");
+        assert_eq!(mild.state.temperature_band, TemperatureBand::Mild);
+
+        let held = registry
+            .adaptive_full_selection(
+                Some(21.0),
+                PrecipitationAppearance::Clear,
+                Some(&mild.state),
+                Some("v30-deep-forest"),
+            )
+            .unwrap();
+        assert_eq!(held.state.family_id, "v30-deep-forest");
+        assert_eq!(held.state.temperature_band, TemperatureBand::Mild);
+        assert_eq!(held.scene_id, "v30-deep-forest");
+
+        let changed = registry
+            .adaptive_full_selection(
+                Some(22.01),
+                PrecipitationAppearance::Clear,
+                Some(&mild.state),
+                Some("v30-deep-forest"),
+            )
+            .unwrap();
+        assert_eq!(changed.state.temperature_band, TemperatureBand::Warm);
+        assert_eq!(changed.state.family_id, "coral-aquarius");
+        assert_eq!(changed.scene_id, "coral-aquarius");
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn adaptive_unknown_data_retains_active_variant_or_uses_v29_offline_fallback() {
+        let (root, registry) = adaptive_registry();
+        let retained = registry
+            .adaptive_full_selection(
+                None,
+                PrecipitationAppearance::Unknown,
+                Some(&AdaptiveSelectionState {
+                    family_id: "v29-seascape".into(),
+                    temperature_band: TemperatureBand::Warm,
+                }),
+                Some("v29-seascape--cloudy"),
+            )
+            .unwrap();
+        assert_eq!(retained.scene_id, "v29-seascape--cloudy");
+        assert_eq!(retained.state.family_id, "v29-seascape");
+
+        let fallback = registry
+            .adaptive_full_selection(None, PrecipitationAppearance::Unknown, None, None)
+            .unwrap();
+        assert_eq!(fallback.scene_id, "v29-seascape");
+        assert_eq!(fallback.state.temperature_band, TemperatureBand::Warm);
+
+        let restored = registry
+            .adaptive_full_selection(
+                None,
+                PrecipitationAppearance::Clear,
+                Some(&AdaptiveSelectionState {
+                    family_id: "missing-family".into(),
+                    temperature_band: TemperatureBand::Cold,
+                }),
+                None,
+            )
+            .unwrap();
+        assert_eq!(restored.scene_id, "v29-seascape");
+        assert_eq!(restored.state.family_id, "v29-seascape");
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn weather_variant_selection_is_strictly_same_family_and_uses_fallback_order() {
+        let (root, registry) = adaptive_registry();
+        let snow = registry
+            .adaptive_variant_in_family("v26-winter-forest", PrecipitationAppearance::Snow)
+            .unwrap();
+        assert_eq!(snow.id, "v26-winter-forest--snow");
+        let rain_without_rain_variant = registry
+            .adaptive_variant_in_family("v29-seascape", PrecipitationAppearance::Rain)
+            .unwrap();
+        assert_eq!(rain_without_rain_variant.id, "v29-seascape--cloudy");
+        let unknown =
+            registry.adaptive_variant_in_family("v29-seascape", PrecipitationAppearance::Unknown);
+        assert!(unknown.is_none());
+        assert!(
+            registry
+                .adaptive_variant_in_family("missing-family", PrecipitationAppearance::Clear)
+                .is_none()
+        );
+        assert_eq!(
+            PrecipitationAppearance::from_weather(Weather::Storm, true),
+            PrecipitationAppearance::Rain
+        );
+        assert_eq!(
+            PrecipitationAppearance::from_weather(Weather::Storm, false),
+            PrecipitationAppearance::Unknown
+        );
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn schema_v2_scene_requires_complete_family_metadata_and_v1_stays_unchanged() {
+        let root = package_root("scene-schema2");
+        std::fs::create_dir_all(&root).unwrap();
+        write_package(&root, "legacy", "weather = [\"clear\"]\n", [1, 2, 3]);
+        let legacy = SceneManifest::load(root.join("legacy/scene.toml"))
+            .unwrap()
+            .0;
+        assert_eq!(legacy.schema_version, 1);
+        assert_eq!(legacy.family_id, None);
+
+        write_package(&root, "incomplete", "weather = [\"clear\"]\n", [1, 2, 3]);
+        let path = root.join("incomplete/scene.toml");
+        let contents = std::fs::read_to_string(&path)
+            .unwrap()
+            .replace("schema_version = 1", "schema_version = 2");
+        std::fs::write(path, contents).unwrap();
+        let error = SceneManifest::load(root.join("incomplete/scene.toml")).unwrap_err();
+        assert!(error.to_string().contains("requires a safe family ID"));
         std::fs::remove_dir_all(root).unwrap();
     }
 }

@@ -1,6 +1,6 @@
 # ADR-0005 — S06 civil time, astronomy, and seasons policy
 
-- Status: accepted
+- Status: accepted; amended by CR-0002 and CR-0005
 - Owner / date: Pi coding agent / 2026-09-22
 - Approval identity / date: `simplysoup` / 2026-09-22
 - Affected stages / requirements: S06; WW-06, WW-08
@@ -29,10 +29,9 @@ IP geolocation, desktop location services, network requests, or telemetry.
    machine state and provides no explicit location-consent boundary.
 2. Use UTC and a fixed equatorial fallback: rejected because it is not a local,
    location-aware classification and would hide missing configuration.
-3. Use explicit location plus an injected UTC-offset schedule: proposed. It is
-   dependency-light and deterministic while still representing DST transitions;
-   a later decision may add a named-zone resolver without changing snapshot or
-   selector ownership.
+3. Use explicit location plus an injected UTC-offset schedule: chosen for the
+   original v1 policy. CR-0005 adds a pinned IANA-zone resolver for schema-v2
+   config without changing snapshot or selector ownership.
 
 ## Decision
 
@@ -98,30 +97,45 @@ the S05 selector. Startup and explicit `reload`, `scene`, `next`, or resume
 requests obtain one immutable snapshot and pass it to selection. A later S08
 decision owns suspend/resume coalescing.
 
+## CR-0005 amendment: IANA timezone and solar palette anchors
+
+CR-0005 preserves the explicit-input and environment/selector boundaries while
+adding `[location].timezone` as a recognized IANA name resolved by pinned
+`chrono-tz`. NOAA events are resolved for the configured local calendar date;
+previous/current/next local dates are used when constructing solar palette
+anchors so UTC-midnight crossings remain ordered. The optional scene-authored
+`time_of_day.toml` v2 solar timeline is a renderer input only. Missing location,
+timezone, polar/unavailable events, duplicate anchors, or an unbracketed sample
+use the base palette for the solar-timeline component. The exact data shape and
+uniform are in [ADR-0008](ADR-0008-cr0005-configured-location-solar-palette.md).
+
 ## Consequences and validation
 
-The implementation can remain dependency-free and can be tested with fixed UTC
-seconds, explicit offset transitions, injected solar events, leap-day vectors,
-hemisphere and equatorial vectors, polar states, missing inputs, and invalid
-coordinates. DST tests verify that the offset schedule changes local civil time
-at the declared UTC instant without changing monotonic scheduler behavior.
+The original v1 offset-schedule policy is dependency-free. The CR-0005 v2
+named-zone path adds pinned `chrono`/`chrono-tz` dependencies. Tests use fixed
+UTC seconds, explicit offset transitions, IANA/DST vectors, injected solar
+events, leap-day vectors, hemisphere/equatorial vectors, polar states, missing
+inputs, and invalid coordinates. Civil-time conversion never changes monotonic
+scheduler behavior.
 Selection tests use the existing S05 trigger controller to prove that a changed
 snapshot is inert until an explicit trigger.
 
 This ADR is accepted by `simplysoup` on 2026-09-22 and amended by approved
 CR-0002 on 2026-09-22. S06 acceptance is recorded separately in the stage
 evidence after review of the policy, implementation, and validation results. A
-later approved timezone or astronomy dependency must
-preserve explicit inputs, unknown/polar states, and the environment-to-selector
-boundary.
+later timezone or astronomy dependency update must preserve explicit
+inputs, unknown/polar states, and the environment-to-selector boundary. CR-0005
+and ADR-0008 amend the named-zone and solar-renderer details; they do not alter
+the accepted S05 selector policy.
 
 ## Approval record
 
 `simplysoup` approved ADR-0005 on 2026-09-22. This approval covers the explicit
 location and UTC-offset schedule inputs, civil-time boundaries, polar and
-unknown states, hemispheric season policy, and refresh ownership. S06 stage
-acceptance is recorded separately in the S06 evidence.
+unknown states, hemispheric season policy, and refresh ownership. CR-0005
+separately approves the IANA config input and solar-palette amendment; add-on
+stage acceptance is recorded separately from the existing S06 evidence.
 
 ## Supersession
 
-None.
+Amended by CR-0005 and ADR-0008; the original v1 offset-schedule policy remains historical.

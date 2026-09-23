@@ -24,7 +24,7 @@ use std::{
 
 use crate::{environment::Location, scene_registry::Weather};
 
-pub const CACHE_SCHEMA_VERSION: u32 = 1;
+pub const CACHE_SCHEMA_VERSION: u32 = 2;
 pub const NORMAL_POLL_INTERVAL: Duration = Duration::from_secs(15 * 60);
 pub const DEFAULT_STALE_AFTER: Duration = Duration::from_secs(60 * 60);
 pub const DEFAULT_REQUEST_DEADLINE: Duration = Duration::from_secs(10);
@@ -241,11 +241,25 @@ impl WeatherCache {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CacheStore {
     path: PathBuf,
+    /// Non-sensitive generation from the selected config file's metadata.
+    /// It prevents reuse across location/provider edits without persisting
+    /// or logging coordinates.
+    scope: Option<u128>,
 }
 
 impl CacheStore {
     pub fn new(path: impl Into<PathBuf>) -> Self {
-        Self { path: path.into() }
+        Self {
+            path: path.into(),
+            scope: None,
+        }
+    }
+
+    pub fn new_scoped(path: impl Into<PathBuf>, scope: u128) -> Self {
+        Self {
+            path: path.into(),
+            scope: Some(scope),
+        }
     }
 
     pub fn default_path() -> Result<PathBuf, WeatherError> {
@@ -276,13 +290,16 @@ impl CacheStore {
         let mut contents = String::new();
         file.read_to_string(&mut contents)
             .map_err(|error_value| io_error("reading weather cache", error_value))?;
-        let reading = parse_cache(&contents)?;
+        let (reading, scope) = parse_cache(&contents)?;
+        if scope != self.scope {
+            return Ok(None);
+        }
         Ok(Some(WeatherCache::new(reading, now_utc)?))
     }
 
     pub fn save(&self, cache: &WeatherCache, now_utc: i64) -> Result<(), WeatherError> {
         cache.reading.validate(now_utc)?;
-        let contents = serialize_cache(&cache.reading);
+        let contents = serialize_cache(&cache.reading, self.scope);
         if contents.len() > MAX_CACHE_BYTES {
             return Err(error("serialized weather cache exceeds the bounded size"));
         }
@@ -365,10 +382,11 @@ fn restrict_path(path: &Path) -> Result<(), WeatherError> {
     restrict_file(&file)
 }
 
-fn serialize_cache(reading: &WeatherReading) -> String {
+fn serialize_cache(reading: &WeatherReading, scope: Option<u128>) -> String {
     format!(
-        "schema_version={}\ncondition={}\ntemperature_c={}\nprecipitation={}\nobserved_at_utc={}\nfetched_at_utc={}\nsource={}\n",
+        "schema_version={}\nscope={}\ncondition={}\ntemperature_c={}\nprecipitation={}\nobserved_at_utc={}\nfetched_at_utc={}\nsource={}\n",
         CACHE_SCHEMA_VERSION,
+        scope.map_or_else(|| "none".to_owned(), |scope| scope.to_string()),
         reading.condition.to_cache_str(),
         reading
             .temperature_c
@@ -380,7 +398,7 @@ fn serialize_cache(reading: &WeatherReading) -> String {
     )
 }
 
-fn parse_cache(input: &str) -> Result<WeatherReading, WeatherError> {
+fn parse_cache(input: &str) -> Result<(WeatherReading, Option<u128>), WeatherError> {
     let mut values = std::collections::BTreeMap::new();
     for line in input.lines() {
         let (key, value) = line
@@ -393,11 +411,23 @@ fn parse_cache(input: &str) -> Result<WeatherReading, WeatherError> {
     let version = required(&values, "schema_version")?
         .parse::<u32>()
         .map_err(|_| error("weather cache schema version is invalid"))?;
-    if version != CACHE_SCHEMA_VERSION {
+    if !(1..=CACHE_SCHEMA_VERSION).contains(&version) {
         return Err(error(format!(
             "unsupported weather cache schema version {version}"
         )));
     }
+    let scope = if version == 1 {
+        None
+    } else {
+        match required(&values, "scope")? {
+            "none" => None,
+            scope => Some(
+                scope
+                    .parse::<u128>()
+                    .map_err(|_| error("weather cache scope is invalid"))?,
+            ),
+        }
+    };
     let condition = Weather::parse_cache(required(&values, "condition")?)?;
     let temperature_c = match required(&values, "temperature_c")? {
         "none" => None,
@@ -419,14 +449,17 @@ fn parse_cache(input: &str) -> Result<WeatherReading, WeatherError> {
         .parse::<i64>()
         .map_err(|_| error("weather cache fetched timestamp is invalid"))?;
     let source = required(&values, "source")?.to_owned();
-    Ok(WeatherReading {
-        condition,
-        temperature_c,
-        precipitation,
-        observed_at_utc,
-        fetched_at_utc,
-        source,
-    })
+    Ok((
+        WeatherReading {
+            condition,
+            temperature_c,
+            precipitation,
+            observed_at_utc,
+            fetched_at_utc,
+            source,
+        },
+        scope,
+    ))
 }
 
 fn required<'a>(
@@ -1342,8 +1375,29 @@ mod tests {
         let cache = WeatherCache::new(reading(), 1_000).unwrap();
         store.save(&cache, 1_000).unwrap();
         assert_eq!(store.load(1_000).unwrap().unwrap(), cache);
+        std::fs::write(
+            store.path(),
+            "schema_version=1\ncondition=rain\ntemperature_c=12.5000\nprecipitation=true\nobserved_at_utc=0\nfetched_at_utc=1000\nsource=fake\n",
+        )
+        .unwrap();
+        assert_eq!(store.load(1_000).unwrap().unwrap(), cache);
         std::fs::write(store.path(), "schema_version=999\n").unwrap();
         assert!(store.load(1_000).is_err());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn cache_scope_prevents_reusing_weather_after_config_changes() {
+        let root =
+            std::env::temp_dir().join(format!("worldwall-weather-scope-{}", unique_suffix()));
+        let path = root.join("weather.cache");
+        let original = CacheStore::new_scoped(path.clone(), 101);
+        let changed = CacheStore::new_scoped(path.clone(), 202);
+        original
+            .save(&WeatherCache::new(reading(), 1_000).unwrap(), 1_000)
+            .unwrap();
+        assert!(original.load(1_000).unwrap().is_some());
+        assert!(changed.load(1_000).unwrap().is_none());
         std::fs::remove_dir_all(root).unwrap();
     }
 

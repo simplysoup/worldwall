@@ -12,6 +12,9 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
+use chrono::{DateTime, Datelike, Offset, Timelike, Utc};
+use chrono_tz::Tz;
+
 const SECONDS_PER_DAY: i64 = 86_400;
 const SECONDS_PER_MINUTE: i64 = 60;
 const TWILIGHT_SECONDS: i64 = 30 * 60;
@@ -119,9 +122,17 @@ pub struct OffsetTransition {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+enum TimeZoneRules {
+    Schedule {
+        initial_offset_minutes: i32,
+        transitions: Vec<OffsetTransition>,
+    },
+    Iana(Tz),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UtcOffsetSchedule {
-    initial_offset_minutes: i32,
-    transitions: Vec<OffsetTransition>,
+    rules: TimeZoneRules,
 }
 
 impl UtcOffsetSchedule {
@@ -139,27 +150,72 @@ impl UtcOffsetSchedule {
             previous = Some(transition.at_utc_seconds);
         }
         Ok(Self {
-            initial_offset_minutes,
-            transitions,
+            rules: TimeZoneRules::Schedule {
+                initial_offset_minutes,
+                transitions,
+            },
         })
     }
 
     pub fn fixed(offset_minutes: i32) -> Result<Self, EnvironmentError> {
         validate_offset(offset_minutes)?;
         Ok(Self {
-            initial_offset_minutes: offset_minutes,
-            transitions: Vec::new(),
+            rules: TimeZoneRules::Schedule {
+                initial_offset_minutes: offset_minutes,
+                transitions: Vec::new(),
+            },
         })
     }
 
+    /// Use a validated IANA name from the pinned chrono-tz database.
+    pub fn iana(timezone: Tz) -> Self {
+        Self {
+            rules: TimeZoneRules::Iana(timezone),
+        }
+    }
+
     pub fn offset_at(&self, utc_seconds: i64) -> i32 {
-        self.transitions
-            .iter()
-            .take_while(|transition| transition.at_utc_seconds <= utc_seconds)
-            .last()
-            .map_or(self.initial_offset_minutes, |transition| {
-                transition.offset_minutes
-            })
+        match &self.rules {
+            TimeZoneRules::Schedule {
+                initial_offset_minutes,
+                transitions,
+            } => transitions
+                .iter()
+                .take_while(|transition| transition.at_utc_seconds <= utc_seconds)
+                .last()
+                .map_or(*initial_offset_minutes, |transition| {
+                    transition.offset_minutes
+                }),
+            TimeZoneRules::Iana(timezone) => DateTime::<Utc>::from_timestamp(utc_seconds, 0)
+                .map(|instant| {
+                    instant
+                        .with_timezone(timezone)
+                        .offset()
+                        .fix()
+                        .local_minus_utc()
+                        / 60
+                })
+                .unwrap_or(0),
+        }
+    }
+
+    pub fn local_datetime_at(&self, utc_seconds: i64) -> Result<CivilDateTime, EnvironmentError> {
+        match &self.rules {
+            TimeZoneRules::Schedule { .. } => {
+                CivilDateTime::from_utc_seconds(utc_seconds, self.offset_at(utc_seconds))
+            }
+            TimeZoneRules::Iana(timezone) => {
+                let instant = DateTime::<Utc>::from_timestamp(utc_seconds, 0)
+                    .ok_or_else(|| error("UTC timestamp is outside chrono's supported range"))?;
+                let local = instant.with_timezone(timezone);
+                Ok(CivilDateTime {
+                    date: CivilDate::new(local.year(), local.month() as u8, local.day() as u8)?,
+                    hour: local.hour() as u8,
+                    minute: local.minute() as u8,
+                    second: local.second() as u8,
+                })
+            }
+        }
     }
 }
 
@@ -202,6 +258,12 @@ impl CivilDate {
 
     pub fn unix_seconds_at_midnight(self) -> i64 {
         days_from_civil(self.year, self.month, self.day) * SECONDS_PER_DAY
+    }
+
+    pub fn add_days(self, days: i64) -> Result<Self, EnvironmentError> {
+        let (year, month, day) =
+            civil_from_days(days_from_civil(self.year, self.month, self.day) + days);
+        Self::new(year, month, day)
     }
 }
 
@@ -286,6 +348,14 @@ impl SolarEvents {
             polar: Some(TimeOfDay::PolarNight),
         }
     }
+
+    pub const fn unavailable() -> Self {
+        Self {
+            sunrise_utc_seconds: None,
+            sunset_utc_seconds: None,
+            polar: None,
+        }
+    }
 }
 
 pub trait AstronomyProvider {
@@ -321,10 +391,16 @@ impl AstronomyProvider for NoaaAstronomy {
             return Ok(SolarEvents::polar_day());
         }
 
-        let sunrise = solar_event_utc(date, longitude_hour, cos_hour_angle, true);
+        let mut sunrise = solar_event_utc(date, longitude_hour, cos_hour_angle, true);
         let mut sunset = solar_event_utc(date, longitude_hour, cos_hour_angle, false);
         if sunset <= sunrise {
-            sunset += SECONDS_PER_DAY;
+            // NOAA's formula returns a UTC hour in [0, 24). Choose the
+            // adjacent UTC date that belongs to this location's local date.
+            if longitude >= 0.0 {
+                sunrise -= SECONDS_PER_DAY;
+            } else {
+                sunset += SECONDS_PER_DAY;
+            }
         }
         Ok(SolarEvents::normal(sunrise, sunset))
     }
@@ -366,11 +442,11 @@ fn solar_event_utc(
     let longitude_quadrant = (true_longitude / 90.0).floor() * 90.0;
     let right_ascension_quadrant = (right_ascension / 90.0).floor() * 90.0;
     let right_ascension = (right_ascension + longitude_quadrant - right_ascension_quadrant) / 15.0;
-    let local_hour_angle = if sunrise {
+    let local_hour_angle = (if sunrise {
         360.0 - cos_hour_angle.acos().to_degrees()
     } else {
         cos_hour_angle.acos().to_degrees()
-    } / 15.0;
+    }) / 15.0;
     let local_mean_time = local_hour_angle + right_ascension - 0.06571 * approximate_time - 6.622;
     let utc_hour = normalize_hours(local_mean_time - longitude_hour);
     date.unix_seconds_at_midnight() + (utc_hour * 3_600.0).round() as i64
@@ -403,8 +479,7 @@ where
                 season: Season::Unknown,
             };
         };
-        let offset = timezone.offset_at(utc_seconds);
-        let Ok(local) = CivilDateTime::from_utc_seconds(utc_seconds, offset) else {
+        let Ok(local) = timezone.local_datetime_at(utc_seconds) else {
             return EnvironmentSnapshot {
                 time: TimeOfDay::Unknown,
                 weather,
@@ -591,6 +666,55 @@ mod tests {
     }
 
     #[test]
+    fn iana_timezone_resolves_dst_offsets_and_local_wall_time() {
+        let timezone = UtcOffsetSchedule::iana("America/Los_Angeles".parse().unwrap());
+        let before = unix(CivilDate::new(2024, 3, 10).unwrap(), 9, 59);
+        let after = unix(CivilDate::new(2024, 3, 10).unwrap(), 10, 0);
+        assert_eq!(timezone.offset_at(before), -480);
+        assert_eq!(timezone.offset_at(after), -420);
+        assert_eq!(timezone.local_datetime_at(before).unwrap().hour, 1);
+        assert_eq!(timezone.local_datetime_at(after).unwrap().hour, 3);
+        assert_eq!(
+            timezone.local_datetime_at(after).unwrap().date,
+            CivilDate::new(2024, 3, 10).unwrap()
+        );
+    }
+
+    #[test]
+    fn iana_toronto_timezone_observes_both_dst_transitions() {
+        let timezone = UtcOffsetSchedule::iana("America/Toronto".parse().unwrap());
+        let spring_before = unix(CivilDate::new(2024, 3, 10).unwrap(), 6, 59);
+        let spring_after = unix(CivilDate::new(2024, 3, 10).unwrap(), 7, 0);
+        assert_eq!(timezone.offset_at(spring_before), -300);
+        assert_eq!(timezone.offset_at(spring_after), -240);
+        assert_eq!(timezone.local_datetime_at(spring_before).unwrap().hour, 1);
+        assert_eq!(timezone.local_datetime_at(spring_after).unwrap().hour, 3);
+
+        let fall_before = unix(CivilDate::new(2024, 11, 3).unwrap(), 5, 59);
+        let fall_after = unix(CivilDate::new(2024, 11, 3).unwrap(), 6, 0);
+        assert_eq!(timezone.offset_at(fall_before), -240);
+        assert_eq!(timezone.offset_at(fall_after), -300);
+        assert_eq!(timezone.local_datetime_at(fall_before).unwrap().hour, 1);
+        assert_eq!(timezone.local_datetime_at(fall_after).unwrap().hour, 1);
+    }
+
+    #[test]
+    fn civil_date_add_days_crosses_month_and_leap_boundaries() {
+        assert_eq!(
+            CivilDate::new(2024, 2, 28).unwrap().add_days(1).unwrap(),
+            CivilDate::new(2024, 2, 29).unwrap()
+        );
+        assert_eq!(
+            CivilDate::new(2024, 2, 29).unwrap().add_days(1).unwrap(),
+            CivilDate::new(2024, 3, 1).unwrap()
+        );
+        assert_eq!(
+            CivilDate::new(2024, 1, 1).unwrap().add_days(-1).unwrap(),
+            CivilDate::new(2023, 12, 31).unwrap()
+        );
+    }
+
+    #[test]
     fn location_validation_rejects_partial_range_and_non_finite_inputs() {
         assert!(Location::new(90.0, 180.0).is_ok());
         assert!(Location::new(90.1, 0.0).is_err());
@@ -670,6 +794,51 @@ mod tests {
                 season: Season::Unknown
             }
         );
+    }
+
+    #[test]
+    fn noaa_solar_events_preserve_local_date_across_utc_midnight() {
+        let date = CivilDate::new(2024, 6, 21).unwrap();
+        let east = NoaaAstronomy
+            .solar_events(date, Location::new(0.0, 150.0).unwrap())
+            .unwrap();
+        let west = NoaaAstronomy
+            .solar_events(date, Location::new(0.0, -150.0).unwrap())
+            .unwrap();
+        let east_sunrise = east.sunrise_utc_seconds.unwrap();
+        let east_sunset = east.sunset_utc_seconds.unwrap();
+        let west_sunrise = west.sunrise_utc_seconds.unwrap();
+        let west_sunset = west.sunset_utc_seconds.unwrap();
+        assert_eq!(
+            CivilDateTime::from_utc_seconds(east_sunrise, 0)
+                .unwrap()
+                .date,
+            CivilDate::new(2024, 6, 20).unwrap()
+        );
+        assert_eq!(
+            CivilDateTime::from_utc_seconds(east_sunset, 0)
+                .unwrap()
+                .date,
+            date
+        );
+        assert_eq!(
+            CivilDateTime::from_utc_seconds(west_sunrise, 0)
+                .unwrap()
+                .date,
+            date
+        );
+        assert_eq!(
+            CivilDateTime::from_utc_seconds(west_sunset, 0)
+                .unwrap()
+                .date,
+            CivilDate::new(2024, 6, 22).unwrap()
+        );
+        let east_local = UtcOffsetSchedule::fixed(12 * 60)
+            .unwrap()
+            .local_datetime_at(east_sunrise)
+            .unwrap();
+        assert_eq!(east_local.date, date);
+        assert!((6..=7).contains(&east_local.hour));
     }
 
     #[test]

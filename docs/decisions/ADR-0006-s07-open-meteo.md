@@ -4,7 +4,7 @@
 - Owner / date: Pi coding agent / 2026-09-22
 - Approval identity / date: `simplysoup` / 2026-09-22
 - Affected stages / requirements: S07; WW-06, WW-07, WW-11
-- Related change proposal: none; this is within the approved optional-weather scope
+- Related change proposal: CR-0005 amends runtime configuration; provider, mapping, terms, worker, and cadence decisions remain unchanged
 
 ## Context and constraints
 
@@ -84,20 +84,15 @@ precipitation conversion, WMO mapping, and missing-field rejection. The exact
 Open-Meteo request URL and endpoint are source-visible without exposing
 coordinates in ordinary diagnostics.
 
-The approved runtime configuration enables Open-Meteo only when the user
-explicitly selects `open-meteo` and supplies latitude/longitude:
-
-```sh
-WORLDWALL_WEATHER=open-meteo
-WORLDWALL_WEATHER_LATITUDE=<decimal latitude>
-WORLDWALL_WEATHER_LONGITUDE=<decimal longitude>
-```
-
-With `WORLDWALL_WEATHER` unset, weather makes zero requests. The coordinates
-are sent over HTTPS to Open-Meteo and are not logged or cached. Partial or
-invalid configuration is rejected before the renderer starts.
-The implementation continues to avoid live requests unless that configuration
-is present. A limited live-provider check remains not-run in this increment.
+CR-0005 makes the selected `WORLDWALL_CONFIG` file authoritative. Its optional
+`[weather]` table defaults to `provider = "disabled"`; explicitly selecting
+`provider = "open-meteo"` requires the complete `[location]` table and reuses
+its latitude/longitude and IANA timezone. When no config file is selected, the
+legacy `WORLDWALL_WEATHER` and weather-coordinate environment inputs remain
+supported for compatibility. With weather disabled, the runtime creates no
+provider request. Explicitly enabled coordinates are sent over HTTPS and are
+not logged or stored raw in the weather cache. A limited live-provider check
+remains governed by the recorded S07 evidence and authorization.
 If the terms or provider service change, disable the adapter rather than
 silently switching providers.
 
@@ -105,7 +100,8 @@ silently switching providers.
 
 `simplysoup` approved ADR-0006 on 2026-09-22, including the Open-Meteo endpoint,
 field mapping, explicit location configuration, worker isolation, and the
-recorded non-commercial/daily-call terms review.
+recorded non-commercial/daily-call terms review. CR-0005 approval replaces the
+file-config shape while preserving the provider decision and no-network default.
 
 ## Supersession
 

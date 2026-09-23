@@ -1,14 +1,14 @@
 # Architecture and runtime boundaries
 
-Working specification for the [proposed contract](delivery-contract.md). API names in the archive are illustrative; S00/S02 must verify actual pinned library APIs.
+Working specification for the approved [delivery contract v0.7](delivery-contract.md). API names in the archive are illustrative; S00/S02 must verify actual pinned library APIs.
 
 ## Ownership
 
 ```text
 App / event dispatcher
-├── Environment manager: clock, astronomy, optional async weather cache
+├── Environment manager: UTC clock, explicit IANA/local date, astronomy, optional async weather cache
 ├── Scene registry + pure selector: validated assets, selection snapshots
-├── Renderer: instance → adapter → device/queue → shared scene resources
+├── Renderer: instance → adapter → device/queue → shared scene resources and palette sample
 └── Output map: Wayland owners + dependent wgpu surface + configuration + pacing
 ```
 
@@ -39,11 +39,11 @@ Each output has configure readiness, callback readiness, and a monotonic next-fr
 
 FIFO is presentation synchronization, not a target FPS limiter. Avoid callbacks triggering unbounded submissions, accumulated catch-up frames, and polling while callbacks are withheld. Suspend/no outputs means no render wakeups. Wayland events and IPC remain responsive while animation is throttled.
 
-Use a bounded/wrapped animation phase or numerically stable timing representation to prevent long-running `f32` precision loss. Document whether animation excludes suspended time; the proposed default is a paused monotonic animation clock, unrelated to civil time.
+Use a bounded/wrapped animation phase or numerically stable timing representation to prevent long-running `f32` precision loss. Animation uses a paused monotonic clock, unrelated to civil time. The schema-v4 `animation_speed_multiplier` defaults to 0.5 and rate-integrates all palette effects globally; changing it preserves phase, and the bounded shader phase remains the only animation timing input.
 
 ## Scene replacement and resources
 
-Decode/validate assets outside the frame hot path. Produce a complete candidate, upload its resources, then swap at an event-loop/frame boundary. Invalid candidates leave the last valid scene alive. Increment a generation ID so stale async work cannot overwrite a newer explicit command.
+Startup config/package validation, runtime config-registry validation, explicit IPC scene loads, and adaptive weather/resume candidates run on bounded loader workers outside the Wayland dispatch thread. Runtime IPC is serialized in FIFO order while those workers run; completion channels wake calloop independently of frame timers. Produce a complete CPU candidate, upload its resources on the owner, then swap at the existing event-loop transaction boundary. Invalid candidates leave the last valid scene alive. Internal request generations invalidate stale work after a newer full selection or successful config reload without counting config reload itself as a selection. Weather candidates may replace only a precipitation variant in the active family; they cannot update the family/band state. See the [IPC reference](ipc.md) for queue/response behavior.
 
 Share selected indices, palette, animation metadata, device, and queue. Keep per-output dimensions and uniform bindings separate: writing different sizes to the same uniform before multiple queued draws can cause all draws to see the last size. Cache compatible pipelines by presentation format if needed; one pipeline for unlike formats is not a requirement.
 
@@ -53,7 +53,9 @@ Only scene/content changes or GPU recovery re-upload full assets. Device recover
 
 The selector takes a validated registry and immutable environment snapshot; it performs no I/O. Weather work returns through a bounded completion channel. Cancellation/generation IDs and trigger coalescing prevent late fetches or duplicate resume signals from causing extra selections. Keep selection generations distinct from configuration/cache epochs and output-lifetime IDs: invalidating an old-location fetch or stale output callback is not a scene-selection event.
 
-Refreshes have a documented finite deadline set by the S07 decision; when it expires, select using cached/unknown weather and continue. Timer results never call the selector. Local-time changes and astronomy do not affect the shader clock.
+Schema-v2 config accepts an explicit location and IANA timezone; schema v3 adds the default-off adaptive-scene opt-in inside `[weather]`; schema v4 adds the global `animation_speed_multiplier`. No host timezone or location is inferred. The environment layer derives local civil time and NOAA events, caches previous/current/next local-date event sets, and resolves solar keyframes to a lower atlas row, upper atlas row, and fraction. Missing/polar/duplicate/unbracketed solar data selects the base palette for that timeline. The shader receives only that bounded sample, not coordinates, timezone, weather, or selection state. Schema-v1 civil timelines retain their existing local-seconds input.
+
+Full-selection triggers have a documented finite environment deadline; when it expires, select using cached/unknown weather and continue. A later accepted fresh weather result may enter the CR-0006 selector path only to choose a same-family precipitation variant; it never changes family. Config reload invalidates queued adaptive candidates and never reselects. Clock/solar changes update only resident palette inputs and do not affect the monotonic shader clock or selection.
 
 ## Recovery boundaries
 
