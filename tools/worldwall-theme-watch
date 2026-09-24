@@ -1,0 +1,1481 @@
+#!/usr/bin/python3
+"""Keep Waybar, Alacritty, and Vim colors in sync with Worldwall's active scene.
+
+The palette is sampled from scene assets and the civil-time atlas. GPU animation
+phase is intentionally not mirrored: updates are coarse and only occur on a
+scene change or every 15 minutes.
+"""
+from __future__ import annotations
+
+import argparse
+import colorsys
+import fcntl
+import json
+import math
+import os
+import signal
+import shutil
+import subprocess
+import sys
+import tempfile
+import time
+import tomllib
+from collections import Counter
+from datetime import datetime
+from pathlib import Path
+from zoneinfo import ZoneInfo
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from waybar_reload_debounce import WaybarReloadDebouncer
+
+try:
+    from PIL import Image
+except ImportError as exc:  # Pillow is already installed on the target host.
+    raise SystemExit(f"worldwall-theme-watch: Pillow is required: {exc}")
+
+HOME = Path.home()
+CONFIG_HOME = Path(os.environ.get("XDG_CONFIG_HOME", HOME / ".config"))
+STATE_HOME = Path(os.environ.get("XDG_STATE_HOME", HOME / ".local/state"))
+RUNTIME_HOME = Path(os.environ.get("XDG_RUNTIME_DIR", f"/run/user/{os.getuid()}"))
+WW_CONFIG = Path(os.environ.get("WORLDWALL_CONFIG", CONFIG_HOME / "worldwall/worldwall.toml"))
+WWCTL = Path(os.environ.get("WORLDWALLCTL", HOME / ".local/share/worldwall/bin/worldwallctl"))
+WAYBAR_CSS = CONFIG_HOME / "waybar/style.css"
+WAYBAR_CONFIG = CONFIG_HOME / "waybar/config"
+WAYBAR_THEME = CONFIG_HOME / "waybar/worldwall-theme.css"
+ALACRITTY_CONFIG = CONFIG_HOME / "alacritty/alacritty.toml"
+ALACRITTY_THEME = CONFIG_HOME / "alacritty/worldwall-theme.toml"
+VIM_THEME = HOME / ".vim/colors/worldwall.vim"
+APCA_HELPER_DIR = Path(os.environ.get(
+    "WORLDWALL_APCA_HELPER_DIR", HOME / ".local/share/worldwall-theme-sync/apca-helper"
+)).expanduser()
+APCA_MANIFEST = APCA_HELPER_DIR / "Cargo.toml"
+APCA_BINARY = APCA_HELPER_DIR / "target/release/worldwall-apca-helper"
+STATE_DIR = STATE_HOME / "worldwall-theme-sync"
+TERMINAL_SYNC_DISABLED_FILE = STATE_DIR / "terminal-sync.disabled"
+LOG_FILE = STATE_DIR / "watcher.log"
+PID_FILE = STATE_DIR / "watcher.pid"
+LOCK_FILE = STATE_DIR / "watcher.lock"
+POLL_SECONDS = 8
+TIME_RESAMPLE_SECONDS = 900
+WAYBAR_RELOAD_DEBOUNCE_SECONDS = POLL_SECONDS * 2
+BASE_SURFACE = (16, 11, 27)  # dark plum legacy tint seed
+LIGHT_SURFACE = (255, 253, 247)  # warm paper for normal-polarity terminal text
+WAYBAR_FOREGROUND = (243, 237, 248)
+WAYBAR_MATERIAL_SURFACE_LIGHTNESS = 0.20
+WAYBAR_MATERIAL_OPACITY = 0.90
+WAYBAR_MATERIAL_TEXT_LIFT = 0.25
+WAYBAR_TEXT_SEED = (95, 123, 131)  # muted blue-green, not white
+WAYBAR_HIGHLIGHT_TEXT_LIFT = 0.0
+WAYBAR_HIGHLIGHT_MIN_WCAG = 4.5
+WAYBAR_HIGHLIGHT_MIN_SATURATION = 0.28
+APCA_TEXT_TARGET_LC = 90.0  # conservative target for the 12 pt terminal text palette
+_APCA_BINARY_CACHE: Path | None = None
+
+GRUVBOX = {
+    "red": "#cc241d",
+    "green": "#98971a",
+    "yellow": "#d79921",
+    "magenta": "#b16286",
+    "white": "#a89984",
+    "bright_red": "#fb4934",
+    "bright_green": "#b8bb26",
+    "bright_yellow": "#fabd2f",
+    "bright_magenta": "#d3869b",
+    "bright_white": "#ebdbb2",
+    "bright_black": "#928374",
+}
+
+
+def log(message: str) -> None:
+    STATE_DIR.mkdir(parents=True, exist_ok=True, mode=0o700)
+    try:
+        if LOG_FILE.exists() and LOG_FILE.stat().st_size > 1_000_000:
+            old = LOG_FILE.with_suffix(".log.1")
+            old.unlink(missing_ok=True)
+            LOG_FILE.replace(old)
+        with LOG_FILE.open("a", encoding="utf-8") as stream:
+            os.chmod(LOG_FILE, 0o600)
+            stream.write(f"{datetime.now().astimezone().isoformat(timespec='seconds')} {message}\n")
+    except OSError:
+        pass
+
+
+def apca_helper_binary() -> Path:
+    """Build the pinned Rust APCA helper offline, once, when theme sync starts."""
+    global _APCA_BINARY_CACHE
+    source = APCA_HELPER_DIR / "src/main.rs"
+    if not APCA_MANIFEST.is_file() or not source.is_file():
+        raise ValueError(f"APCA Rust helper sources are unavailable in {APCA_HELPER_DIR}")
+    source_files = [APCA_MANIFEST, source]
+    lockfile = APCA_HELPER_DIR / "Cargo.lock"
+    if lockfile.is_file():
+        source_files.append(lockfile)
+    newest_source = max(path.stat().st_mtime_ns for path in source_files)
+    if (
+        _APCA_BINARY_CACHE is not None
+        and _APCA_BINARY_CACHE.is_file()
+        and _APCA_BINARY_CACHE.stat().st_mtime_ns >= newest_source
+    ):
+        return _APCA_BINARY_CACHE
+
+    STATE_DIR.mkdir(parents=True, exist_ok=True, mode=0o700)
+    lock_path = STATE_DIR / "apca-helper-build.lock"
+    with lock_path.open("a+") as lock:
+        fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+        if not APCA_BINARY.is_file() or APCA_BINARY.stat().st_mtime_ns < newest_source:
+            cargo = shutil.which("cargo")
+            if cargo is None:
+                raise ValueError("cargo is required to build the APCA Rust helper")
+            result = subprocess.run(
+                [cargo, "build", "--offline", "--locked", "--release", "--manifest-path", str(APCA_MANIFEST)],
+                capture_output=True,
+                text=True,
+                timeout=120,
+            )
+            if result.returncode != 0:
+                detail = result.stderr.strip() or result.stdout.strip()
+                raise ValueError(f"could not build APCA Rust helper: {detail}")
+        if not APCA_BINARY.is_file():
+            raise ValueError(f"cargo did not produce the APCA helper binary: {APCA_BINARY}")
+    _APCA_BINARY_CACHE = APCA_BINARY
+    return APCA_BINARY
+
+
+def apca_request(payload: dict) -> dict:
+    result = subprocess.run(
+        [str(apca_helper_binary())],
+        input=json.dumps(payload),
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+    if result.returncode != 0:
+        raise ValueError(f"APCA helper failed: {result.stderr.strip() or result.stdout.strip()}")
+    response = json.loads(result.stdout)
+    if not isinstance(response, dict):
+        raise ValueError("APCA helper returned a malformed response")
+    return response
+
+
+def weighted_rgb_rows(backgrounds: Counter[tuple[int, int, int]]) -> list[dict]:
+    if not backgrounds or any(weight <= 0 for weight in backgrounds.values()):
+        raise ValueError("APCA needs positive weights for at least one background color")
+    return [
+        {"rgb": list(rgb), "weight": int(weight)}
+        for rgb, weight in sorted(backgrounds.items())
+    ]
+
+
+def apca_score_candidates(
+    candidates: list[tuple[int, int, int]],
+    backgrounds: Counter[tuple[int, int, int]],
+) -> list[tuple[float, float]]:
+    if not candidates:
+        raise ValueError("APCA needs at least one candidate color")
+    response = apca_request({
+        "score_batches": [{
+            "candidates": [list(rgb) for rgb in candidates],
+            "backgrounds": weighted_rgb_rows(backgrounds),
+        }],
+    })
+    try:
+        rows = response["score_batches"][0]
+        scores = [(float(row["minimum_lc"]), float(row["weighted_average_lc"])) for row in rows]
+    except (KeyError, IndexError, TypeError, ValueError) as exc:
+        raise ValueError(f"APCA helper returned malformed candidate scores: {exc}") from exc
+    if len(scores) != len(candidates):
+        raise ValueError("APCA helper returned the wrong number of candidate scores")
+    return scores
+
+
+def apca_contrast_pairs(
+    pairs: list[tuple[tuple[int, int, int], tuple[int, int, int]]],
+) -> list[float]:
+    response = apca_request({
+        "contrast_pairs": [
+            {"text": list(text), "background": list(background)}
+            for text, background in pairs
+        ],
+    })
+    try:
+        values = [float(value) for value in response["contrasts"]]
+    except (KeyError, TypeError, ValueError) as exc:
+        raise ValueError(f"APCA helper returned malformed contrast values: {exc}") from exc
+    if len(values) != len(pairs):
+        raise ValueError("APCA helper returned the wrong number of contrast values")
+    return values
+
+
+def apca_lift_colors(
+    colors: list[tuple[int, int, int]],
+    backgrounds: Counter[tuple[int, int, int]],
+    target_lc: float = APCA_TEXT_TARGET_LC,
+) -> list[dict]:
+    if not colors:
+        return []
+    response = apca_request({
+        "lift_batches": [{
+            "colors": [list(rgb) for rgb in colors],
+            "backgrounds": weighted_rgb_rows(backgrounds),
+            "target_lc": target_lc,
+        }],
+    })
+    try:
+        rows = response["lift_batches"][0]
+        lifted = [{
+            "rgb": tuple(int(channel) for channel in row["rgb"]),
+            "minimum_lc": float(row["minimum_lc"]),
+            "weighted_average_lc": float(row["weighted_average_lc"]),
+            "target_met": bool(row["target_met"]),
+        } for row in rows]
+    except (KeyError, IndexError, TypeError, ValueError) as exc:
+        raise ValueError(f"APCA helper returned malformed palette colors: {exc}") from exc
+    if len(lifted) != len(colors):
+        raise ValueError("APCA helper returned the wrong number of palette colors")
+    return lifted
+
+
+def rgb_hex(rgb: tuple[int, int, int]) -> str:
+    return "#%02x%02x%02x" % tuple(max(0, min(255, int(c))) for c in rgb)
+
+
+def hex_rgb(value: str) -> tuple[int, int, int]:
+    text = value.removeprefix("#")
+    return tuple(int(text[i:i + 2], 16) for i in (0, 2, 4))  # type: ignore[return-value]
+
+
+def mix(a: tuple[int, int, int], b: tuple[int, int, int], amount: float) -> tuple[int, int, int]:
+    amount = max(0.0, min(1.0, amount))
+    return tuple(round(a[i] * (1 - amount) + b[i] * amount) for i in range(3))  # type: ignore[return-value]
+
+
+def relative_luminance(rgb: tuple[int, int, int]) -> float:
+    channels = []
+    for value in rgb:
+        c = value / 255.0
+        channels.append(c / 12.92 if c <= 0.04045 else ((c + 0.055) / 1.055) ** 2.4)
+    return 0.2126 * channels[0] + 0.7152 * channels[1] + 0.0722 * channels[2]
+
+
+def quantize(rgb: tuple[int, int, int], step: int = 4) -> tuple[int, int, int]:
+    return tuple(max(0, min(255, round(c / step) * step)) for c in rgb)  # type: ignore[return-value]
+
+
+def contained_file(package: Path, relative: str) -> Path:
+    path = (package / relative).resolve(strict=True)
+    if path != package and package not in path.parents:
+        raise ValueError(f"asset escapes scene package: {relative}")
+    if not path.is_file():
+        raise ValueError(f"scene asset is not a regular file: {relative}")
+    return path
+
+
+def read_rgb_rows(path: Path, expected_width: int = 256) -> list[list[tuple[int, int, int]]]:
+    with Image.open(path) as image:
+        image.load()
+        if image.width != expected_width or not 1 <= image.height <= 256:
+            raise ValueError(f"unexpected palette dimensions in {path.name}: {image.size}")
+        rgba = image.convert("RGBA")
+        pixels = list(rgba.get_flattened_data() if hasattr(rgba, "get_flattened_data") else rgba.getdata())
+        if any(pixel[3] != 255 for pixel in pixels):
+            raise ValueError(f"palette contains non-opaque entries: {path.name}")
+        return [
+            [tuple(pixels[y * image.width + x][:3]) for x in range(image.width)]  # type: ignore[misc]
+            for y in range(image.height)
+        ]
+
+
+def interpolate_rows(
+    rows: list[list[tuple[int, int, int]]],
+    keyframes: list[dict],
+    civil_seconds: int,
+) -> list[tuple[int, int, int]]:
+    if not keyframes:
+        raise ValueError("time palette has no keyframes")
+    points = sorted((int(frame["civil_seconds"]), int(frame["row"])) for frame in keyframes)
+    if len(points) < 2 or len({second for second, _ in points}) != len(points):
+        raise ValueError("time palette needs at least two unique civil-time keyframes")
+    if any(not 0 <= second < 86_400 or not 0 <= row < len(rows) for second, row in points):
+        raise ValueError("time palette keyframe is out of range")
+    now = civil_seconds % 86_400
+    lower_index = max((i for i, (second, _) in enumerate(points) if second <= now), default=len(points) - 1)
+    upper_index = (lower_index + 1) % len(points)
+    lower_time, lower_row = points[lower_index]
+    upper_time, upper_row = points[upper_index]
+    sample_time = now
+    if lower_index == len(points) - 1:
+        upper_time += 86_400
+        if now < lower_time:
+            sample_time += 86_400
+    elif upper_index == 0:
+        upper_time += 86_400
+    fraction = (sample_time - lower_time) / (upper_time - lower_time)
+    fraction = max(0.0, min(1.0, fraction))
+    a, b = rows[lower_row], rows[upper_row]
+    # Worldwall's authored palette fade floors each interpolated byte channel.
+    return [
+        tuple(math.floor(a[i][channel] + (b[i][channel] - a[i][channel]) * fraction) for channel in range(3))  # type: ignore[misc]
+        for i in range(256)
+    ]
+
+
+def load_effective_palette(package: Path, scene_doc: dict, world_config: dict) -> tuple[list[tuple[int, int, int]], str]:
+    palette_path = contained_file(package, scene_doc["palette"])
+    base_rows = read_rgb_rows(palette_path)
+    if len(base_rows) != 1:
+        raise ValueError("base palette must be a single row")
+    timeline_name = scene_doc.get("time_of_day")
+    if not timeline_name:
+        return base_rows[0], "base palette"
+    timeline_path = contained_file(package, timeline_name)
+    timeline = tomllib.loads(timeline_path.read_text(encoding="utf-8"))
+    if timeline.get("schema_version") != 1:
+        # Solar schema-v2 is intentionally not reimplemented in this lightweight
+        # companion; keep a safe base-palette theme rather than inventing a time.
+        return base_rows[0], "base palette (unsupported timeline schema)"
+    location = world_config.get("location", {})
+    timezone_name = location.get("timezone")
+    if not timezone_name:
+        return base_rows[0], "base palette (timezone unavailable)"
+    try:
+        zone = ZoneInfo(timezone_name)
+    except Exception as exc:
+        raise ValueError(f"invalid configured timezone: {exc}") from exc
+    atlas_path = contained_file(package, timeline["atlas"])
+    atlas = read_rgb_rows(atlas_path)
+    now = datetime.now(zone)
+    seconds = now.hour * 3600 + now.minute * 60 + now.second
+    colors = interpolate_rows(atlas, timeline["keyframe"], seconds)
+    return colors, f"time palette at {now:%H:%M} {timezone_name}"
+
+
+def scene_histogram(package: Path, scene_doc: dict) -> tuple[Counter[int], int]:
+    path = contained_file(package, scene_doc["image"])
+    with Image.open(path) as image:
+        image.load()
+        if image.mode not in ("L", "P"):
+            raise ValueError(f"scene index image has unsupported mode: {image.mode}")
+        pixels = image.get_flattened_data() if hasattr(image, "get_flattened_data") else image.getdata()
+        counts = Counter(int(index) for index in pixels)
+    if not counts:
+        raise ValueError("scene image has no pixels")
+    return counts, sum(counts.values())
+
+
+def cover_source_coord(
+    source: tuple[int, int], output: tuple[int, int], pixel: tuple[int, int]
+) -> tuple[int, int]:
+    """Mirror Worldwall's centered, nearest-neighbor cover mapping."""
+    source_width, source_height = source
+    output_width, output_height = output
+    scale = max(output_width / source_width, output_height / source_height)
+    crop_x = (source_width * scale - output_width) / 2
+    crop_y = (source_height * scale - output_height) / 2
+    x = math.floor((pixel[0] + 0.5 + crop_x) / scale)
+    y = math.floor((pixel[1] + 0.5 + crop_y) / scale)
+    return min(source_width - 1, max(0, x)), min(source_height - 1, max(0, y))
+
+
+def waybar_output_geometries(bar_height: int) -> list[tuple[int, int, int]]:
+    """Return physical output width/height and the top bar's physical height."""
+    fallback = [(1920, 1080, max(1, bar_height))]
+    try:
+        result = subprocess.run(
+            ["hyprctl", "monitors", "-j"],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=3,
+        )
+        monitors = json.loads(result.stdout)
+        geometries = []
+        for monitor in monitors:
+            width = int(monitor.get("width", 0))
+            height = int(monitor.get("height", 0))
+            scale = float(monitor.get("scale", 1.0))
+            if width > 0 and height > 0 and math.isfinite(scale) and scale > 0:
+                geometries.append((
+                    max(1, round(width * scale)),
+                    max(1, round(height * scale)),
+                    max(1, round(bar_height * scale)),
+                ))
+        return geometries or fallback
+    except (OSError, ValueError, TypeError, json.JSONDecodeError, subprocess.SubprocessError):
+        return fallback
+
+
+def waybar_top_height() -> int:
+    """Read the active top bar's configured logical height; retain a safe fallback."""
+    try:
+        bars = json.loads(WAYBAR_CONFIG.read_text(encoding="utf-8"))
+        if isinstance(bars, dict):
+            bars = [bars]
+        heights = [
+            int(bar["height"])
+            for bar in bars
+            if isinstance(bar, dict)
+            and bar.get("position", "top") == "top"
+            and isinstance(bar.get("height", 37), (int, float))
+            and 0 < int(bar.get("height", 37)) <= 256
+        ]
+        if heights:
+            return max(heights)
+    except (OSError, ValueError, TypeError, json.JSONDecodeError):
+        pass
+    return 37
+
+
+def waybar_area_histogram(
+    package: Path,
+    scene_doc: dict,
+    output_geometries: list[tuple[int, int, int]],
+) -> tuple[Counter[int], int]:
+    """Histogram the actual scene indices visible beneath each top Waybar band."""
+    path = contained_file(package, scene_doc["image"])
+    with Image.open(path) as image:
+        image.load()
+        if image.mode not in ("L", "P"):
+            raise ValueError(f"scene index image has unsupported mode: {image.mode}")
+        width, height = image.size
+        pixels = image.get_flattened_data() if hasattr(image, "get_flattened_data") else image.getdata()
+        counts: Counter[int] = Counter()
+        for output_width, output_height, band_height in output_geometries:
+            if min(output_width, output_height, band_height) <= 0:
+                continue
+            sample_height = min(output_height, band_height)
+            scale = max(output_width / width, output_height / height)
+            crop_x = (width * scale - output_width) / 2
+            crop_y = (height * scale - output_height) / 2
+            source_rows = [
+                min(height - 1, max(0, math.floor((y + 0.5 + crop_y) / scale)))
+                for y in range(sample_height)
+            ]
+            source_columns = [
+                min(width - 1, max(0, math.floor((x + 0.5 + crop_x) / scale)))
+                for x in range(output_width)
+            ]
+            for source_y in source_rows:
+                row_offset = source_y * width
+                counts.update(int(pixels[row_offset + source_x]) for source_x in source_columns)
+    if not counts:
+        raise ValueError("Waybar overlaps no scene pixels")
+    return counts, sum(counts.values())
+
+
+def saturation(rgb: tuple[int, int, int]) -> float:
+    return colorsys.rgb_to_hsv(*(channel / 255 for channel in rgb))[1]
+
+
+def weighted_average_color(
+    palette: list[tuple[int, int, int]], counts: Counter[int], total: int
+) -> tuple[int, int, int]:
+    if total <= 0 or not counts:
+        raise ValueError("cannot average an empty scene palette")
+    return tuple(
+        round(sum(palette[index][channel] * count for index, count in counts.items()) / total)
+        for channel in range(3)
+    )  # type: ignore[return-value]
+
+
+def wcag_contrast_ratio(
+    foreground: tuple[int, int, int], background: tuple[int, int, int]
+) -> float:
+    light = max(relative_luminance(foreground), relative_luminance(background))
+    dark = min(relative_luminance(foreground), relative_luminance(background))
+    return (light + 0.05) / (dark + 0.05)
+
+
+def waybar_material_backdrops(
+    palette: list[tuple[int, int, int]],
+    waybar_counts: Counter[int],
+    waybar_total: int,
+) -> Counter[tuple[int, int, int]]:
+    if waybar_total <= 0 or not waybar_counts:
+        raise ValueError("cannot build material backdrops from an empty Waybar sample")
+    waybar_average = weighted_average_color(palette, waybar_counts, waybar_total)
+    material_surface = mix(
+        waybar_average,
+        (0, 0, 0),
+        1 - WAYBAR_MATERIAL_SURFACE_LIGHTNESS,
+    )
+    backgrounds: Counter[tuple[int, int, int]] = Counter()
+    for index, count in waybar_counts.items():
+        background = mix(material_surface, palette[index], 1 - WAYBAR_MATERIAL_OPACITY)
+        backgrounds[background] += count
+    return backgrounds
+
+
+def choose_waybar_foreground_color(
+    palette: list[tuple[int, int, int]],
+    scene_counts: Counter[int],
+    scene_total: int,
+    waybar_counts: Counter[int],
+    waybar_total: int,
+) -> tuple[tuple[int, int, int], float]:
+    """Pick a muted scene color that stays WCAG-AA after the CSS text lift."""
+    backgrounds = waybar_material_backdrops(palette, waybar_counts, waybar_total)
+    color_counts: Counter[tuple[int, int, int]] = Counter()
+    for index, count in scene_counts.items():
+        color_counts[palette[index]] += count
+
+    minimum_count = max(12, int(scene_total * 0.00003))
+    candidates: list[tuple[int, int, float, float, tuple[int, int, int]]] = []
+    for color, count in color_counts.items():
+        red, green, blue = color
+        if count < minimum_count:
+            continue
+        if (red < 20 and green < 20 and blue < 20) or (
+            red > 235 and green > 235 and blue > 235
+        ):
+            continue
+        displayed = mix(color, (255, 255, 255), WAYBAR_MATERIAL_TEXT_LIFT)
+        minimum_ratio = min(
+            wcag_contrast_ratio(displayed, background) for background in backgrounds
+        )
+        if minimum_ratio < WAYBAR_HIGHLIGHT_MIN_WCAG:
+            continue
+        distance = sum((color[channel] - WAYBAR_TEXT_SEED[channel]) ** 2 for channel in range(3))
+        candidates.append((distance, -count, -minimum_ratio, saturation(color), color))
+
+    if candidates:
+        _distance, _negative_count, negative_ratio, _saturation, color = min(candidates)
+        return color, -negative_ratio
+
+    # If no palette entry is both muted and legible, lighten the closest usable
+    # scene color only enough to make the configured CSS text lift reach AA.
+    fallback_colors = [
+        color for color, count in color_counts.items()
+        if count > 0 and not (all(channel < 20 for channel in color) or all(channel > 235 for channel in color))
+    ] or list(color_counts)
+    if not fallback_colors:
+        fallback_colors = [(255, 255, 255)]
+    fallback = min(
+        fallback_colors,
+        key=lambda color: (
+            sum((color[channel] - WAYBAR_TEXT_SEED[channel]) ** 2 for channel in range(3)),
+            -color_counts[color],
+            color,
+        ),
+    )
+    for lift in (0.0, 0.05, 0.10, 0.15, 0.20, 0.25, 0.30, 0.35, 0.40, 0.50, 0.60, 0.75, 0.90, 0.95, 1.0):
+        lifted = mix(fallback, (255, 255, 255), lift)
+        displayed = mix(lifted, (255, 255, 255), WAYBAR_MATERIAL_TEXT_LIFT)
+        minimum_ratio = min(
+            wcag_contrast_ratio(displayed, background) for background in backgrounds
+        )
+        if minimum_ratio >= WAYBAR_HIGHLIGHT_MIN_WCAG:
+            return lifted, minimum_ratio
+    return (255, 255, 255), min(
+        wcag_contrast_ratio((255, 255, 255), background) for background in backgrounds
+    )
+
+
+def choose_waybar_highlight_color(
+    palette: list[tuple[int, int, int]],
+    scene_counts: Counter[int],
+    scene_total: int,
+    waybar_counts: Counter[int],
+    waybar_total: int,
+) -> tuple[tuple[int, int, int], float]:
+    """Choose the most common saturated scene color legible on the material pills.
+
+    The indexed scene palette is already quantized, so count its colors directly
+    rather than resizing and quantizing the image a second time. Ignore near-
+    black, near-white, and low-saturation colors; rank remaining highlights by
+    frequency, but only accept colors whose displayed accent meets WCAG AA
+    against the translucent material surface over every sampled bar pixel.
+    """
+    if scene_total <= 0 or not scene_counts or waybar_total <= 0 or not waybar_counts:
+        raise ValueError("cannot choose a Waybar highlight from an empty scene")
+
+    backgrounds = waybar_material_backdrops(palette, waybar_counts, waybar_total)
+
+    color_counts: Counter[tuple[int, int, int]] = Counter()
+    for index, count in scene_counts.items():
+        color_counts[palette[index]] += count
+
+    minimum_count = max(12, int(scene_total * 0.00003))
+    candidates: list[tuple[int, float, float, tuple[int, int, int]]] = []
+    for color, count in color_counts.items():
+        red, green, blue = color
+        if count < minimum_count:
+            continue
+        if (red < 20 and green < 20 and blue < 20) or (
+            red > 235 and green > 235 and blue > 235
+        ):
+            continue
+        color_saturation = saturation(color)
+        if color_saturation < WAYBAR_HIGHLIGHT_MIN_SATURATION:
+            continue
+        text_color = mix(color, (255, 255, 255), WAYBAR_HIGHLIGHT_TEXT_LIFT)
+        minimum_ratio = min(
+            wcag_contrast_ratio(text_color, background) for background in backgrounds
+        )
+        candidates.append((count, color_saturation, minimum_ratio, color))
+
+    passing = [candidate for candidate in candidates if candidate[2] >= WAYBAR_HIGHLIGHT_MIN_WCAG]
+    if passing:
+        _count, _saturation, minimum_ratio, color = max(
+            passing,
+            key=lambda candidate: (candidate[0], candidate[1], candidate[2], candidate[3]),
+        )
+        return color, minimum_ratio
+
+    if candidates:
+        # A scene may have no highlight that reaches AA as-authored. Preserve
+        # the most frequent chromatic candidate, lifting only this fallback as
+        # much as necessary; ordinary scenes retain their exact palette color.
+        _count, _saturation, _minimum_ratio, color = max(
+            candidates,
+            key=lambda candidate: (candidate[0], candidate[1], candidate[2], candidate[3]),
+        )
+        for lift in (0.05, 0.10, 0.15, 0.20, 0.25, 0.30, 0.35, 0.40, 0.50, 0.60, 0.75, 0.90, 0.95, 1.0):
+            lifted = mix(color, (255, 255, 255), lift)
+            text_color = mix(lifted, (255, 255, 255), WAYBAR_HIGHLIGHT_TEXT_LIFT)
+            minimum_ratio = min(
+                wcag_contrast_ratio(text_color, background) for background in backgrounds
+            )
+            if minimum_ratio >= WAYBAR_HIGHLIGHT_MIN_WCAG:
+                return lifted, minimum_ratio
+        return color, _minimum_ratio
+
+    fallback = choose_palette_colors(palette, scene_counts, scene_total)[1]
+    for lift in (0.0, 0.05, 0.10, 0.15, 0.20, 0.25, 0.30, 0.35, 0.40, 0.50, 0.60, 0.75, 0.90, 0.95, 1.0):
+        lifted = mix(fallback, (255, 255, 255), lift)
+        text_color = mix(lifted, (255, 255, 255), WAYBAR_HIGHLIGHT_TEXT_LIFT)
+        minimum_ratio = min(
+            wcag_contrast_ratio(text_color, background) for background in backgrounds
+        )
+        if minimum_ratio >= WAYBAR_HIGHLIGHT_MIN_WCAG:
+            return lifted, minimum_ratio
+    minimum_ratio = min(
+        wcag_contrast_ratio((255, 255, 255), background) for background in backgrounds
+    )
+    return (255, 255, 255), minimum_ratio
+
+
+def choose_palette_colors(palette: list[tuple[int, int, int]], counts: Counter[int], total: int) -> tuple[tuple[int, int, int], tuple[int, int, int], tuple[int, int, int]]:
+    used = [(palette[index], count) for index, count in counts.items()]
+    dark = [(rgb, count) for rgb, count in used if relative_luminance(rgb) <= 0.10]
+    if dark:
+        weight = sum(count for _, count in dark)
+        dark_mean = tuple(round(sum(rgb[c] * count for rgb, count in dark) / weight) for c in range(3))
+        surface = mix(BASE_SURFACE, dark_mean, 0.42)
+    else:
+        surface = BASE_SURFACE
+    surface = tuple(max(6, min(28, channel)) for channel in surface)
+    surface = quantize(surface)
+
+    minimum_count = max(12, int(total * 0.00003))
+    candidates = []
+    for rgb, count in used:
+        lum = relative_luminance(rgb)
+        sat = saturation(rgb)
+        if count < minimum_count or lum < 0.10 or sat < 0.24:
+            continue
+        score = sat * math.sqrt(lum) * math.log1p(count)
+        candidates.append((score, rgb, count))
+    if not candidates:
+        candidates = [
+            (saturation(rgb) * math.sqrt(max(relative_luminance(rgb), 0.02)) * math.log1p(count), rgb, count)
+            for rgb, count in used
+        ]
+    if candidates:
+        accent = max(candidates, key=lambda item: item[0])[1]
+    else:
+        accent = (47, 255, 211)
+    accent = quantize(accent)
+
+    accent_hue = colorsys.rgb_to_hsv(*(v / 255 for v in accent))[0]
+    secondary_candidates = []
+    for rgb, count in used:
+        lum = relative_luminance(rgb)
+        sat = saturation(rgb)
+        if count < minimum_count or lum < 0.08 or sat < 0.18:
+            continue
+        hue = colorsys.rgb_to_hsv(*(v / 255 for v in rgb))[0]
+        hue_distance = abs(hue - accent_hue)
+        hue_distance = min(hue_distance, 1 - hue_distance)
+        if hue_distance < 0.08:
+            continue
+        score = sat * math.sqrt(lum) * math.log1p(count) * (0.6 + hue_distance)
+        secondary_candidates.append((score, rgb))
+    secondary = max(secondary_candidates, default=(0, (131, 165, 152)), key=lambda item: item[0])[1]
+    secondary = quantize(secondary)
+    return surface, accent, secondary
+
+
+def alacritty_window_opacity() -> float:
+    try:
+        config = tomllib.loads(ALACRITTY_CONFIG.read_text(encoding="utf-8"))
+        opacity = float(config.get("window", {}).get("opacity", 1.0))
+        return opacity if math.isfinite(opacity) and 0.0 <= opacity <= 1.0 else 1.0
+    except (OSError, ValueError, TypeError, tomllib.TOMLDecodeError):
+        return 1.0
+
+
+def terminal_backdrop_histogram(
+    surface: tuple[int, int, int],
+    palette: list[tuple[int, int, int]],
+    scene_counts: Counter[int],
+    opacity: float,
+) -> Counter[tuple[int, int, int]]:
+    """Estimate Alacritty's translucent surface over scene pixels in sRGB."""
+    if not 0.0 <= opacity <= 1.0:
+        raise ValueError("Alacritty window opacity is out of range")
+    backgrounds: Counter[tuple[int, int, int]] = Counter()
+    transparency = 1.0 - opacity
+    for index, count in scene_counts.items():
+        if not 0 <= index < len(palette) or count <= 0:
+            raise ValueError("scene histogram is invalid")
+        background = mix(surface, palette[index], transparency)
+        backgrounds[background] += count
+    if not backgrounds:
+        raise ValueError("cannot score terminal text against an empty scene")
+    return backgrounds
+
+
+def best_scene_palette_color(
+    palette: list[tuple[int, int, int]],
+    scene_counts: Counter[int],
+    backgrounds: Counter[tuple[int, int, int]],
+) -> tuple[tuple[int, int, int], float, float]:
+    """Choose a used scene color by maximin APCA Lc, then weighted mean Lc."""
+    if not palette or not scene_counts or not backgrounds:
+        raise ValueError("cannot choose a text color without scene and background samples")
+    if any(not 0 <= index < len(palette) or count < 0 for index, count in scene_counts.items()):
+        raise ValueError("scene histogram is invalid")
+    candidate_indices = sorted(index for index, count in scene_counts.items() if count > 0)
+    if not candidate_indices:
+        raise ValueError("scene histogram has no used colors")
+    candidates = [palette[index] for index in candidate_indices]
+    scores = apca_score_candidates(candidates, backgrounds)
+
+    best_color = candidates[0]
+    best_minimum = -1.0
+    best_average = -1.0
+    for candidate, (minimum_lc, average_lc) in zip(candidates, scores, strict=True):
+        if minimum_lc > best_minimum or (
+            minimum_lc == best_minimum and average_lc > best_average
+        ):
+            best_color = candidate
+            best_minimum = minimum_lc
+            best_average = average_lc
+    return best_color, best_minimum, best_average
+
+
+def best_contrast_palette_color(
+    palette: list[tuple[int, int, int]],
+    scene_counts: Counter[int],
+    area_counts: Counter[int],
+) -> tuple[tuple[int, int, int], float, float]:
+    """Maximize worst-pixel APCA Lc under Waybar; break ties by weighted mean."""
+    if not palette or not scene_counts or not area_counts:
+        raise ValueError("cannot choose a Waybar color without scene and sampled pixels")
+    if any(not 0 <= index < len(palette) or count <= 0 for index, count in area_counts.items()):
+        raise ValueError("Waybar area histogram is invalid")
+    backgrounds: Counter[tuple[int, int, int]] = Counter()
+    for index, count in area_counts.items():
+        backgrounds[palette[index]] += count
+    return best_scene_palette_color(palette, scene_counts, backgrounds)
+
+
+def apca_safe_ui_backgrounds(
+    text: tuple[int, int, int],
+    proposals: dict[str, tuple[int, int, int]],
+    surface: tuple[int, int, int],
+    palette: list[tuple[int, int, int]],
+    counts: Counter[int],
+    opacity: float,
+    target_lc: float = APCA_TEXT_TARGET_LC,
+) -> tuple[dict[str, tuple[int, int, int]], dict[str, float]]:
+    """Keep subtle UI surfaces near their proposal while protecting text Lc."""
+    pairs: list[tuple[tuple[int, int, int], tuple[int, int, int]]] = []
+    weights: list[int] = []
+    groups: list[tuple[str, list[tuple[int, int, int]], list[tuple[int, int]]]] = []
+    for name, proposed in proposals.items():
+        candidates = [quantize(mix(proposed, surface, step / 64)) for step in range(65)]
+        group_rows: list[tuple[int, int]] = []
+        for candidate in candidates:
+            background_samples = terminal_backdrop_histogram(candidate, palette, counts, opacity)
+            start = len(pairs)
+            for background, weight in sorted(background_samples.items()):
+                pairs.append((text, background))
+                weights.append(weight)
+            group_rows.append((start, len(pairs)))
+        groups.append((name, candidates, group_rows))
+
+    contrasts = apca_contrast_pairs(pairs)
+    chosen: dict[str, tuple[int, int, int]] = {}
+    scores: dict[str, float] = {}
+    for name, candidates, ranges in groups:
+        evaluated = []
+        for candidate, (start, end) in zip(candidates, ranges, strict=True):
+            values = [abs(value) for value in contrasts[start:end]]
+            minimum = min(values)
+            weighted_average = sum(
+                abs(contrasts[index]) * weights[index]
+                for index in range(start, end)
+            ) / sum(weights[start:end])
+            evaluated.append((candidate, minimum, weighted_average))
+        chosen_row = next((row for row in evaluated if row[1] >= target_lc), None)
+        if chosen_row is None:
+            chosen_row = max(evaluated, key=lambda row: (row[1], row[2]))
+        chosen[name] = chosen_row[0]
+        scores[name] = chosen_row[1]
+    return chosen, scores
+
+
+def build_theme(
+    palette: list[tuple[int, int, int]],
+    counts: Counter[int],
+    total: int,
+    waybar_counts: Counter[int] | None = None,
+    waybar_total: int | None = None,
+) -> dict[str, str]:
+    _dark_surface, accent_source, secondary_source = choose_palette_colors(palette, counts, total)
+    scene_average = weighted_average_color(palette, counts, total)
+    surface = quantize(mix(LIGHT_SURFACE, scene_average, 0.02))
+    waybar_counts = waybar_counts or counts
+    waybar_total = waybar_total or sum(waybar_counts.values())
+    waybar_average = weighted_average_color(palette, waybar_counts, waybar_total)
+    waybar_foreground, waybar_text_min_wcag = choose_waybar_foreground_color(
+        palette, counts, total, waybar_counts, waybar_total
+    )
+    # APCA's pinned port reports its native polarity result for this color; the
+    # material-palette selection itself uses WCAG AA over the actual capsules.
+    waybar_scene_backgrounds: Counter[tuple[int, int, int]] = Counter()
+    for index, count in waybar_counts.items():
+        waybar_scene_backgrounds[palette[index]] += count
+    waybar_min_lc, waybar_average_lc = apca_score_candidates(
+        [waybar_foreground], waybar_scene_backgrounds
+    )[0]
+    # The accent is a distinct, scene-frequency highlight selected for the material-pill background.
+    waybar_accent, waybar_accent_min_wcag = choose_waybar_highlight_color(
+        palette, counts, total, waybar_counts, waybar_total
+    )
+
+    opacity = alacritty_window_opacity()
+    terminal_backgrounds = terminal_backdrop_histogram(surface, palette, counts, opacity)
+    foreground_source, terminal_source_min_lc, _terminal_average_lc = best_scene_palette_color(
+        palette, counts, terminal_backgrounds
+    )
+    foreground_result = apca_lift_colors([foreground_source], terminal_backgrounds)[0]
+    foreground = foreground_result["rgb"]
+    terminal_min_lc = foreground_result["minimum_lc"]
+
+    palette_sources = {
+        "accent": accent_source,
+        "bright_accent": quantize(mix(accent_source, (255, 255, 255), 0.32)),
+        "secondary": secondary_source,
+        "bright_secondary": quantize(mix(secondary_source, (255, 255, 255), 0.32)),
+        "muted": quantize(mix(surface, foreground, 0.64)),
+        "ansi_red": hex_rgb(GRUVBOX["red"]),
+        "ansi_green": hex_rgb(GRUVBOX["green"]),
+        "ansi_yellow": hex_rgb(GRUVBOX["yellow"]),
+        "ansi_magenta": hex_rgb(GRUVBOX["magenta"]),
+        "ansi_white": hex_rgb(GRUVBOX["white"]),
+        "ansi_bright_black": hex_rgb(GRUVBOX["bright_black"]),
+        "ansi_bright_red": hex_rgb(GRUVBOX["bright_red"]),
+        "ansi_bright_green": hex_rgb(GRUVBOX["bright_green"]),
+        "ansi_bright_yellow": hex_rgb(GRUVBOX["bright_yellow"]),
+        "ansi_bright_magenta": hex_rgb(GRUVBOX["bright_magenta"]),
+        "ansi_bright_white": hex_rgb(GRUVBOX["bright_white"]),
+    }
+    lifted_palette = apca_lift_colors(list(palette_sources.values()), terminal_backgrounds)
+    apca_palette = {
+        name: result
+        for name, result in zip(palette_sources, lifted_palette, strict=True)
+    }
+    accent = apca_palette["accent"]["rgb"]
+    bright_accent = apca_palette["bright_accent"]["rgb"]
+    secondary = apca_palette["secondary"]["rgb"]
+    bright_secondary = apca_palette["bright_secondary"]["rgb"]
+
+    ui_backgrounds, ui_min_lc = apca_safe_ui_backgrounds(
+        foreground,
+        {
+            "selection": mix(surface, secondary, 0.52),
+            "cursorline": mix(surface, secondary, 0.18),
+            "statusline": mix(surface, secondary, 0.32),
+            "pumenu": mix(surface, secondary, 0.20),
+            "cursor": mix(surface, accent, 0.10),
+            "search": mix(surface, secondary, 0.12),
+            "search_emphasis": mix(surface, accent, 0.22),
+        },
+        surface,
+        palette,
+        counts,
+        opacity,
+    )
+    palette_min_lc = min(result["minimum_lc"] for result in apca_palette.values())
+    return {
+        "background": rgb_hex(surface),
+        "foreground": rgb_hex(foreground),
+        "foreground_source": rgb_hex(foreground_source),
+        "muted": rgb_hex(apca_palette["muted"]["rgb"]),
+        "waybar_foreground": rgb_hex(waybar_foreground),
+        "waybar_tooltip_foreground": rgb_hex(WAYBAR_FOREGROUND),
+        "waybar_average": rgb_hex(waybar_average),
+        "waybar_accent": rgb_hex(waybar_accent),
+        "waybar_accent_min_wcag": f"{waybar_accent_min_wcag:.3f}",
+        "waybar_text_min_wcag": f"{waybar_text_min_wcag:.3f}",
+        "waybar_min_lc": f"{waybar_min_lc:.3f}",
+        "waybar_average_lc": f"{waybar_average_lc:.3f}",
+        "terminal_min_lc": f"{terminal_min_lc:.3f}",
+        "palette_min_lc": f"{palette_min_lc:.3f}",
+        "palette_target_lc": f"{APCA_TEXT_TARGET_LC:.1f}",
+        "accent": rgb_hex(accent),
+        "bright_accent": rgb_hex(bright_accent),
+        "secondary": rgb_hex(secondary),
+        "bright_secondary": rgb_hex(bright_secondary),
+        "ansi_red": rgb_hex(apca_palette["ansi_red"]["rgb"]),
+        "ansi_green": rgb_hex(apca_palette["ansi_green"]["rgb"]),
+        "ansi_yellow": rgb_hex(apca_palette["ansi_yellow"]["rgb"]),
+        "ansi_magenta": rgb_hex(apca_palette["ansi_magenta"]["rgb"]),
+        "ansi_white": rgb_hex(apca_palette["ansi_white"]["rgb"]),
+        "ansi_bright_black": rgb_hex(apca_palette["ansi_bright_black"]["rgb"]),
+        "ansi_bright_red": rgb_hex(apca_palette["ansi_bright_red"]["rgb"]),
+        "ansi_bright_green": rgb_hex(apca_palette["ansi_bright_green"]["rgb"]),
+        "ansi_bright_yellow": rgb_hex(apca_palette["ansi_bright_yellow"]["rgb"]),
+        "ansi_bright_magenta": rgb_hex(apca_palette["ansi_bright_magenta"]["rgb"]),
+        "ansi_bright_white": rgb_hex(apca_palette["ansi_bright_white"]["rgb"]),
+        "selection": rgb_hex(ui_backgrounds["selection"]),
+        "cursorline": rgb_hex(ui_backgrounds["cursorline"]),
+        "statusline": rgb_hex(ui_backgrounds["statusline"]),
+        "pumenu": rgb_hex(ui_backgrounds["pumenu"]),
+        "cursor": rgb_hex(ui_backgrounds["cursor"]),
+        "search": rgb_hex(ui_backgrounds["search"]),
+        "search_emphasis": rgb_hex(ui_backgrounds["search_emphasis"]),
+        "selection_min_lc": f"{ui_min_lc['selection']:.3f}",
+        "cursorline_min_lc": f"{ui_min_lc['cursorline']:.3f}",
+        "statusline_min_lc": f"{ui_min_lc['statusline']:.3f}",
+        "pumenu_min_lc": f"{ui_min_lc['pumenu']:.3f}",
+        "cursor_min_lc": f"{ui_min_lc['cursor']:.3f}",
+        "search_min_lc": f"{ui_min_lc['search']:.3f}",
+        "search_emphasis_min_lc": f"{ui_min_lc['search_emphasis']:.3f}",
+    }
+
+
+def render_waybar(theme: dict[str, str]) -> str:
+    return (
+        "/* Generated by worldwall-theme-watch; local edits are overwritten. */\n"
+        f"@define-color worldwall_accent {theme['waybar_accent']};\n"
+        f"@define-color worldwall_average {theme['waybar_average']};\n"
+        f"@define-color worldwall_surface {theme['background']};\n"
+        f"@define-color worldwall_foreground {theme['waybar_foreground']};\n"
+        f"@define-color worldwall_tooltip_foreground {theme['waybar_tooltip_foreground']};\n"
+    )
+
+
+def render_alacritty(theme: dict[str, str]) -> str:
+    def q(value: str) -> str:
+        return json.dumps(value)
+    return f'''# Generated by worldwall-theme-watch; local edits are overwritten.
+[colors]
+primary = {{ background = {q(theme['background'])}, foreground = {q(theme['foreground'])} }}
+cursor = {{ text = {q(theme['foreground'])}, cursor = {q(theme['cursor'])} }}
+selection = {{ text = {q(theme['foreground'])}, background = {q(theme['selection'])} }}
+
+[colors.normal]
+black = {q(theme['foreground'])}
+red = {q(theme['ansi_red'])}
+green = {q(theme['ansi_green'])}
+yellow = {q(theme['ansi_yellow'])}
+blue = {q(theme['secondary'])}
+magenta = {q(theme['ansi_magenta'])}
+cyan = {q(theme['accent'])}
+white = {q(theme['ansi_white'])}
+
+[colors.bright]
+black = {q(theme['ansi_bright_black'])}
+red = {q(theme['ansi_bright_red'])}
+green = {q(theme['ansi_bright_green'])}
+yellow = {q(theme['ansi_bright_yellow'])}
+blue = {q(theme['bright_secondary'])}
+magenta = {q(theme['ansi_bright_magenta'])}
+cyan = {q(theme['bright_accent'])}
+white = {q(theme['ansi_bright_white'])}
+'''
+
+
+def render_vim(theme: dict[str, str]) -> str:
+    background = theme["background"]
+    foreground = theme["foreground"]
+    accent = theme["accent"]
+    secondary = theme["secondary"]
+    bright_accent = theme["bright_accent"]
+    muted = theme["muted"]
+    cursorline = theme["cursorline"]
+    statusline = theme["statusline"]
+    pumenu = theme["pumenu"]
+    selection = theme["selection"]
+
+    groups = [
+        ("Normal", foreground, background, 254, 0, None),
+        ("NormalNC", foreground, background, 254, 0, None),
+        ("NormalFloat", foreground, pumenu, 254, 0, None),
+        ("Comment", muted, None, 8, None, "italic"),
+        ("Constant", bright_accent, None, 14, None, None),
+        ("String", theme["ansi_green"], None, 2, None, None),
+        ("Character", theme["ansi_green"], None, 2, None, None),
+        ("Number", theme["ansi_yellow"], None, 3, None, None),
+        ("Boolean", theme["ansi_yellow"], None, 3, None, None),
+        ("Float", theme["ansi_yellow"], None, 3, None, None),
+        ("Identifier", secondary, None, 4, None, None),
+        ("Function", accent, None, 6, None, None),
+        ("Statement", accent, None, 6, None, "bold"),
+        ("Conditional", accent, None, 6, None, None),
+        ("Repeat", accent, None, 6, None, None),
+        ("Operator", foreground, None, 254, None, None),
+        ("PreProc", secondary, None, 4, None, None),
+        ("Type", secondary, None, 4, None, None),
+        ("Special", bright_accent, None, 14, None, None),
+        ("Underlined", accent, None, 6, None, "underline"),
+        ("Todo", foreground, selection, 0, 4, "bold"),
+        ("Directory", secondary, None, 4, None, None),
+        ("Title", accent, None, 6, None, "bold"),
+        ("LineNr", muted, background, 8, 0, None),
+        ("CursorLineNr", accent, cursorline, 6, 0, "bold"),
+        ("CursorLine", None, cursorline, None, 0, None),
+        ("CursorColumn", None, cursorline, None, 0, None),
+        ("ColorColumn", None, cursorline, None, 0, None),
+        ("Cursor", foreground, theme["cursor"], 0, 4, None),
+        ("lCursor", foreground, theme["cursor"], 0, 4, None),
+        ("MatchParen", bright_accent, selection, 14, 4, "bold"),
+        ("Visual", foreground, selection, 254, 4, None),
+        ("Search", foreground, theme["search"], 0, 4, "bold"),
+        ("IncSearch", foreground, theme["search_emphasis"], 0, 4, "bold"),
+        ("CurSearch", foreground, theme["search_emphasis"], 0, 4, "bold"),
+        ("StatusLine", foreground, statusline, 254, 4, "bold"),
+        ("StatusLineNC", muted, background, 8, 0, None),
+        ("TabLine", muted, statusline, 8, 4, None),
+        ("TabLineSel", foreground, theme["search_emphasis"], 7, 4, "bold"),
+        ("TabLineFill", muted, background, 8, 0, None),
+        ("VertSplit", muted, background, 8, 0, None),
+        ("WinSeparator", muted, background, 8, 0, None),
+        ("Pmenu", foreground, pumenu, 254, 4, None),
+        ("PmenuSel", foreground, selection, 7, 4, "bold"),
+        ("PmenuSbar", None, statusline, None, 4, None),
+        ("PmenuThumb", None, accent, None, 6, None),
+        ("Folded", muted, pumenu, 8, 4, None),
+        ("FoldColumn", muted, background, 8, 0, None),
+        ("SignColumn", foreground, background, 254, 0, None),
+        ("NonText", muted, background, 8, 0, None),
+        ("Whitespace", muted, background, 8, 0, None),
+        ("SpecialKey", secondary, background, 4, 0, None),
+        ("Error", theme["ansi_bright_red"], background, 9, 0, "bold,undercurl"),
+        ("ErrorMsg", theme["ansi_bright_red"], background, 9, 0, "bold"),
+        ("WarningMsg", theme["ansi_bright_yellow"], background, 11, 0, "bold"),
+        ("MoreMsg", accent, background, 6, 0, "bold"),
+        ("ModeMsg", secondary, background, 4, 0, "bold"),
+        ("DiffAdd", theme["ansi_bright_green"], background, 10, 0, None),
+        ("DiffChange", theme["ansi_bright_yellow"], background, 11, 0, None),
+        ("DiffDelete", theme["ansi_bright_red"], background, 9, 0, None),
+        ("DiffText", foreground, selection, 254, 4, "bold"),
+        ("DiagnosticError", theme["ansi_bright_red"], None, 9, None, None),
+        ("DiagnosticWarn", theme["ansi_bright_yellow"], None, 11, None, None),
+        ("DiagnosticInfo", secondary, None, 4, None, None),
+        ("DiagnosticHint", accent, None, 6, None, None),
+    ]
+    lines = [
+        '" Generated by worldwall-theme-watch; local edits are overwritten.',
+        "highlight clear",
+        'if exists("syntax_on")',
+        "  syntax reset",
+        "endif",
+        "set background=dark",
+        'let g:colors_name = "worldwall"',
+        "",
+    ]
+    for name, fg, bg, ctermfg, ctermbg, attributes in groups:
+        options = []
+        if fg is not None:
+            options.append(f"guifg={fg}")
+        if bg is not None:
+            options.append(f"guibg={bg}")
+        if ctermfg is not None:
+            options.append(f"ctermfg={ctermfg}")
+        if ctermbg is not None:
+            options.append(f"ctermbg={ctermbg}")
+        if attributes:
+            options.extend((f"gui={attributes}", f"cterm={attributes}"))
+        lines.append(f"highlight {name} " + " ".join(options))
+    return "\n".join(lines) + "\n"
+
+
+def atomic_write_many(files: dict[Path, str]) -> list[Path]:
+    """Prepare every file first, then atomically replace each destination."""
+    prepared: list[tuple[Path, Path]] = []
+    changed: list[Path] = []
+    try:
+        for destination, text in files.items():
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            encoded = text.encode("utf-8")
+            if destination.exists() and destination.read_bytes() == encoded:
+                continue
+            fd, temp_name = tempfile.mkstemp(prefix=f".{destination.name}.", suffix=".tmp", dir=destination.parent)
+            temp = Path(temp_name)
+            with os.fdopen(fd, "wb") as stream:
+                stream.write(encoded)
+                stream.flush()
+                os.fsync(stream.fileno())
+            os.chmod(temp, 0o644)
+            prepared.append((temp, destination))
+        for temp, destination in prepared:
+            os.replace(temp, destination)
+            changed.append(destination)
+        for parent in {path.parent for path in changed}:
+            fd = os.open(parent, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+            try:
+                os.fsync(fd)
+            finally:
+                os.close(fd)
+        return changed
+    finally:
+        for temp, _ in prepared:
+            temp.unlink(missing_ok=True)
+
+
+def safe_scene_id(value: object) -> str:
+    if not isinstance(value, str) or not value or any(c not in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_" for c in value):
+        raise ValueError("Worldwall returned an invalid scene identifier")
+    return value
+
+
+def library_root_for(config: dict) -> Path | None:
+    sidecar_setting = config.get("scene_pools_file")
+    if not sidecar_setting:
+        return None
+    sidecar = Path(str(sidecar_setting)).expanduser()
+    if not sidecar.is_absolute():
+        raise ValueError("Worldwall scene_pools_file must be an absolute path")
+    sidecar = sidecar.resolve(strict=True)
+    adjacent_catalog = sidecar.parent / "library.toml"
+    if adjacent_catalog.is_file():
+        return sidecar.parent.resolve(strict=True)
+    data_home = Path(os.environ.get("XDG_DATA_HOME", HOME / ".local/share"))
+    if not data_home.is_absolute():
+        data_home = HOME / ".local/share"
+    return (data_home / "worldwall/scene-library").resolve(strict=True)
+
+
+def resolve_scene_package(scene_id: str, config: dict) -> Path:
+    """Resolve a resident package from either configured registry or S12 library."""
+    registry_setting = config.get("registry_dir")
+    if registry_setting and str(registry_setting).lower() != "none":
+        registry = Path(str(registry_setting)).expanduser()
+        if not registry.is_absolute():
+            registry = (WW_CONFIG.parent / registry).resolve()
+        registry = registry.resolve(strict=True)
+        registry_doc = tomllib.loads((registry / "registry.toml").read_text(encoding="utf-8"))
+        if scene_id in registry_doc.get("scenes", []):
+            package = (registry / scene_id).resolve(strict=True)
+            if package.parent != registry or not package.is_dir():
+                raise ValueError("active scene package path is not a direct registry child")
+            return package
+
+    library = library_root_for(config)
+    if library is not None:
+        catalog = tomllib.loads((library / "library.toml").read_text(encoding="utf-8"))
+        entries = catalog.get("scene", [])
+        if not isinstance(entries, list):
+            raise ValueError("library catalog scene entries must be an array")
+        entry = next((row for row in entries if isinstance(row, dict) and row.get("id") == scene_id), None)
+        if entry is not None:
+            package_name = entry.get("package")
+            safe_name = (
+                isinstance(package_name, str)
+                and bool(package_name)
+                and package_name not in (".", "..")
+                and package_name[0].isascii()
+                and package_name[0].isalnum()
+                and all(char.isascii() and (char.isalnum() or char in "._-") for char in package_name)
+            )
+            if not safe_name:
+                raise ValueError(f"library catalog has an unsafe package path for {scene_id}")
+            package = (library / package_name).resolve(strict=True)
+            if package.parent != library or not package.is_dir():
+                raise ValueError("active library package path is not a direct catalog child")
+            return package
+    raise ValueError(f"active scene is not listed in configured registry or library: {scene_id}")
+
+
+def read_worldwall_state() -> tuple[dict, dict, Path, str]:
+    if not WW_CONFIG.is_file():
+        raise ValueError(f"Worldwall config is unavailable: {WW_CONFIG}")
+    config = tomllib.loads(WW_CONFIG.read_text(encoding="utf-8"))
+    status_result = subprocess.run([str(WWCTL), "status"], check=True, capture_output=True, text=True, timeout=3)
+    status = json.loads(status_result.stdout)
+    if status.get("ok") is not True:
+        raise ValueError("worldwallctl status returned an unsuccessful response")
+    scene_id = safe_scene_id(status.get("data", {}).get("scene"))
+    package = resolve_scene_package(scene_id, config)
+    scene_doc = tomllib.loads(contained_file(package, "scene.toml").read_text(encoding="utf-8"))
+    if scene_doc.get("id") != scene_id:
+        raise ValueError("scene manifest ID does not match Worldwall status")
+    return config, scene_doc, package, scene_id
+
+
+def compute_current_theme() -> tuple[str, dict[str, str], str]:
+    config, scene_doc, package, scene_id = read_worldwall_state()
+    palette, source = load_effective_palette(package, scene_doc, config)
+    counts, total = scene_histogram(package, scene_doc)
+    bar_height = waybar_top_height()
+    waybar_counts, waybar_total = waybar_area_histogram(
+        package, scene_doc, waybar_output_geometries(bar_height)
+    )
+    theme = build_theme(palette, counts, total, waybar_counts, waybar_total)
+    return scene_id, theme, source
+
+
+def reload_waybar() -> None:
+    try:
+        result = subprocess.run(["pgrep", "-u", str(os.getuid()), "-x", "waybar"], capture_output=True, text=True, timeout=2)
+        for line in result.stdout.splitlines():
+            try:
+                # Waybar defaults SIGUSR1 to visibility toggle and SIGUSR2 to reload.
+                os.kill(int(line), signal.SIGUSR2)
+            except (ValueError, ProcessLookupError, PermissionError):
+                continue
+    except (OSError, subprocess.TimeoutExpired):
+        pass
+
+
+def update_hyprland_border(theme: dict[str, str]) -> None:
+    if not os.environ.get("HYPRLAND_INSTANCE_SIGNATURE"):
+        return
+    accent = hex_rgb(theme["accent"])
+    surface = hex_rgb(theme["background"])
+    # Keep the frame in the scene's accent family but tone it down against the
+    # wallpaper and terminal text; this replaces the old cyan/green gradient.
+    border = quantize(mix(accent, surface, 0.40))
+    color = f"rgba({rgb_hex(border)[1:]}bb)"
+    try:
+        command = f'hl.config({{ ["general.col.active_border"] = "{color}" }})'
+        result = subprocess.run(
+            ["hyprctl", "eval", command],
+            capture_output=True,
+            text=True,
+            timeout=3,
+        )
+        if result.returncode != 0:
+            log(f"Hyprland border update failed: {result.stderr.strip() or result.stdout.strip()}")
+    except (OSError, subprocess.SubprocessError) as exc:
+        log(f"Hyprland border update failed: {exc}")
+
+
+def update_alacritty_runtime(theme: dict[str, str]) -> None:
+    binary = "alacritty"
+    runtime_sockets = sorted(RUNTIME_HOME.glob("Alacritty-*.sock"))
+    values = [
+        f"colors.primary.background={json.dumps(theme['background'])}",
+        f"colors.primary.foreground={json.dumps(theme['foreground'])}",
+        f"colors.cursor.text={json.dumps(theme['foreground'])}",
+        f"colors.cursor.cursor={json.dumps(theme['cursor'])}",
+        f"colors.selection.text={json.dumps(theme['foreground'])}",
+        f"colors.selection.background={json.dumps(theme['selection'])}",
+        f"colors.normal.black={json.dumps(theme['background'])}",
+        f"colors.normal.red={json.dumps(theme['ansi_red'])}",
+        f"colors.normal.green={json.dumps(theme['ansi_green'])}",
+        f"colors.normal.yellow={json.dumps(theme['ansi_yellow'])}",
+        f"colors.normal.blue={json.dumps(theme['secondary'])}",
+        f"colors.normal.magenta={json.dumps(theme['ansi_magenta'])}",
+        f"colors.normal.cyan={json.dumps(theme['accent'])}",
+        f"colors.normal.white={json.dumps(theme['ansi_white'])}",
+        f"colors.bright.black={json.dumps(theme['ansi_bright_black'])}",
+        f"colors.bright.red={json.dumps(theme['ansi_bright_red'])}",
+        f"colors.bright.green={json.dumps(theme['ansi_bright_green'])}",
+        f"colors.bright.yellow={json.dumps(theme['ansi_bright_yellow'])}",
+        f"colors.bright.blue={json.dumps(theme['bright_secondary'])}",
+        f"colors.bright.magenta={json.dumps(theme['ansi_bright_magenta'])}",
+        f"colors.bright.cyan={json.dumps(theme['bright_accent'])}",
+        f"colors.bright.white={json.dumps(theme['ansi_bright_white'])}",
+    ]
+    for socket_path in runtime_sockets:
+        try:
+            info = socket_path.stat()
+            if info.st_uid != os.getuid():
+                continue
+            subprocess.run(
+                [binary, "msg", "--socket", str(socket_path), "config", "-w", "-1", *values],
+                check=True, capture_output=True, text=True, timeout=3,
+            )
+        except (OSError, subprocess.SubprocessError) as exc:
+            log(f"Alacritty runtime update failed for {socket_path.name}: {exc}")
+
+
+def update_vim_runtime() -> None:
+    try:
+        servers = subprocess.run(["vim", "--serverlist"], capture_output=True, text=True, timeout=2)
+        if servers.returncode != 0:
+            return
+        for server in servers.stdout.split():
+            subprocess.run(
+                ["vim", "--servername", server, "--remote-expr", 'execute("colorscheme worldwall")'],
+                check=True,
+                capture_output=True,
+                text=True,
+                timeout=3,
+            )
+    except (OSError, subprocess.SubprocessError) as exc:
+        log(f"Vim runtime update failed: {exc}")
+
+
+def generated_theme_files(css_text: str, alacritty_text: str, vim_text: str) -> dict[Path, str]:
+    files = {WAYBAR_THEME: css_text}
+    if not TERMINAL_SYNC_DISABLED_FILE.exists():
+        files[ALACRITTY_THEME] = alacritty_text
+        files[VIM_THEME] = vim_text
+    return files
+
+
+def apply_once(
+    dry_run: bool = False,
+    no_reload: bool = False,
+    force_reload: bool = False,
+    quiet: bool = False,
+    defer_waybar_reload: bool = False,
+) -> tuple[str, dict[str, str], str, list[Path]]:
+    scene_id, theme, source = compute_current_theme()
+    css_text = render_waybar(theme)
+    alacritty_text = render_alacritty(theme)
+    vim_text = render_vim(theme)
+    if not quiet:
+        print(json.dumps({"scene": scene_id, "palette_source": source, "theme": theme}, indent=2))
+    changed: list[Path] = []
+    if not dry_run:
+        terminal_sync_enabled = not TERMINAL_SYNC_DISABLED_FILE.exists()
+        changed = atomic_write_many(generated_theme_files(css_text, alacritty_text, vim_text))
+        if not no_reload:
+            if (force_reload or WAYBAR_THEME in changed) and not defer_waybar_reload:
+                reload_waybar()
+            if terminal_sync_enabled:
+                if force_reload or ALACRITTY_THEME in changed:
+                    update_alacritty_runtime(theme)
+                if force_reload or VIM_THEME in changed:
+                    update_vim_runtime()
+            update_hyprland_border(theme)
+        mode = "enabled" if terminal_sync_enabled else "paused"
+        log(f"scene={scene_id} source={source} terminal_sync={mode} changed={','.join(str(p) for p in changed) or 'none'}")
+    return scene_id, theme, source, changed
+
+
+stop_requested = False
+
+
+def request_stop(_signum, _frame) -> None:
+    global stop_requested
+    stop_requested = True
+
+
+def process_start_time(pid: int) -> str | None:
+    try:
+        fields = Path(f"/proc/{pid}/stat").read_text(encoding="ascii").rsplit(")", 1)[1].split()
+        return fields[19]
+    except (OSError, IndexError):
+        return None
+
+
+def run_watcher(supervisor_pid: int | None = None) -> int:
+    supervisor_start = process_start_time(supervisor_pid) if supervisor_pid is not None else None
+    if supervisor_pid is not None and supervisor_start is None:
+        log(f"session supervisor PID {supervisor_pid} is unavailable; watcher not started")
+        return 1
+    STATE_DIR.mkdir(parents=True, exist_ok=True, mode=0o700)
+    os.chmod(STATE_DIR, 0o700)
+    lock = LOCK_FILE.open("a+")
+    try:
+        fcntl.flock(lock.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        return 0
+    PID_FILE.write_text(f"{os.getpid()}\n", encoding="ascii")
+    os.chmod(PID_FILE, 0o600)
+    signal.signal(signal.SIGTERM, request_stop)
+    signal.signal(signal.SIGINT, request_stop)
+    last_scene = None
+    last_sample = 0.0
+    waybar_reload_debouncer = WaybarReloadDebouncer(WAYBAR_RELOAD_DEBOUNCE_SECONDS)
+    try:
+        while not stop_requested:
+            if (
+                supervisor_pid is not None
+                and process_start_time(supervisor_pid) != supervisor_start
+            ):
+                log(f"session supervisor PID {supervisor_pid} exited; stopping watcher")
+                break
+            try:
+                # Status is cheap; re-read the palette only on scene changes or
+                # at a deliberately coarse cadence for civil-time transitions.
+                _config, _doc, _package, scene_id = read_worldwall_state()
+                now = time.monotonic()
+                if scene_id != last_scene or now - last_sample >= TIME_RESAMPLE_SECONDS:
+                    # read_worldwall_state already confirmed a healthy active scene.
+                    applied_scene, _theme, _source, changed = apply_once(
+                        quiet=True, defer_waybar_reload=True
+                    )
+                    last_scene = applied_scene
+                    last_sample = now
+                    if WAYBAR_THEME in changed:
+                        waybar_reload_debouncer.palette_changed(now)
+            except Exception as exc:
+                log(f"sync deferred: {type(exc).__name__}: {exc}")
+                for _ in range(30):
+                    if stop_requested:
+                        break
+                    time.sleep(1)
+                continue
+            if waybar_reload_debouncer.take_if_due(time.monotonic()):
+                reload_waybar()
+                log("Waybar reload dispatched after palette changes settled")
+            for _ in range(POLL_SECONDS):
+                if stop_requested:
+                    break
+                time.sleep(1)
+    finally:
+        try:
+            if PID_FILE.read_text(encoding="ascii").strip() == str(os.getpid()):
+                PID_FILE.unlink(missing_ok=True)
+        except OSError:
+            pass
+        lock.close()
+    return 0
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--once", action="store_true", help="apply one palette sample and exit")
+    parser.add_argument("--dry-run", action="store_true", help="print the current derived theme without writing")
+    parser.add_argument("--no-reload", action="store_true", help="write files without notifying running applications")
+    parser.add_argument("--force-reload", action="store_true", help="notify running applications even when generated files already match")
+    parser.add_argument(
+        "--supervisor-pid",
+        type=int,
+        help="stop the watcher when this session process exits (for session-bound manual launches)",
+    )
+    args = parser.parse_args()
+    if args.dry_run:
+        apply_once(dry_run=True)
+        return 0
+    if args.once:
+        STATE_DIR.mkdir(parents=True, exist_ok=True, mode=0o700)
+        lock = LOCK_FILE.open("a+")
+        try:
+            fcntl.flock(lock.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            return 0
+        try:
+            apply_once(no_reload=args.no_reload, force_reload=args.force_reload)
+        finally:
+            lock.close()
+        return 0
+    return run_watcher(args.supervisor_pid)
+
+
+if __name__ == "__main__":
+    try:
+        raise SystemExit(main())
+    except (OSError, ValueError, KeyError, tomllib.TOMLDecodeError, subprocess.SubprocessError) as exc:
+        log(f"fatal: {type(exc).__name__}: {exc}")
+        print(f"worldwall-theme-watch: {exc}", file=sys.stderr)
+        raise SystemExit(1)

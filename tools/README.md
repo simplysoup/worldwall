@@ -1,8 +1,11 @@
-# Documentation checks
+# Developer and session tools
 
-These are developer tools, not the Worldwall application. They require Python
-3.10+ (3.11+ for `scene_pool_library.py`, which uses the standard-library
-`tomllib` parser) and only the standard library. Run from the project root:
+These are developer tools and optional session helpers, not the Worldwall
+application. Most require Python 3.10+ and only the standard library; tools
+with additional dependencies document them below. Run project tools from the
+repository root:
+
+## Documentation checks
 
 ```sh
 python3 tools/check_docs.py
@@ -12,6 +15,29 @@ python3 -m unittest discover -s tools/tests -v
 The checker exits `0` on success and `1` on findings. `--root PATH` checks a different project copy; the default root is relative to the script, not the caller's working directory. It makes no network requests or file changes.
 
 The S02 nested lifecycle harness is `run_nested_s01.sh`. On a Wayland host with Hyprland, it compiles the test-only `nested_wayland_connect.c` bridge with the available C compiler so the child compositor can publish a distinct socket while using the outer compositor as its backend. The harness rejects outer-socket reuse and waits for a GPU presentation before output-removal or disconnect teardown.
+
+## Optional user-session theme watcher
+
+`worldwall-theme-watch` is an opt-in companion script, not part of the
+Worldwall daemon or its scene-selection policy. It reads the active scene via
+`worldwallctl` and derives local Waybar, Alacritty, and Vim theme files; it may
+also update a running Waybar, Alacritty/Vim instances, and the Hyprland active
+border. It makes no weather requests. Running `--dry-run` computes and prints
+one theme without writing files; installing it into session startup is a
+separate operator choice.
+
+The continuous watcher polls every 8 seconds. It writes a changed Waybar theme
+immediately but coalesces Waybar reload signals until 16 seconds (two polling
+intervals) have passed without another Waybar palette change. Each new change
+restarts that quiet period. `--once` retains immediate notification behavior.
+The debounce state machine has deterministic unit tests in
+`tests/test_waybar_reload_debounce.py`.
+
+The watcher requires Python 3.11+ (for `tomllib`) and Pillow. Its contrast
+helper source can be supplied with `WORLDWALL_APCA_HELPER_DIR`; by default it
+looks under the user's `~/.local/share/worldwall-theme-sync/apca-helper` and
+builds offline. The script does not edit Hyprland startup files; session
+integration is operator-managed, and helper sources are not bundled.
 
 ## CanvasCycle local capture importer
 
