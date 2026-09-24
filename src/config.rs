@@ -17,11 +17,12 @@ use chrono_tz::Tz;
 
 use crate::{
     environment::{Location, UtcOffsetSchedule},
-    scene_registry::SceneRegistry,
+    scene_pools::{LibraryCatalog, PoolSource, ScenePools},
+    scene_registry::{SceneManifest, SceneRegistry},
     scheduler::Fps,
 };
 
-pub const CONFIG_SCHEMA_VERSION: u32 = 4;
+pub const CONFIG_SCHEMA_VERSION: u32 = 5;
 const MIN_CONFIG_SCHEMA_VERSION: u32 = 1;
 const MAX_CONFIG_BYTES: usize = 64 * 1024;
 pub const DEFAULT_ANIMATION_SPEED_MULTIPLIER: f32 = 0.5;
@@ -69,6 +70,9 @@ pub enum WeatherProvider {
 pub struct PreparedAppConfig {
     pub config: AppConfig,
     pub registry: Option<SceneRegistry>,
+    /// Validated schema-v5 pool/rule state, present only when
+    /// `scene_pools_file` is configured.
+    pub pools: Option<ScenePools>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -92,6 +96,9 @@ pub struct AppConfig {
     /// location values. A changed file cannot reuse a prior weather snapshot.
     pub cache_scope: Option<u128>,
     pub source_path: Option<PathBuf>,
+    /// Optional schema-v5 reference to the separately versioned pool/rules
+    /// sidecar. Absence preserves legacy registry selection behavior.
+    pub scene_pools_file: Option<PathBuf>,
 }
 
 impl AppConfig {
@@ -140,6 +147,7 @@ impl AppConfig {
             weather_location,
             cache_scope: None,
             source_path: None,
+            scene_pools_file: None,
         };
         config.validate()?;
         Ok(config)
@@ -149,13 +157,117 @@ impl AppConfig {
         Ok(Self::load_prepared(path)?.config)
     }
 
-    /// Parse a complete config and validate its registry on the caller's worker
-    /// thread. The returned registry is the exact validated candidate to commit;
-    /// callers must not reload it on the Wayland owner.
+    /// Parse a complete config and validate its registry, sidecar, and pool
+    /// packages on the caller's worker thread. The returned registry/pool pair
+    /// is the exact validated candidate to commit atomically; callers must not
+    /// reload it on the Wayland owner.
     pub fn load_prepared(path: impl AsRef<Path>) -> Result<PreparedAppConfig, ConfigError> {
         let config = Self::parse_file(path.as_ref())?;
-        let registry = config.load_validated_registry()?;
-        Ok(PreparedAppConfig { config, registry })
+        let (registry, pools) = config.prepare_sources()?;
+        Ok(PreparedAppConfig {
+            config,
+            registry,
+            pools,
+        })
+    }
+
+    /// Validate the registry, the optional sidecar, and every referenced pool
+    /// package as one candidate, and build the selector's complete scene set.
+    pub fn prepare_sources(
+        &self,
+    ) -> Result<(Option<SceneRegistry>, Option<ScenePools>), ConfigError> {
+        let mut registry = self.load_validated_registry()?;
+        let Some(rules_path) = self.scene_pools_file.as_ref() else {
+            return Ok((registry, None));
+        };
+        let pools = ScenePools::load(rules_path).map_err(|pools_error| {
+            ConfigError(format!("pool rules validation failed: {pools_error}"))
+        })?;
+
+        // Registry-sourced pools must name packages of the configured
+        // registry; library-sourced pools resolve through the local catalog.
+        for pool in pools.pools() {
+            for scene_id in &pool.scene_ids {
+                match pool.source {
+                    PoolSource::Registry => {
+                        if registry
+                            .as_ref()
+                            .and_then(|registry| registry.get(scene_id))
+                            .is_none()
+                        {
+                            return Err(error(format!(
+                                "pool {scene_id:?} is not a package of the configured registry"
+                            )));
+                        }
+                    }
+                    PoolSource::Library => {}
+                }
+            }
+        }
+        let library = Self::library_root_for(rules_path);
+        let mut library_manifests = Vec::new();
+        if pools.pool_scene_ids(PoolSource::Library).next().is_some() {
+            let catalog = LibraryCatalog::load(&library).map_err(|catalog_error| {
+                ConfigError(format!("pool library validation failed: {catalog_error}"))
+            })?;
+            for scene_id in pools.pool_scene_ids(PoolSource::Library) {
+                let Some(entry) = catalog.get(scene_id) else {
+                    return Err(error(format!(
+                        "pool scene {scene_id:?} is not in the library catalog"
+                    )));
+                };
+                let (manifest, _) = SceneManifest::load(entry.package.join("scene.toml")).map_err(
+                    |registry_error| {
+                        ConfigError(format!(
+                            "pool package {scene_id:?} validation failed: {registry_error}"
+                        ))
+                    },
+                )?;
+                if manifest.id != entry.id {
+                    return Err(error(format!(
+                        "pool package {scene_id:?} declares a different scene ID"
+                    )));
+                }
+                library_manifests.push(manifest);
+            }
+        }
+        if !library_manifests.is_empty() {
+            let registry = registry.get_or_insert_with(SceneRegistry::empty);
+            // In adaptive mode library entries stay manual-only: they must
+            // never become CR-0006 families and registry validation is
+            // unchanged. Non-adaptive pool mode selects from the union of
+            // pool sources, narrowed by the shared eligibility gate.
+            registry
+                .add_pool_packages(library_manifests, !self.adaptive_scenes)
+                .map_err(|registry_error| {
+                    ConfigError(format!("pool package conflict: {registry_error}"))
+                })?;
+        }
+        // A configured sidecar owns selection semantics even when all pools
+        // are empty or no registry/library package is available. Keep an
+        // empty source so startup fails closed instead of taking the legacy
+        // synthetic-scene path outside the eligibility filter.
+        let registry = Some(registry.unwrap_or_else(SceneRegistry::empty));
+        Ok((registry, Some(pools)))
+    }
+
+    /// Library-sourced pools resolve through the library catalog that sits
+    /// next to the configured sidecar, falling back to the curator's XDG
+    /// default library root. No implicit package discovery happens here.
+    fn library_root_for(rules_path: &Path) -> PathBuf {
+        if let Some(parent) = rules_path.parent()
+            && parent.join("library.toml").is_file()
+        {
+            return parent.to_path_buf();
+        }
+        let home = std::env::var_os("HOME").map(PathBuf::from);
+        let data_home = std::env::var_os("XDG_DATA_HOME")
+            .map(PathBuf::from)
+            .filter(|path| path.is_absolute())
+            .or_else(|| home.as_ref().map(|home| home.join(".local/share")));
+        data_home
+            .unwrap_or_else(|| PathBuf::from(".local/share"))
+            .join("worldwall/scene-library")
     }
 
     fn parse_file(path: &Path) -> Result<Self, ConfigError> {
@@ -197,6 +309,7 @@ impl AppConfig {
                 "fps",
                 "animation_speed_multiplier",
                 "registry_dir",
+                "scene_pools_file",
                 "location",
                 "weather",
             ],
@@ -236,6 +349,20 @@ impl AppConfig {
         };
         let registry = required_string(table, "registry_dir", "config")?;
         let registry_dir = (registry != "none").then(|| PathBuf::from(registry));
+        let scene_pools_file = match table.get("scene_pools_file") {
+            None => None,
+            Some(_) if schema_version < 5 => {
+                return Err(error("config scene_pools_file requires schema_version 5"));
+            }
+            Some(_) => {
+                let path = required_string(table, "scene_pools_file", "config")?;
+                let path = PathBuf::from(path);
+                if !path.is_absolute() {
+                    return Err(error("config scene_pools_file must be an absolute path"));
+                }
+                Some(path)
+            }
+        };
 
         let (location, timezone, weather_provider, adaptive_scenes, weather_location) =
             if schema_version == 1 {
@@ -339,6 +466,7 @@ impl AppConfig {
             weather_location,
             cache_scope: cache_scope_from_metadata(&metadata),
             source_path: Some(path.to_path_buf()),
+            scene_pools_file,
         };
         config.validate_fields()?;
         Ok(config)
@@ -545,6 +673,216 @@ mod tests {
                 .unwrap()
                 .as_nanos()
         ))
+    }
+
+    // ------------------------------------------------------------------
+    // S12-AC4: optional schema-v5 sidecar reference, one validated candidate.
+
+    fn write_png(width: u32, height: u32, color: png::ColorType, bytes: &[u8]) -> Vec<u8> {
+        use png::BitDepth;
+        let mut encoded = Vec::new();
+        {
+            let mut encoder = png::Encoder::new(&mut encoded, width, height);
+            encoder.set_color(color);
+            encoder.set_depth(BitDepth::Eight);
+            if color == png::ColorType::Indexed {
+                encoder.set_palette(vec![0, 0, 0, 255, 255, 255]);
+            }
+            let mut writer = encoder.write_header().unwrap();
+            writer.write_image_data(bytes).unwrap();
+        }
+        encoded
+    }
+
+    fn write_package(directory: &Path, id: &str) {
+        fs::create_dir_all(directory).unwrap();
+        fs::write(
+            directory.join("scene.png"),
+            write_png(2, 1, png::ColorType::Indexed, &[0, 1]),
+        )
+        .unwrap();
+        let mut palette = vec![9u8; 256 * 4];
+        for entry in palette.chunks_mut(4) {
+            entry[3] = 255;
+        }
+        fs::write(
+            directory.join("palette.png"),
+            write_png(256, 1, png::ColorType::Rgba, &palette),
+        )
+        .unwrap();
+        fs::write(
+            directory.join("scene.toml"),
+            format!(
+                "schema_version = 1\nid = \"{id}\"\nimage = \"scene.png\"\npalette = \"palette.png\"\n"
+            ),
+        )
+        .unwrap();
+    }
+
+    fn write_library(root: &Path) {
+        let digest = "b".repeat(64);
+        fs::create_dir_all(root).unwrap();
+        write_package(&root.join("canvascycle-demo"), "canvascycle-demo");
+        fs::write(
+            root.join("library.toml"),
+            format!(
+                "schema_version = 1\n\n[[scene]]\nid = \"canvascycle-demo\"\npackage = \"canvascycle-demo\"\nsource_collection = \"canvascycle\"\nworld = \"unknown\"\nappearance = \"unknown\"\nimage = \"scene.png\"\nimage_sha256 = \"{digest}\"\npalette = \"palette.png\"\npalette_sha256 = \"{digest}\"\nsource_format = \"canvascycle-legacy-object-literal-v1\"\nsource_sha256 = \"{digest}\"\nsource_url = \"https://example.invalid/capture\"\nsource_page = \"https://example.invalid/\"\nsource_title = \"Demo\"\nlicense_state = \"unreviewed\"\n"
+            ),
+        )
+        .unwrap();
+    }
+
+    fn write_registry(root: &Path) {
+        fs::create_dir_all(root).unwrap();
+        write_package(&root.join("village"), "village");
+        fs::write(
+            root.join("registry.toml"),
+            "schema_version = 1\nscenes = [\"village\"]\nfallback = \"village\"\n",
+        )
+        .unwrap();
+    }
+
+    fn write_pools(path: &Path, document: &str) {
+        fs::write(path, document).unwrap();
+    }
+
+    const LIBRARY_POOL: &str = "schema_version = 1\n\n[[pool]]\nid = \"canvascycle\"\nsource = \"library\"\nenabled = true\nscene_ids = [\"canvascycle-demo\"]\n";
+
+    #[test]
+    fn schema_v5_sidecar_reference_is_opt_in_absolute_and_version_gated() {
+        let root = path("schema5");
+        fs::create_dir_all(&root).unwrap();
+        write_pools(&root.join("scene-pools.toml"), LIBRARY_POOL);
+
+        // Older schemas reject the key; relative references are refused.
+        fs::write(
+            root.join("v4.toml"),
+            "schema_version = 4\nfps = 30\nregistry_dir = \"none\"\nscene_pools_file = \"scene-pools.toml\"\n",
+        )
+        .unwrap();
+        assert!(
+            AppConfig::load(root.join("v4.toml"))
+                .unwrap_err()
+                .to_string()
+                .contains("requires schema_version 5")
+        );
+        fs::write(
+            root.join("relative.toml"),
+            "schema_version = 5\nfps = 30\nregistry_dir = \"none\"\nscene_pools_file = \"scene-pools.toml\"\n",
+        )
+        .unwrap();
+        assert!(
+            AppConfig::load(root.join("relative.toml"))
+                .unwrap_err()
+                .to_string()
+                .contains("absolute path")
+        );
+
+        // Absence keeps schema-v5 readable with legacy behavior.
+        fs::write(
+            root.join("plain.toml"),
+            "schema_version = 5\nfps = 30\nregistry_dir = \"none\"\n",
+        )
+        .unwrap();
+        let prepared = AppConfig::load_prepared(root.join("plain.toml")).unwrap();
+        assert!(prepared.pools.is_none(), "no sidecar means legacy behavior");
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn pool_candidate_validates_sidecar_packages_and_rules_as_one_unit() {
+        let root = path("pools5");
+        fs::create_dir_all(&root).unwrap();
+        write_library(&root);
+        write_registry(&root.join("registry"));
+        let sidecar = root.join("scene-pools.toml");
+        write_pools(&sidecar, LIBRARY_POOL);
+        fs::write(
+            root.join("config.toml"),
+            format!(
+                "schema_version = 5\nfps = 30\nregistry_dir = \"{}\"\nscene_pools_file = \"{}\"\n",
+                root.join("registry").display(),
+                sidecar.display()
+            ),
+        )
+        .unwrap();
+
+        // Library pool packages join the automatic candidate set and are
+        // fully decoded before the candidate may commit.
+        let prepared = AppConfig::load_prepared(root.join("config.toml")).unwrap();
+        let registry = prepared.registry.unwrap();
+        assert!(registry.get("canvascycle-demo").is_some());
+        assert!(registry.get("village").is_some());
+        assert!(prepared.pools.is_some());
+
+        // A registry pool naming an unknown registry package fails the whole
+        // candidate instead of committing partial state.
+        write_pools(
+            &sidecar,
+            "schema_version = 1\n\n[[pool]]\nid = \"registry\"\nsource = \"registry\"\nenabled = true\nscene_ids = [\"missing-scene\"]\n",
+        );
+        assert!(
+            AppConfig::load_prepared(root.join("config.toml"))
+                .unwrap_err()
+                .to_string()
+                .contains("not a package of the configured registry")
+        );
+
+        // Library pools must resolve through the adjacent catalog.
+        write_pools(
+            &sidecar,
+            "schema_version = 1\n\n[[pool]]\nid = \"canvascycle\"\nsource = \"library\"\nenabled = true\nscene_ids = [\"missing-library-scene\"]\n",
+        );
+        assert!(
+            AppConfig::load_prepared(root.join("config.toml"))
+                .unwrap_err()
+                .to_string()
+                .contains("not in the library catalog")
+        );
+
+        // A malformed sidecar keeps the previous live config (the caller
+        // applies only validated candidates).
+        write_pools(&sidecar, "schema_version = 99\n");
+        assert!(AppConfig::load_prepared(root.join("config.toml")).is_err());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn empty_pool_sidecar_without_registry_fails_closed_instead_of_defaulting_scene() {
+        let root = path("empty-pools-no-registry");
+        fs::create_dir_all(&root).unwrap();
+        let sidecar = root.join("scene-pools.toml");
+        write_pools(
+            &sidecar,
+            "schema_version = 1\n\n[[pool]]\nid = \"empty\"\nsource = \"library\"\nenabled = true\nscene_ids = []\n",
+        );
+        fs::write(
+            root.join("config.toml"),
+            format!(
+                "schema_version = 5\nfps = 30\nregistry_dir = \"none\"\nscene_pools_file = \"{}\"\n",
+                sidecar.display()
+            ),
+        )
+        .unwrap();
+
+        let prepared = AppConfig::load_prepared(root.join("config.toml")).unwrap();
+        let registry = prepared.registry.expect(
+            "pool mode must materialize an empty registry rather than permit the synthetic scene",
+        );
+        assert_eq!(registry.len(), 0);
+        let mut selector = crate::scene_registry::SelectionController::new(registry);
+        selector.set_pools(prepared.pools);
+        assert!(matches!(
+            selector.request(
+                crate::scene_registry::EnvironmentSnapshot::unknown(),
+                None,
+                0,
+                crate::scene_registry::SelectionTrigger::Startup,
+            ),
+            Err(crate::scene_registry::SelectionResult::NoScene(reason))
+                if reason == "no eligible scene"
+        ));
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

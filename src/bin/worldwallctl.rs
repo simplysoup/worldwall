@@ -12,6 +12,10 @@ mod ipc;
 #[allow(dead_code)]
 #[path = "../scene.rs"]
 mod scene;
+#[path = "../scene_pools.rs"]
+mod scene_pools;
+#[path = "../scene_registry.rs"]
+mod scene_registry;
 
 use std::{
     collections::HashSet,
@@ -70,27 +74,74 @@ fn run() -> Result<(), Box<dyn Error>> {
 }
 
 fn list_scenes(socket: Option<&Path>) -> Result<(), Box<dyn Error>> {
-    let registry = configured_registry_dir()?;
-    let scenes = read_scene_ids(&registry)?;
     let active = match socket {
         Some(path) => active_scene_at(path),
         None => ipc::socket_path_from_environment()
             .ok()
             .and_then(|path| active_scene_at(&path)),
     };
-    println!("Registered scenes in {}:", registry.display());
-    if active.is_none() {
-        println!("  (Worldwall is not reachable; no active scene marked)");
+    let mut listed = false;
+
+    match configured_registry_dir()
+        .and_then(|registry| Ok((registry.clone(), read_scene_ids(&registry)?)))
+    {
+        Ok((registry, scenes)) => {
+            println!("Registry scenes in {}:", registry.display());
+            for scene in scenes {
+                let marker = if active.as_deref() == Some(scene.as_str()) {
+                    "* "
+                } else {
+                    "  "
+                };
+                println!("{marker}{scene}");
+            }
+            listed = true;
+        }
+        Err(error) => println!("Registry scenes unavailable: {error}"),
     }
-    for scene in scenes {
-        let marker = if active.as_deref() == Some(scene.as_str()) {
-            "* "
-        } else {
-            "  "
-        };
-        println!("{marker}{scene}");
+
+    match default_library_catalog() {
+        Ok(catalog) => {
+            println!("Library scenes in {}:", catalog.root().display());
+            for entry in catalog.scenes() {
+                let marker = if active.as_deref() == Some(entry.id.as_str()) {
+                    "* "
+                } else {
+                    "  "
+                };
+                let name = entry
+                    .display_name
+                    .as_deref()
+                    .unwrap_or(entry.title.as_str());
+                println!("{marker}{}  {}", entry.id, name);
+            }
+            listed = true;
+        }
+        Err(error) => println!("Library scenes unavailable: {error}"),
+    }
+
+    if !listed {
+        return Err("no registry or library scenes are available".into());
+    }
+    if active.is_none() {
+        println!("(Worldwall is not reachable; no active scene marked)");
     }
     Ok(())
+}
+
+/// The curator's default library root (XDG data home with the documented
+/// fallback); `worldwallctl scenes` lists the same catalog the curator edits.
+fn default_library_catalog() -> Result<scene_pools::LibraryCatalog, Box<dyn Error>> {
+    let home = env::var_os("HOME")
+        .map(PathBuf::from)
+        .ok_or("HOME is not set")?;
+    let data_home = env::var_os("XDG_DATA_HOME")
+        .map(PathBuf::from)
+        .filter(|path| path.is_absolute())
+        .unwrap_or_else(|| home.join(".local/share"));
+    Ok(scene_pools::LibraryCatalog::load(
+        &data_home.join("worldwall/scene-library"),
+    )?)
 }
 
 fn configured_registry_dir() -> Result<PathBuf, Box<dyn Error>> {

@@ -1,23 +1,38 @@
-//! Read-only local scene catalog browser for the S12 AC3 implementation slice.
+//! Local scene-pool curator for the S12 AC3/AC6/AC7 implementation slices.
 //!
-//! The curator serves only validated catalog metadata and decoded indexed
-//! scene/palette bytes on an ephemeral loopback listener. It launches an
-//! isolated Firefox profile and never connects to Worldwall IPC.
+//! The curator serves validated catalog metadata, decoded indexed scene and
+//! palette bytes, authored animation metadata, and time-of-day atlases on an
+//! ephemeral token-scoped loopback listener. It edits only its own pool/rules
+//! sidecar (atomically, same-user permissions) and can request an explicit
+//! `reload-config` from a running Worldwall. It never starts, stops, or
+//! terminates the wallpaper process and never contacts the network.
 
-use crate::scene;
+use crate::{
+    animation::Animation,
+    environment::{TimeOfDay, Weather},
+    ipc::{self, Command},
+    scene,
+    scene_pools::{
+        self, EligibilityReason, LibraryCatalog, PoolEntry, PoolEnvironment, PoolSource,
+        ScenePools, SceneRule,
+    },
+    scene_registry,
+};
 use std::{
-    collections::{HashMap, HashSet},
+    collections::{BTreeSet, HashMap},
     env,
     error::Error,
     ffi::OsStr,
-    fs::{self, File, OpenOptions},
+    fs::{self, OpenOptions},
     io::{self, BufRead, BufReader, Read, Write},
-    net::{SocketAddr, TcpListener, TcpStream},
-    os::unix::fs::{DirBuilderExt, OpenOptionsExt, PermissionsExt},
-    path::{Component, Path, PathBuf},
-    process::{Child, Command, ExitStatus},
+    net::{TcpListener, TcpStream},
+    os::unix::{
+        fs::{DirBuilderExt, OpenOptionsExt, PermissionsExt},
+        net::UnixStream,
+    },
+    path::{Path, PathBuf},
     sync::{
-        Arc,
+        Arc, Mutex,
         atomic::{AtomicBool, Ordering},
     },
     thread,
@@ -26,41 +41,10 @@ use std::{
 
 use serde_json::{Value, json};
 
-const MAX_CATALOG_BYTES: usize = 16 * 1024 * 1024;
-const MAX_MANIFEST_BYTES: usize = 16 * 1024 * 1024;
-const MAX_ASSET_BYTES: usize = 16 * 1024 * 1024;
-const MAX_SCENES: usize = 256;
 const MAX_HTTP_HEADER_BYTES: usize = 16 * 1024;
-const REQUIRED_CATALOG_KEYS: &[&str] = &[
-    "id",
-    "package",
-    "source_collection",
-    "world",
-    "appearance",
-    "image",
-    "image_sha256",
-    "palette",
-    "palette_sha256",
-    "source_format",
-    "source_sha256",
-    "source_url",
-    "source_page",
-    "source_title",
-    "license_state",
-];
-const OPTIONAL_CATALOG_KEYS: &[&str] = &[
-    "animation",
-    "animation_sha256",
-    "time_of_day",
-    "time_of_day_sha256",
-    "time_of_day_atlas",
-    "time_of_day_atlas_sha256",
-    "source_cycles",
-    "source_cycles_sha256",
-    "cycle_semantics",
-    "source_filename",
-    "license_id",
-];
+const MAX_REQUEST_BODY_BYTES: usize = 256 * 1024;
+const MAX_PREVIEW_BYTES: usize = scene_pools::MAX_ASSET_BYTES;
+const MAX_PREVIEW_PIXELS: u64 = 16_777_216;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct CuratorOptions {
@@ -69,61 +53,111 @@ pub(super) struct CuratorOptions {
     pub rules_optional: bool,
 }
 
+#[derive(Debug)]
+struct EditorState {
+    pools: Option<ScenePools>,
+    rules_path: PathBuf,
+    last_save: Option<String>,
+}
+
+/// One browsable scene package from either configured source: the library
+/// catalog or the configured Worldwall registry (pool-sourced scenes).
 #[derive(Debug, Clone)]
-struct SceneEntry {
+struct PreviewScene {
     id: String,
     title: String,
+    display_name: Option<String>,
+    source: &'static str,
     source_collection: String,
     world: String,
     appearance: String,
     license_state: String,
     cycle_semantics: Option<String>,
-    package: PathBuf,
-    image: String,
-    palette: String,
-    animation: bool,
+    source_cycles: bool,
+    image: PathBuf,
+    palette: PathBuf,
+    animation: Option<PathBuf>,
+    time_of_day: Option<PathBuf>,
 }
 
-#[derive(Debug)]
-struct Catalog {
-    scenes: Vec<SceneEntry>,
-    by_id: HashMap<String, usize>,
-}
+impl PreviewScene {
+    fn from_catalog(entry: &scene_pools::CatalogScene) -> Self {
+        Self {
+            id: entry.id.clone(),
+            title: entry.title.clone(),
+            display_name: entry.display_name.clone(),
+            source: "library",
+            source_collection: entry.source_collection.clone(),
+            world: entry.world.clone(),
+            appearance: entry.appearance.clone(),
+            license_state: entry.license_state.clone(),
+            cycle_semantics: entry.cycle_semantics.clone(),
+            source_cycles: entry.source_cycles.is_some(),
+            image: entry.package.join(&entry.image),
+            palette: entry.package.join(&entry.palette),
+            animation: entry
+                .animation
+                .as_ref()
+                .map(|name| entry.package.join(name)),
+            time_of_day: entry
+                .time_of_day
+                .as_ref()
+                .map(|name| entry.package.join(name)),
+        }
+    }
 
-#[derive(Debug, Clone)]
-struct PoolSummary {
-    id: String,
-    source: String,
-    enabled: bool,
-    scene_count: usize,
-}
-
-#[derive(Debug, Clone)]
-struct RulesSummary {
-    path: PathBuf,
-    pools: Vec<PoolSummary>,
-    rule_count: usize,
+    fn from_manifest(manifest: &scene_registry::SceneManifest) -> Self {
+        Self {
+            id: manifest.id.clone(),
+            title: manifest.id.clone(),
+            display_name: None,
+            source: "registry",
+            source_collection: "registry".to_owned(),
+            world: manifest
+                .family_id
+                .clone()
+                .unwrap_or_else(|| "unknown".to_owned()),
+            appearance: manifest.weather.first().map_or_else(
+                || "unknown".to_owned(),
+                |weather| scene_pools::weather_name(*weather).to_owned(),
+            ),
+            // Registry packages carry no catalog license record; do not
+            // invent one.
+            license_state: "not-recorded".to_owned(),
+            cycle_semantics: None,
+            source_cycles: false,
+            image: manifest.image_path.clone(),
+            palette: manifest.palette_path.clone(),
+            animation: manifest.animation_path.clone(),
+            time_of_day: manifest.time_of_day_path.clone(),
+        }
+    }
 }
 
 #[derive(Debug)]
 struct AppState {
-    catalog: Catalog,
-    rules: Option<RulesSummary>,
+    scenes: Vec<PreviewScene>,
+    by_id: HashMap<String, usize>,
+    library_root: PathBuf,
+    display_names: Mutex<HashMap<String, String>>,
+    registry_note: String,
+    editor: Mutex<EditorState>,
     token: String,
 }
 
-struct TempProfile(PathBuf);
-
-impl Drop for TempProfile {
-    fn drop(&mut self) {
-        let _ = fs::remove_dir_all(&self.0);
+impl AppState {
+    fn scene(&self, id: &str) -> Option<&PreviewScene> {
+        self.by_id.get(id).map(|index| &self.scenes[*index])
     }
-}
 
-struct HttpResponse {
-    status: &'static str,
-    content_type: &'static str,
-    body: Vec<u8>,
+    fn display_name(&self, scene: &PreviewScene) -> Option<String> {
+        self.display_names
+            .lock()
+            .expect("display-name lock")
+            .get(&scene.id)
+            .cloned()
+            .or_else(|| scene.display_name.clone())
+    }
 }
 
 pub(super) fn run(args: &[String]) -> Result<(), Box<dyn Error>> {
@@ -132,12 +166,52 @@ pub(super) fn run(args: &[String]) -> Result<(), Box<dyn Error>> {
         return Ok(());
     }
     let options = parse_options(args)?;
-    let catalog = load_catalog(&options.library)?;
-    let rules = load_rules(&options.rules, options.rules_optional)?;
+    let catalog = LibraryCatalog::load(&options.library)?;
+    let mut scenes = catalog
+        .scenes()
+        .iter()
+        .map(PreviewScene::from_catalog)
+        .collect::<Vec<_>>();
+    let registry_note = match load_registry_scenes() {
+        Ok(registry_scenes) => {
+            let mut added = 0;
+            for scene in registry_scenes {
+                // On a duplicate ID across sources the library catalog wins.
+                if !scenes.iter().any(|known| known.id == scene.id) {
+                    scenes.push(scene);
+                    added += 1;
+                }
+            }
+            format!("{added} registry scene(s) loaded")
+        }
+        Err(error) => {
+            format!("registry scenes unavailable ({error}); browsing the library only")
+        }
+    };
+    let library_root = catalog.root().to_path_buf();
+    let mut display_names = HashMap::new();
+    for scene in &scenes {
+        if let Some(name) = &scene.display_name {
+            display_names.insert(scene.id.clone(), name.clone());
+        }
+    }
+    let mut by_id = HashMap::new();
+    for (index, scene) in scenes.iter().enumerate() {
+        by_id.entry(scene.id.clone()).or_insert(index);
+    }
+    let pools = load_rules(&options.rules, options.rules_optional)?;
     let token = random_token()?;
     let state = Arc::new(AppState {
-        catalog,
-        rules,
+        scenes,
+        by_id,
+        library_root,
+        display_names: Mutex::new(display_names),
+        registry_note,
+        editor: Mutex::new(EditorState {
+            pools,
+            rules_path: options.rules.clone(),
+            last_save: None,
+        }),
         token: token.clone(),
     });
 
@@ -147,51 +221,19 @@ pub(super) fn run(args: &[String]) -> Result<(), Box<dyn Error>> {
     let stop = Arc::new(AtomicBool::new(false));
     let server_stop = Arc::clone(&stop);
     let server_state = Arc::clone(&state);
-    let server = thread::Builder::new()
+    let _server = thread::Builder::new()
         .name("worldwall-curator-http".into())
         .spawn(move || serve(listener, server_state, server_stop))?;
 
-    let profile = match TempProfile::create() {
-        Ok(profile) => profile,
-        Err(error) => {
-            stop_server(&stop, address, server);
-            return Err(error.into());
-        }
-    };
     let url = format!("http://{address}/{token}/");
-    eprintln!(
-        "worldwallctl curator: opening a local read-only catalog in isolated Firefox; Worldwall is not contacted"
+    println!(
+        "worldwallctl curator: open {url} in your browser (local, token-scoped; Ctrl+C to stop)"
     );
-    let child_result = Command::new("firefox")
-        .env("MOZ_ENABLE_WAYLAND", "1")
-        .arg("--no-remote")
-        .arg("--profile")
-        .arg(&profile.0)
-        .arg("--new-window")
-        .arg(url)
-        .spawn();
-
-    let status = match child_result {
-        Ok(mut child) => wait_for_browser(&mut child),
-        Err(error) => Err(error),
-    };
-    stop_server(&stop, address, server);
-    drop(profile);
-    match status {
-        Ok(status) if status.success() => Ok(()),
-        Ok(status) => Err(format!("Firefox exited with status {status}").into()),
-        Err(error) => Err(format!("could not open isolated Firefox curator: {error}").into()),
+    // Serve until interrupted. The curator never contacts Worldwall except by
+    // an explicit reload request from the page.
+    loop {
+        thread::sleep(Duration::from_secs(3600));
     }
-}
-
-fn wait_for_browser(child: &mut Child) -> io::Result<ExitStatus> {
-    child.wait()
-}
-
-fn stop_server(stop: &AtomicBool, address: SocketAddr, server: thread::JoinHandle<()>) {
-    stop.store(true, Ordering::Release);
-    let _ = TcpStream::connect_timeout(&address, Duration::from_millis(100));
-    let _ = server.join();
 }
 
 fn parse_options(args: &[String]) -> Result<CuratorOptions, Box<dyn Error>> {
@@ -241,610 +283,93 @@ fn xdg_base_value(value: Option<&OsStr>, home: &Path, fallback: &str) -> PathBuf
         .unwrap_or_else(|| home.join(fallback))
 }
 
-fn load_catalog(library: &Path) -> Result<Catalog, Box<dyn Error>> {
-    let root = fs::canonicalize(library)
-        .map_err(|error| format!("cannot open scene library {}: {error}", library.display()))?;
-    if !fs::metadata(&root)?.is_dir() {
-        return Err(format!("scene library is not a directory: {}", root.display()).into());
-    }
-    let catalog_path = root.join("library.toml");
-    let input = read_regular_nofollow(&catalog_path, MAX_CATALOG_BYTES, "library catalog")?;
-    let value = parse_toml(&input, "library.toml")?;
-    let table = value
-        .as_table()
-        .ok_or("library.toml must be a TOML table")?;
-    reject_unknown_keys(table, &["schema_version", "scene"], "library.toml")?;
-    if table
-        .get("schema_version")
-        .and_then(toml::Value::as_integer)
-        != Some(1)
-    {
-        return Err("library.toml schema_version must be 1".into());
-    }
-    let rows = table
-        .get("scene")
-        .and_then(toml::Value::as_array)
-        .ok_or("library.toml must contain [[scene]] entries")?;
-    if rows.len() > MAX_SCENES {
-        return Err(format!("library catalog exceeds {MAX_SCENES} scenes").into());
-    }
-
-    let mut scenes = Vec::with_capacity(rows.len());
-    let mut by_id = HashMap::with_capacity(rows.len());
-    for (row_index, row) in rows.iter().enumerate() {
-        let where_ = format!("library.toml scene[{}]", row_index + 1);
-        let row = row
-            .as_table()
-            .ok_or_else(|| format!("{where_} must be a table"))?;
-        reject_catalog_keys(row, &where_)?;
-        for key in REQUIRED_CATALOG_KEYS {
-            if !row.contains_key(*key) {
-                return Err(format!("{where_} is missing {key}").into());
-            }
-        }
-        let id = required_string(row, "id", &where_)?;
-        validate_scene_id(&id)?;
-        if by_id.contains_key(&id) {
-            return Err(format!("library catalog contains duplicate scene ID {id:?}").into());
-        }
-        let package_name = required_string(row, "package", &where_)?;
-        validate_simple_name(&package_name, "package path")?;
-        let package = root.join(&package_name);
-        validate_directory_nofollow(&package, "scene package")?;
-
-        let image = required_string(row, "image", &where_)?;
-        let palette = required_string(row, "palette", &where_)?;
-        validate_simple_name(&image, "image asset")?;
-        validate_simple_name(&palette, "palette asset")?;
-        let mut assets = HashMap::new();
-        assets.insert("image", image.clone());
-        assets.insert("palette", palette.clone());
-        for (asset_key, digest_key) in [
-            ("animation", "animation_sha256"),
-            ("time_of_day", "time_of_day_sha256"),
-            ("time_of_day_atlas", "time_of_day_atlas_sha256"),
-            ("source_cycles", "source_cycles_sha256"),
-        ] {
-            let asset = optional_string(row, asset_key, &where_)?;
-            let digest = optional_string(row, digest_key, &where_)?;
-            if asset.is_some() != digest.is_some() {
-                return Err(
-                    format!("{where_} must declare {asset_key} and {digest_key} together").into(),
-                );
-            }
-            if let Some(asset) = asset {
-                validate_simple_name(&asset, "asset path")?;
-                assets.insert(asset_key, asset);
-            }
-        }
-        for asset in assets.values() {
-            validate_regular_asset(&package, asset)?;
-        }
-        for key in ["image_sha256", "palette_sha256", "source_sha256"] {
-            validate_digest(&required_string(row, key, &where_)?, key)?;
-        }
-        for digest_key in [
-            "animation_sha256",
-            "time_of_day_sha256",
-            "time_of_day_atlas_sha256",
-            "source_cycles_sha256",
-        ] {
-            if let Some(digest) = optional_string(row, digest_key, &where_)? {
-                validate_digest(&digest, digest_key)?;
-            }
-        }
-        if assets.contains_key("animation") && assets.contains_key("source_cycles") {
-            return Err(format!("{where_} cannot declare both animation and source_cycles").into());
-        }
-        if assets.contains_key("time_of_day") != assets.contains_key("time_of_day_atlas") {
-            return Err(format!(
-                "{where_} must declare time_of_day and time_of_day_atlas together"
-            )
-            .into());
-        }
-        match (
-            assets.contains_key("source_cycles"),
-            optional_string(row, "cycle_semantics", &where_)?,
-        ) {
-            (true, Some(value)) if value == "unmapped-source-native" => {}
-            (false, None) => {}
-            _ => {
-                return Err(
-                    format!("{where_} has invalid cycle_semantics/source_cycles pairing").into(),
-                );
-            }
-        }
-        let license_state = required_string(row, "license_state", &where_)?;
-        if !["unreviewed", "reviewed-granted", "reviewed-withheld"]
-            .contains(&license_state.as_str())
-        {
-            return Err(format!("{where_} has unsupported license_state").into());
-        }
-        if (license_state == "reviewed-granted") != row.contains_key("license_id") {
-            return Err(format!("{where_} license_id does not match license_state").into());
-        }
-        for key in [
-            "source_collection",
-            "world",
-            "appearance",
-            "source_format",
-            "source_url",
-            "source_page",
-            "source_title",
-        ] {
-            let _ = required_string(row, key, &where_)?;
-        }
-        validate_scene_manifest(&package, &id, &image, &palette, row)?;
-        let entry = SceneEntry {
-            id: id.clone(),
-            title: required_string(row, "source_title", &where_)?,
-            source_collection: required_string(row, "source_collection", &where_)?,
-            world: required_string(row, "world", &where_)?,
-            appearance: required_string(row, "appearance", &where_)?,
-            license_state,
-            cycle_semantics: optional_string(row, "cycle_semantics", &where_)?,
-            package,
-            image,
-            palette,
-            animation: assets.contains_key("animation"),
-        };
-        by_id.insert(id, scenes.len());
-        scenes.push(entry);
-    }
-    Ok(Catalog { scenes, by_id })
-}
-
-fn reject_catalog_keys(
-    table: &toml::map::Map<String, toml::Value>,
-    where_: &str,
-) -> Result<(), Box<dyn Error>> {
-    let allowed = REQUIRED_CATALOG_KEYS
-        .iter()
-        .chain(OPTIONAL_CATALOG_KEYS.iter())
-        .copied()
-        .collect::<Vec<_>>();
-    reject_unknown_keys(table, &allowed, where_)
-}
-
-fn reject_unknown_keys(
-    table: &toml::map::Map<String, toml::Value>,
-    allowed: &[&str],
-    where_: &str,
-) -> Result<(), Box<dyn Error>> {
-    if let Some(key) = table.keys().find(|key| !allowed.contains(&key.as_str())) {
-        return Err(format!("{where_} contains unknown key {key:?}").into());
-    }
-    Ok(())
-}
-
-fn required_string(
-    table: &toml::map::Map<String, toml::Value>,
-    key: &str,
-    where_: &str,
-) -> Result<String, Box<dyn Error>> {
-    table
-        .get(key)
-        .and_then(toml::Value::as_str)
-        .map(str::to_owned)
-        .ok_or_else(|| format!("{where_}.{key} must be a string").into())
-}
-
-fn optional_string(
-    table: &toml::map::Map<String, toml::Value>,
-    key: &str,
-    where_: &str,
-) -> Result<Option<String>, Box<dyn Error>> {
-    table
-        .get(key)
-        .map(|value| {
-            value
-                .as_str()
-                .map(str::to_owned)
-                .ok_or_else(|| format!("{where_}.{key} must be a string").into())
-        })
-        .transpose()
-}
-
-fn validate_scene_manifest(
-    package: &Path,
-    id: &str,
-    image: &str,
-    palette: &str,
-    catalog_row: &toml::map::Map<String, toml::Value>,
-) -> Result<(), Box<dyn Error>> {
-    let manifest_path = package.join("scene.toml");
-    let bytes = read_regular_nofollow(&manifest_path, MAX_MANIFEST_BYTES, "scene manifest")?;
-    let value = parse_toml(&bytes, "scene.toml")?;
-    let table = value.as_table().ok_or("scene.toml must be a TOML table")?;
-    let version = table
-        .get("schema_version")
-        .and_then(toml::Value::as_integer);
-    if !matches!(version, Some(1 | 2)) {
-        return Err("scene.toml schema_version must be 1 or 2".into());
-    }
-    if table.get("id").and_then(toml::Value::as_str) != Some(id)
-        || table.get("image").and_then(toml::Value::as_str) != Some(image)
-        || table.get("palette").and_then(toml::Value::as_str) != Some(palette)
-    {
-        return Err(format!("scene.toml for {id:?} disagrees with library.toml").into());
-    }
-    for key in ["animation", "time_of_day"] {
-        let catalog_asset = catalog_row.get(key).and_then(toml::Value::as_str);
-        let manifest_asset = table.get(key).and_then(toml::Value::as_str);
-        if catalog_asset != manifest_asset {
-            return Err(format!("scene.toml {key} for {id:?} disagrees with library.toml").into());
-        }
-        if let Some(asset) = manifest_asset {
-            validate_simple_name(asset, "scene manifest asset")?;
-            validate_regular_asset(package, asset)?;
-        }
-    }
-    Ok(())
-}
-
-fn validate_scene_id(id: &str) -> Result<(), Box<dyn Error>> {
-    let valid = id.len() <= 64
-        && id
-            .as_bytes()
-            .first()
-            .is_some_and(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit())
-        && id
-            .bytes()
-            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-');
-    if !valid {
-        return Err(format!("unsafe scene ID: {id:?}").into());
-    }
-    Ok(())
-}
-
-fn validate_digest(digest: &str, label: &str) -> Result<(), Box<dyn Error>> {
-    if digest.len() != 64
-        || !digest
-            .bytes()
-            .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
-    {
-        return Err(format!("{label} must be 64 lowercase hexadecimal characters").into());
-    }
-    Ok(())
-}
-
-fn validate_simple_name(name: &str, label: &str) -> Result<(), Box<dyn Error>> {
-    if name.is_empty()
-        || name.len() > 255
-        || !name.as_bytes()[0].is_ascii_alphanumeric()
-        || !name
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
-        || name == "."
-        || name == ".."
-    {
-        return Err(format!("unsafe {label}: {name:?}").into());
-    }
-    let mut components = Path::new(name).components();
-    if !matches!(components.next(), Some(Component::Normal(_))) || components.next().is_some() {
-        return Err(format!("unsafe {label}: {name:?}").into());
-    }
-    Ok(())
-}
-
-fn validate_directory_nofollow(path: &Path, label: &str) -> Result<(), Box<dyn Error>> {
-    let metadata = fs::symlink_metadata(path)?;
-    if metadata.file_type().is_symlink() || !metadata.is_dir() {
-        return Err(format!(
-            "{label} must be a non-symlink directory: {}",
-            path.display()
-        )
-        .into());
-    }
-    Ok(())
-}
-
-fn validate_regular_asset(package: &Path, name: &str) -> Result<(), Box<dyn Error>> {
-    let path = package.join(name);
-    let metadata = fs::symlink_metadata(&path)
-        .map_err(|error| format!("missing asset {}: {error}", path.display()))?;
-    if metadata.file_type().is_symlink() || !metadata.is_file() {
-        return Err(format!(
-            "asset must be a non-symlink regular file: {}",
-            path.display()
-        )
-        .into());
-    }
-    if metadata.len() > MAX_ASSET_BYTES as u64 {
-        return Err(format!("asset exceeds {MAX_ASSET_BYTES} bytes: {}", path.display()).into());
-    }
-    Ok(())
-}
-
-fn parse_toml(bytes: &[u8], label: &str) -> Result<toml::Value, Box<dyn Error>> {
-    let text =
-        std::str::from_utf8(bytes).map_err(|error| format!("{label} is not UTF-8: {error}"))?;
-    Ok(toml::from_str(text)?)
-}
-
-fn read_regular_nofollow(
-    path: &Path,
-    limit: usize,
-    label: &str,
-) -> Result<Vec<u8>, Box<dyn Error>> {
-    let metadata = fs::symlink_metadata(path)
-        .map_err(|error| format!("cannot read {label} {}: {error}", path.display()))?;
-    if metadata.file_type().is_symlink() || !metadata.is_file() {
-        return Err(format!(
-            "{label} must be a non-symlink regular file: {}",
-            path.display()
-        )
-        .into());
-    }
-    if metadata.len() > limit as u64 {
-        return Err(format!("{label} exceeds {limit} bytes: {}", path.display()).into());
-    }
-    let file = OpenOptions::new()
-        .read(true)
-        .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC)
-        .open(path)?;
-    if !file.metadata()?.is_file() {
-        return Err(format!("{label} is not a regular file: {}", path.display()).into());
-    }
-    let mut bytes = Vec::with_capacity(metadata.len() as usize);
-    file.take(limit as u64 + 1).read_to_end(&mut bytes)?;
-    if bytes.len() > limit {
-        return Err(format!("{label} exceeds {limit} bytes: {}", path.display()).into());
-    }
-    Ok(bytes)
-}
-
-fn load_rules(path: &Path, optional: bool) -> Result<Option<RulesSummary>, Box<dyn Error>> {
-    let bytes = match read_regular_nofollow(path, MAX_CATALOG_BYTES, "pool rules") {
-        Ok(bytes) => bytes,
+fn load_rules(path: &Path, optional: bool) -> Result<Option<ScenePools>, Box<dyn Error>> {
+    match ScenePools::load(path) {
+        Ok(pools) => Ok(Some(pools)),
         Err(_error)
             if optional
                 && fs::symlink_metadata(path)
                     .is_err_and(|error| error.kind() == io::ErrorKind::NotFound) =>
         {
-            return Ok(None);
+            // A missing default rules file means no sidecar is present yet.
+            Ok(None)
         }
-        Err(error) => return Err(error),
-    };
-    let value = parse_toml(&bytes, "scene-pools.toml")?;
-    let table = value
-        .as_table()
-        .ok_or("scene-pools.toml must be a TOML table")?;
-    reject_unknown_keys(
-        table,
-        &["schema_version", "pool", "scene_rule"],
-        "scene-pools.toml",
-    )?;
-    if table
-        .get("schema_version")
-        .and_then(toml::Value::as_integer)
-        != Some(1)
+        Err(error) => Err(error.into()),
+    }
+}
+
+/// Atomically replace the sidecar with same-user-only permissions. The
+/// rendered document must validate before any write happens; a failure at any
+/// step leaves the previous valid file untouched.
+fn save_rules(path: &Path, document: &str) -> Result<(), Box<dyn Error>> {
+    let validated = ScenePools::parse(document)?;
+    if validated.to_toml_string() != document {
+        return Err("sidecar document is not in canonical save form".into());
+    }
+    if let Some(parent) = path.parent() {
+        fs::DirBuilder::new()
+            .recursive(true)
+            .mode(0o700)
+            .create(parent)
+            .map_err(|error| format!("cannot create rules directory: {error}"))?;
+    }
+    if let Ok(metadata) = fs::symlink_metadata(path)
+        && metadata.file_type().is_symlink()
     {
-        return Err("scene-pools.toml schema_version must be 1".into());
+        return Err("refusing to replace a symlinked sidecar".into());
     }
-    let pools = table
-        .get("pool")
-        .and_then(toml::Value::as_array)
-        .ok_or("scene-pools.toml must contain [[pool]] entries")?;
-    let rules = table
-        .get("scene_rule")
-        .and_then(toml::Value::as_array)
-        .map(Vec::as_slice)
-        .unwrap_or(&[]);
-    if pools.is_empty() {
-        return Err("scene-pools.toml must contain at least one [[pool]]".into());
-    }
-    if pools.len() > MAX_SCENES {
-        return Err(format!("sidecar exceeds {MAX_SCENES} pools").into());
-    }
-    let mut summaries = Vec::with_capacity(pools.len());
-    let mut pool_ids = HashSet::new();
-    let mut members = HashSet::new();
-    for pool in pools {
-        let pool = pool.as_table().ok_or("each pool must be a TOML table")?;
-        reject_unknown_keys(
-            pool,
-            &["id", "source", "enabled", "scene_ids"],
-            "scene-pools.toml pool",
-        )?;
-        let id = pool
-            .get("id")
-            .and_then(toml::Value::as_str)
-            .ok_or("pool id must be a string")?;
-        validate_scene_id(id)?;
-        if !pool_ids.insert(id.to_owned()) {
-            return Err(format!("duplicate pool ID {id:?}").into());
-        }
-        let source = pool
-            .get("source")
-            .and_then(toml::Value::as_str)
-            .ok_or("pool source must be a string")?;
-        if !matches!(source, "library" | "registry") {
-            return Err(format!("unsupported pool source {source:?}").into());
-        }
-        let enabled = pool
-            .get("enabled")
-            .and_then(toml::Value::as_bool)
-            .ok_or("pool enabled must be a boolean")?;
-        let scene_ids = pool
-            .get("scene_ids")
-            .and_then(toml::Value::as_array)
-            .ok_or("pool scene_ids must be an array")?;
-        for scene_id in scene_ids {
-            let scene_id = scene_id
-                .as_str()
-                .ok_or("pool scene_ids must contain only strings")?;
-            validate_scene_id(scene_id)?;
-            if !members.insert(scene_id.to_owned()) {
-                return Err(format!("scene {scene_id:?} occurs in more than one pool").into());
-            }
-        }
-        summaries.push(PoolSummary {
-            id: id.to_owned(),
-            source: source.to_owned(),
-            enabled,
-            scene_count: scene_ids.len(),
-        });
-    }
-    let mut rule_ids = HashSet::new();
-    for rule in rules {
-        let rule = rule
-            .as_table()
-            .ok_or("each scene_rule must be a TOML table")?;
-        let allowed = [
-            "scene_id",
-            "enabled",
-            "time_of_day",
-            "temperature_min_c",
-            "temperature_max_c",
-            "weather_any",
-        ];
-        reject_unknown_keys(rule, &allowed, "scene-pools.toml scene_rule")?;
-        let scene_id = rule
-            .get("scene_id")
-            .and_then(toml::Value::as_str)
-            .ok_or("scene_rule scene_id must be a string")?;
-        validate_scene_id(scene_id)?;
-        if !members.contains(scene_id) || !rule_ids.insert(scene_id.to_owned()) {
-            return Err(format!("scene_rule for {scene_id:?} is duplicate or unpooled").into());
-        }
-        if rule.get("enabled").and_then(toml::Value::as_bool).is_none() {
-            return Err(format!("scene_rule enabled must be a boolean for {scene_id:?}").into());
-        }
-        validate_rule_values(rule, scene_id)?;
-    }
-    Ok(Some(RulesSummary {
-        path: path.to_path_buf(),
-        pools: summaries,
-        rule_count: rules.len(),
-    }))
-}
-
-fn validate_rule_values(
-    rule: &toml::map::Map<String, toml::Value>,
-    scene_id: &str,
-) -> Result<(), Box<dyn Error>> {
-    for (key, allowed) in [
-        (
-            "time_of_day",
-            &["dawn", "day", "dusk", "night", "polar_day", "polar_night"][..],
-        ),
-        (
-            "weather_any",
-            &["clear", "cloudy", "rain", "snow", "storm", "fog"][..],
-        ),
-    ] {
-        let Some(value) = rule.get(key) else { continue };
-        let values = value
-            .as_array()
-            .filter(|values| !values.is_empty())
-            .ok_or_else(|| {
-                format!("scene_rule {key} must be a non-empty string array for {scene_id:?}")
-            })?;
-        let mut seen = HashSet::new();
-        for value in values {
-            let value = value.as_str().ok_or_else(|| {
-                format!("scene_rule {key} values must be strings for {scene_id:?}")
-            })?;
-            if !allowed.contains(&value) || !seen.insert(value) {
-                return Err(format!(
-                    "scene_rule {key} contains an unsupported or duplicate value for {scene_id:?}"
-                )
-                .into());
-            }
-        }
-    }
-    let mut minimum = None;
-    let mut maximum = None;
-    for (key, target) in [
-        ("temperature_min_c", &mut minimum),
-        ("temperature_max_c", &mut maximum),
-    ] {
-        let Some(value) = rule.get(key) else { continue };
-        let number = value
-            .as_float()
-            .or_else(|| value.as_integer().map(|value| value as f64))
-            .filter(|value| value.is_finite() && (-100.0..=100.0).contains(value))
-            .ok_or_else(|| {
-                format!("scene_rule {key} must be a finite number in -100..=100 for {scene_id:?}")
-            })?;
-        *target = Some(number);
-    }
-    if matches!((minimum, maximum), (Some(minimum), Some(maximum)) if minimum > maximum) {
-        return Err(
-            format!("scene_rule temperature minimum exceeds maximum for {scene_id:?}").into(),
-        );
-    }
-    Ok(())
-}
-
-fn random_token() -> io::Result<String> {
-    let mut bytes = [0u8; 24];
-    File::open("/dev/urandom")?.read_exact(&mut bytes)?;
-    Ok(bytes.iter().map(|byte| format!("{byte:02x}")).collect())
-}
-
-impl TempProfile {
-    fn write_private_prefs(&self) -> io::Result<()> {
-        const PREFS: &str = r#"user_pref("toolkit.telemetry.enabled", false);
-user_pref("toolkit.telemetry.unified", false);
-user_pref("datareporting.healthreport.uploadEnabled", false);
-user_pref("datareporting.policy.dataSubmissionEnabled", false);
-user_pref("app.normandy.enabled", false);
-user_pref("app.shield.optoutstudies.enabled", false);
-user_pref("app.update.enabled", false);
-user_pref("browser.ping-centre.telemetry", false);
-user_pref("browser.newtabpage.activity-stream.feeds.telemetry", false);
-user_pref("browser.newtabpage.activity-stream.telemetry", false);
-user_pref("browser.aboutwelcome.enabled", false);
-user_pref("browser.shell.checkDefaultBrowser", false);
-user_pref("network.captive-portal-service.enabled", false);
-user_pref("network.connectivity-service.enabled", false);
-"#;
+    let unique = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+    let temporary = path.with_extension(format!("tmp-{}-{unique}", std::process::id()));
+    let write_result = (|| -> Result<(), Box<dyn Error>> {
         let mut file = OpenOptions::new()
             .write(true)
             .create_new(true)
             .mode(0o600)
-            .open(self.0.join("user.js"))?;
-        file.write_all(PREFS.as_bytes())?;
-        file.sync_all()
-    }
-
-    fn create() -> io::Result<Self> {
-        let parent = env::temp_dir();
-        for attempt in 0..8u32 {
-            let nanos = SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_nanos();
-            let path = parent.join(format!(
-                "worldwall-curator-{}-{nanos}-{attempt}",
-                std::process::id()
-            ));
-            match fs::DirBuilder::new().mode(0o700).create(&path) {
-                Ok(()) => {
-                    if let Err(error) =
-                        fs::set_permissions(&path, fs::Permissions::from_mode(0o700))
-                    {
-                        let _ = fs::remove_dir_all(&path);
-                        return Err(error);
-                    }
-                    let profile = Self(path);
-                    if let Err(error) = profile.write_private_prefs() {
-                        let _ = fs::remove_dir_all(&profile.0);
-                        return Err(error);
-                    }
-                    return Ok(profile);
-                }
-                Err(error) if error.kind() == io::ErrorKind::AlreadyExists => continue,
-                Err(error) => return Err(error),
-            }
+            .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC)
+            .open(&temporary)?;
+        file.write_all(document.as_bytes())?;
+        file.sync_all()?;
+        drop(file);
+        fs::rename(&temporary, path)?;
+        if let Some(parent) = path.parent()
+            && let Ok(directory) = OpenOptions::new()
+                .read(true)
+                .custom_flags(libc::O_CLOEXEC)
+                .open(parent)
+        {
+            let _ = directory.sync_all();
         }
-        Err(io::Error::new(
-            io::ErrorKind::AlreadyExists,
-            "could not allocate private Firefox profile directory",
-        ))
+        Ok(())
+    })();
+    if write_result.is_err() {
+        let _ = fs::remove_file(&temporary);
     }
+    write_result?;
+    if let Ok(metadata) = fs::symlink_metadata(path) {
+        let mode = metadata.permissions().mode() & 0o777;
+        if mode != 0o600 {
+            let _ = fs::set_permissions(path, fs::Permissions::from_mode(0o600));
+        }
+    }
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// HTTP server (loopback, random token, GET/POST only).
+
+struct HttpRequest {
+    method: String,
+    target: String,
+    body: Vec<u8>,
+}
+
+struct HttpResponse {
+    status: &'static str,
+    content_type: &'static str,
+    body: Vec<u8>,
 }
 
 fn serve(listener: TcpListener, state: Arc<AppState>, stop: Arc<AtomicBool>) {
@@ -864,8 +389,8 @@ fn serve(listener: TcpListener, state: Arc<AppState>, stop: Arc<AtomicBool>) {
 fn handle_client(mut stream: TcpStream, state: &AppState) -> io::Result<()> {
     stream.set_read_timeout(Some(Duration::from_secs(2)))?;
     stream.set_write_timeout(Some(Duration::from_secs(2)))?;
-    let request = match read_request_target(&stream) {
-        Ok(target) => target,
+    let request = match read_request(&stream) {
+        Ok(request) => request,
         Err(_) => {
             write_response(&mut stream, not_found())?;
             return Ok(());
@@ -875,7 +400,7 @@ fn handle_client(mut stream: TcpStream, state: &AppState) -> io::Result<()> {
     write_response(&mut stream, response)
 }
 
-fn read_request_target(stream: &TcpStream) -> io::Result<String> {
+fn read_request(stream: &TcpStream) -> io::Result<HttpRequest> {
     let mut reader = BufReader::new(stream.try_clone()?);
     let mut total = 0usize;
     let mut first_line = String::new();
@@ -889,10 +414,11 @@ fn read_request_target(stream: &TcpStream) -> io::Result<String> {
         ));
     }
     let mut fields = first_line.trim_end_matches("\r\n").split(' ');
-    if fields.next() != Some("GET") {
+    let method = fields.next().unwrap_or_default();
+    if method != "GET" && method != "POST" {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
-            "only GET is supported",
+            "only GET and POST are supported",
         ));
     }
     let target = fields
@@ -904,6 +430,7 @@ fn read_request_target(stream: &TcpStream) -> io::Result<String> {
             "invalid HTTP request line",
         ));
     }
+    let mut content_length = 0usize;
     loop {
         let mut line = String::new();
         let read = (&mut reader)
@@ -919,97 +446,467 @@ fn read_request_target(stream: &TcpStream) -> io::Result<String> {
         if line == "\r\n" {
             break;
         }
+        if let Some(value) = line.to_ascii_lowercase().strip_prefix("content-length:") {
+            content_length = value.trim().parse::<usize>().map_err(|_| {
+                io::Error::new(io::ErrorKind::InvalidData, "invalid content length")
+            })?;
+        }
     }
-    Ok(target.to_owned())
+    if content_length > MAX_REQUEST_BODY_BYTES {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "oversized HTTP body",
+        ));
+    }
+    let mut body = vec![0; content_length];
+    if content_length > 0 {
+        reader.read_exact(&mut body)?;
+    }
+    Ok(HttpRequest {
+        method: method.to_owned(),
+        target: target.to_owned(),
+        body,
+    })
 }
 
-fn route(state: &AppState, path: &str) -> HttpResponse {
+fn route(state: &AppState, request: &HttpRequest) -> HttpResponse {
     let prefix = format!("/{}/", state.token);
-    let Some(relative) = path.strip_prefix(&prefix) else {
+    let Some(relative) = request.target.strip_prefix(&prefix) else {
         return not_found();
     };
-    if relative.is_empty() {
-        return response(
+    let path = relative.split('?').next().unwrap_or_default();
+    let query = relative.split_once('?').map(|(_, query)| query);
+    match (request.method.as_str(), path) {
+        ("GET", "") => response(
             "200 OK",
             "text/html; charset=utf-8",
             include_str!("bin/curator.html").as_bytes().to_vec(),
-        );
-    }
-    if relative == "app.js" {
-        return response(
+        ),
+        ("GET", "app.js") => response(
             "200 OK",
             "text/javascript; charset=utf-8",
             include_str!("bin/curator.js").as_bytes().to_vec(),
-        );
-    }
-    if relative == "catalog" {
-        return match serde_json::to_vec(&catalog_json(state)) {
-            Ok(body) => response("200 OK", "application/json; charset=utf-8", body),
-            Err(_) => response(
-                "500 Internal Server Error",
-                "text/plain; charset=utf-8",
-                b"catalog serialization failed".to_vec(),
-            ),
-        };
-    }
-    if let Some(rest) = relative.strip_prefix("preview/") {
-        let mut parts = rest.split('/');
-        let Some(id) = parts.next() else {
-            return not_found();
-        };
-        let Some(kind) = parts.next() else {
-            return not_found();
-        };
-        if parts.next().is_some() {
-            return not_found();
+        ),
+        ("GET", "palette.js") => response(
+            "200 OK",
+            "text/javascript; charset=utf-8",
+            include_str!("bin/curator_palette.js").as_bytes().to_vec(),
+        ),
+        ("GET", "pools.js") => response(
+            "200 OK",
+            "text/javascript; charset=utf-8",
+            include_str!("bin/curator_pools.js").as_bytes().to_vec(),
+        ),
+        ("GET", "catalog") => json_response(catalog_json(state)),
+        ("GET", "eligibility") => match query {
+            Some(query) => json_response(eligibility_json(state, query)),
+            None => json_error("400 Bad Request", "missing preview snapshot query"),
+        },
+        ("POST", "rules") => match save_rules_request(state, &request.body) {
+            Ok(value) => json_response(value),
+            Err(error) => json_error("422 Unprocessable Content", &error),
+        },
+        ("POST", "name") => match save_display_name_request(state, &request.body) {
+            Ok(value) => json_response(value),
+            Err(error) => json_error("422 Unprocessable Content", &error),
+        },
+        ("POST", "reload-config") => json_response(reload_config_request()),
+        ("GET", path) if path.starts_with("preview/") => {
+            let rest = &path["preview/".len()..];
+            let mut parts = rest.split('/');
+            let (Some(id), Some(kind), None) = (parts.next(), parts.next(), parts.next()) else {
+                return not_found();
+            };
+            match preview_asset(state, id, kind) {
+                Ok((content_type, body)) => response("200 OK", content_type, body),
+                Err(error) => response(
+                    "422 Unprocessable Content",
+                    "text/plain; charset=utf-8",
+                    error.to_string().into_bytes(),
+                ),
+            }
         }
-        return match preview_asset(state, id, kind) {
-            Ok((content_type, body)) => response("200 OK", content_type, body),
-            Err(error) => response(
-                "422 Unprocessable Content",
-                "text/plain; charset=utf-8",
-                error.to_string().into_bytes(),
-            ),
-        };
+        _ => not_found(),
     }
-    not_found()
+}
+
+fn json_response(value: Value) -> HttpResponse {
+    match serde_json::to_vec(&value) {
+        Ok(body) => response("200 OK", "application/json; charset=utf-8", body),
+        Err(_) => response(
+            "500 Internal Server Error",
+            "text/plain; charset=utf-8",
+            b"serialization failed".to_vec(),
+        ),
+    }
+}
+
+fn json_error(status: &'static str, message: &str) -> HttpResponse {
+    let body = serde_json::to_vec(&json!({"ok": false, "error": message}))
+        .unwrap_or_else(|_| b"{\"ok\":false}".to_vec());
+    response(status, "application/json; charset=utf-8", body)
 }
 
 fn catalog_json(state: &AppState) -> Value {
     let scenes = state
-        .catalog
         .scenes
         .iter()
         .map(|scene| {
             json!({
                 "id": scene.id,
                 "title": scene.title,
+                "display_name": state.display_name(scene),
+                "source": scene.source,
                 "source_collection": scene.source_collection,
                 "world": scene.world,
                 "appearance": scene.appearance,
                 "license_state": scene.license_state,
                 "cycle_semantics": scene.cycle_semantics,
-                "animation_manifest_present": scene.animation,
+                "animation_manifest_present": scene.animation.is_some(),
+                "time_of_day_present": scene.time_of_day.is_some(),
+                "source_cycles_present": scene.source_cycles,
             })
         })
         .collect::<Vec<_>>();
-    let rules = state.rules.as_ref().map(|summary| {
+    let editor = state.editor.lock().expect("editor state lock");
+    let rules = editor.pools.as_ref().map(|pools| {
         json!({
-            "path": summary.path.display().to_string(),
-            "pools": summary.pools.iter().map(|pool| json!({
+            "pools": pools.pools().iter().map(|pool| json!({
                 "id": pool.id,
-                "source": pool.source,
+                "source": pool.source.as_str(),
                 "enabled": pool.enabled,
-                "scene_count": pool.scene_count,
+                "scene_ids": pool.scene_ids,
             })).collect::<Vec<_>>(),
-            "rule_count": summary.rule_count,
+            "scene_rules": pools.rules().iter().map(|(scene_id, rule)| json!({
+                "scene_id": scene_id,
+                "enabled": rule.enabled,
+                "time_of_day": rule.time_of_day.as_ref().map(|times| times.iter().map(|time| scene_pools::time_of_day_name(*time)).collect::<Vec<_>>()),
+                "weather_any": rule.weather_any.as_ref().map(|weathers| weathers.iter().map(|weather| scene_pools::weather_name(*weather)).collect::<Vec<_>>()),
+                "temperature_min_c": rule.temperature_min_c,
+                "temperature_max_c": rule.temperature_max_c,
+            })).collect::<Vec<_>>(),
         })
     });
     json!({
         "scenes": scenes,
+        "registry_note": state.registry_note,
         "rules": rules,
-        "message": "Read-only AC3 implementation slice: editing and eligibility evaluation are not implemented.",
+        "rules_path": editor.rules_path.display().to_string(),
+        "rules_present": editor.pools.is_some(),
+        "last_save": editor.last_save,
+        "message": "Editing changes only this sidecar; Worldwall reloads it only when explicitly requested.",
     })
+}
+
+fn preview_environment(query: &str) -> Result<PoolEnvironment, String> {
+    let mut time = TimeOfDay::Unknown;
+    let mut weather = Weather::Unknown;
+    let mut temperature_c = None;
+    for pair in query.split('&') {
+        let Some((key, value)) = pair.split_once('=') else {
+            continue;
+        };
+        match key {
+            "time" => {
+                time = scene_pools::time_of_day_from_name(value)
+                    .ok_or_else(|| "unknown preview time value".to_owned())?;
+            }
+            "weather" => {
+                weather = scene_pools::weather_from_name(value)
+                    .ok_or_else(|| "unknown preview weather value".to_owned())?;
+            }
+            "temperature" => {
+                temperature_c = if value == "unknown" {
+                    None
+                } else {
+                    Some(
+                        value
+                            .parse::<f32>()
+                            .map_err(|_| "preview temperature must be a number or unknown")?,
+                    )
+                };
+            }
+            _ => {}
+        }
+    }
+    Ok(PoolEnvironment {
+        time,
+        weather,
+        temperature_c,
+    })
+}
+
+fn eligibility_json(state: &AppState, query: &str) -> Value {
+    let environment = match preview_environment(query) {
+        Ok(environment) => environment,
+        Err(error) => return json!({"ok": false, "error": error}),
+    };
+    let editor = state.editor.lock().expect("editor state lock");
+    let mut known: BTreeSet<&str> = state.scenes.iter().map(|scene| scene.id.as_str()).collect();
+    if let Some(pools) = editor.pools.as_ref() {
+        for pool in pools.pools() {
+            known.extend(pool.scene_ids.iter().map(String::as_str));
+        }
+    }
+    let scenes = known
+        .into_iter()
+        .map(|id| {
+            let (eligible, reasons) = match editor.pools.as_ref() {
+                Some(pools) => {
+                    let eligibility = pools.evaluate(id, &environment);
+                    (
+                        eligibility.eligible(),
+                        eligibility
+                            .reasons
+                            .iter()
+                            .map(|reason| {
+                                json!({
+                                    "code": reason.as_str(),
+                                    "detail": reason.as_detail(),
+                                })
+                            })
+                            .collect::<Vec<_>>(),
+                    )
+                }
+                None => (
+                    true,
+                    vec![json!({
+                        "code": EligibilityReason::NotInPool.as_str(),
+                        "detail": "no sidecar is configured; legacy selection is unchanged",
+                    })],
+                ),
+            };
+            json!({"id": id, "eligible": eligible, "reasons": reasons})
+        })
+        .collect::<Vec<_>>();
+    json!({
+        "ok": true,
+        "snapshot": {
+            "time": scene_pools::time_of_day_name(environment.time),
+            "weather": scene_pools::weather_name(environment.weather),
+            "temperature_c": environment.temperature_c,
+        },
+        "scenes": scenes,
+    })
+}
+
+fn pools_from_edit_payload(body: &[u8]) -> Result<ScenePools, String> {
+    let value: Value = serde_json::from_slice(body).map_err(|_| "rules body must be JSON")?;
+    let pools = value
+        .get("pools")
+        .and_then(Value::as_array)
+        .ok_or("rules body needs a pools array")?;
+    let mut pool_entries = Vec::with_capacity(pools.len());
+    for pool in pools {
+        let id = pool
+            .get("id")
+            .and_then(Value::as_str)
+            .ok_or("pool id must be a string")?
+            .to_owned();
+        let source = match pool.get("source").and_then(Value::as_str) {
+            Some("library") => PoolSource::Library,
+            Some("registry") => PoolSource::Registry,
+            _ => return Err("pool source must be library or registry".into()),
+        };
+        let enabled = pool
+            .get("enabled")
+            .and_then(Value::as_bool)
+            .ok_or("pool enabled must be a boolean")?;
+        let mut scene_ids = Vec::new();
+        for scene_id in pool
+            .get("scene_ids")
+            .and_then(Value::as_array)
+            .ok_or("pool scene_ids must be an array")?
+        {
+            scene_ids.push(
+                scene_id
+                    .as_str()
+                    .ok_or("pool scene_ids must be strings")?
+                    .to_owned(),
+            );
+        }
+        pool_entries.push(PoolEntry {
+            id,
+            source,
+            enabled,
+            scene_ids,
+        });
+    }
+    let mut rules = Vec::new();
+    if let Some(rows) = value.get("scene_rules").and_then(Value::as_array) {
+        for row in rows {
+            let scene_id = row
+                .get("scene_id")
+                .and_then(Value::as_str)
+                .ok_or("scene_rule scene_id must be a string")?
+                .to_owned();
+            let enabled = row
+                .get("enabled")
+                .and_then(Value::as_bool)
+                .ok_or("scene_rule enabled must be a boolean")?;
+            let time_of_day = match row.get("time_of_day").and_then(Value::as_array) {
+                Some(values) => {
+                    let mut times = BTreeSet::new();
+                    for value in values {
+                        let name = value
+                            .as_str()
+                            .ok_or("scene_rule time_of_day values must be strings")?;
+                        times.insert(
+                            scene_pools::time_of_day_from_name(name)
+                                .ok_or("scene_rule time_of_day value is unsupported")?,
+                        );
+                    }
+                    if times.is_empty() {
+                        return Err("scene_rule time_of_day must not be empty".into());
+                    }
+                    Some(times)
+                }
+                None => None,
+            };
+            let weather_any = match row.get("weather_any").and_then(Value::as_array) {
+                Some(values) => {
+                    let mut weathers = BTreeSet::new();
+                    for value in values {
+                        let name = value
+                            .as_str()
+                            .ok_or("scene_rule weather_any values must be strings")?;
+                        weathers.insert(
+                            scene_pools::weather_from_name(name)
+                                .ok_or("scene_rule weather_any value is unsupported")?,
+                        );
+                    }
+                    if weathers.is_empty() {
+                        return Err("scene_rule weather_any must not be empty".into());
+                    }
+                    Some(weathers)
+                }
+                None => None,
+            };
+            let mut temperature_min_c = None;
+            let mut temperature_max_c = None;
+            for (key, target) in [
+                ("temperature_min_c", &mut temperature_min_c),
+                ("temperature_max_c", &mut temperature_max_c),
+            ] {
+                if let Some(value) = row.get(key).and_then(Value::as_f64) {
+                    if !value.is_finite() || !(-100.0..=100.0).contains(&value) {
+                        return Err(format!("scene_rule {key} is out of range"));
+                    }
+                    *target = Some(value as f32);
+                }
+            }
+            if matches!(
+                (temperature_min_c, temperature_max_c),
+                (Some(minimum), Some(maximum)) if minimum > maximum
+            ) {
+                return Err("scene_rule temperature range is inverted".into());
+            }
+            rules.push((
+                scene_id,
+                SceneRule {
+                    enabled,
+                    time_of_day,
+                    weather_any,
+                    temperature_min_c,
+                    temperature_max_c,
+                },
+            ));
+        }
+    }
+    ScenePools::from_parts(pool_entries, rules).map_err(|error| error.to_string())
+}
+
+fn save_rules_request(state: &AppState, body: &[u8]) -> Result<Value, String> {
+    let pools = pools_from_edit_payload(body)?;
+    let document = pools.to_toml_string();
+    let mut editor = state.editor.lock().expect("editor state lock");
+    save_rules(&editor.rules_path, &document).map_err(|error| error.to_string())?;
+    editor.pools = Some(pools);
+    editor.last_save = Some(
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_secs())
+            .unwrap_or_default()
+            .to_string(),
+    );
+    Ok(json!({
+        "ok": true,
+        "saved": editor.rules_path.display().to_string(),
+        "message": "Sidecar saved atomically; request config reload explicitly to apply it.",
+    }))
+}
+
+fn save_display_name_request(state: &AppState, body: &[u8]) -> Result<Value, String> {
+    let value: Value =
+        serde_json::from_slice(body).map_err(|_| "name body must be JSON".to_owned())?;
+    let id = value
+        .get("id")
+        .and_then(Value::as_str)
+        .ok_or("name body needs a scene id")?;
+    let display_name = match value.get("display_name") {
+        None | Some(Value::Null) => None,
+        Some(Value::String(name)) if name.is_empty() => None,
+        Some(Value::String(name)) => Some(name.clone()),
+        Some(_) => return Err("display_name must be a string or null".into()),
+    };
+    state
+        .scene(id)
+        .filter(|scene| scene.source == "library")
+        .ok_or("display names are editable for library scenes only")?;
+    scene_pools::set_catalog_display_name(&state.library_root, id, display_name.as_deref())
+        .map_err(|error| error.to_string())?;
+    let mut names = state.display_names.lock().expect("display-name lock");
+    match &display_name {
+        Some(name) => {
+            names.insert(id.to_owned(), name.clone());
+        }
+        None => {
+            names.remove(id);
+        }
+    }
+    Ok(json!({
+        "ok": true,
+        "message": "Display name saved to the library catalog.",
+    }))
+}
+
+/// Issue one explicit `reload-config` request to a running Worldwall. This is
+/// a user action; nothing else in the curator touches the wallpaper process.
+fn reload_config_request() -> Value {
+    let path = match ipc::socket_path_from_environment() {
+        Ok(path) => path,
+        Err(error) => {
+            return json!({"ok": false, "error": format!("no control socket is configured: {error}")});
+        }
+    };
+    let mut stream = match UnixStream::connect(&path) {
+        Ok(stream) => stream,
+        Err(error) => {
+            return json!({"ok": false, "error": format!("Worldwall is not reachable: {error}")});
+        }
+    };
+    if let Err(error) = stream.set_read_timeout(Some(ipc::COMMAND_TIMEOUT)) {
+        return json!({"ok": false, "error": format!("control socket timeout: {error}")});
+    }
+    if let Err(error) = ipc::write_request(&mut stream, &Command::ReloadConfig) {
+        return json!({"ok": false, "error": format!("control request failed: {error}")});
+    }
+    let mut length = [0; 4];
+    if let Err(error) = stream.read_exact(&mut length) {
+        return json!({"ok": false, "error": format!("control response failed: {error}")});
+    }
+    let length = u32::from_be_bytes(length) as usize;
+    if length == 0 || length > ipc::MAX_RESPONSE_BYTES {
+        return json!({"ok": false, "error": "control response is out of bounds"});
+    }
+    let mut body = vec![0; length];
+    if let Err(error) = stream.read_exact(&mut body) {
+        return json!({"ok": false, "error": format!("control response failed: {error}")});
+    }
+    match serde_json::from_slice::<Value>(&body) {
+        Ok(value) => json!({"ok": true, "response": value}),
+        Err(_) => json!({"ok": false, "error": "control response is not JSON"}),
+    }
 }
 
 fn preview_asset(
@@ -1017,16 +914,17 @@ fn preview_asset(
     id: &str,
     kind: &str,
 ) -> Result<(&'static str, Vec<u8>), Box<dyn Error>> {
-    let index = *state.catalog.by_id.get(id).ok_or("unknown scene ID")?;
-    let scene = &state.catalog.scenes[index];
+    let scene = state
+        .scene(id)
+        .ok_or_else(|| "unknown scene ID".to_owned())?;
     match kind {
         "indices" => {
-            let bytes = read_regular_nofollow(
-                &scene.package.join(&scene.image),
-                MAX_ASSET_BYTES,
-                "scene PNG",
-            )?;
+            let bytes =
+                scene_pools::read_regular_nofollow(&scene.image, MAX_PREVIEW_BYTES, "scene PNG")?;
             let decoded = scene::decode_index_png(&bytes)?;
+            if u64::from(decoded.width) * u64::from(decoded.height) > MAX_PREVIEW_PIXELS {
+                return Err("scene image exceeds the preview pixel bound".into());
+            }
             let mut body = Vec::with_capacity(8 + decoded.indices.len());
             body.extend_from_slice(&decoded.width.to_be_bytes());
             body.extend_from_slice(&decoded.height.to_be_bytes());
@@ -1034,15 +932,118 @@ fn preview_asset(
             Ok(("application/octet-stream", body))
         }
         "palette" => {
-            let bytes = read_regular_nofollow(
-                &scene.package.join(&scene.palette),
-                MAX_ASSET_BYTES,
+            let bytes = scene_pools::read_regular_nofollow(
+                &scene.palette,
+                MAX_PREVIEW_BYTES,
                 "palette PNG",
             )?;
             let decoded = scene::decode_palette_png(&bytes)?;
             Ok(("application/octet-stream", decoded.rgba.to_vec()))
         }
+        "animation" | "cycle-indices" => {
+            // A package without an authored animation manifest previews as the
+            // runtime's static default; unmapped source cycles are never
+            // synthesized into animation data.
+            let animation = match &scene.animation {
+                Some(path) => {
+                    let bytes = scene_pools::read_regular_nofollow(
+                        path,
+                        MAX_PREVIEW_BYTES,
+                        "animation manifest",
+                    )?;
+                    let text = std::str::from_utf8(&bytes)?;
+                    Animation::from_toml(text)?
+                }
+                None => Animation::static_default(),
+            };
+            let body = if kind == "animation" {
+                animation.metadata_bytes()
+            } else {
+                animation.cycle_index_bytes()
+            };
+            Ok(("application/octet-stream", body))
+        }
+        "tod-atlas" | "tod-keyframes" | "info" => preview_time_of_day(scene, kind),
         _ => Err("unknown preview asset kind".into()),
+    }
+}
+
+fn load_registry_scenes() -> Result<Vec<PreviewScene>, Box<dyn Error>> {
+    let root = super::configured_registry_dir()?;
+    let registry = scene_registry::SceneRegistry::load(&root)?;
+    Ok(registry
+        .manifests()
+        .map(PreviewScene::from_manifest)
+        .collect())
+}
+
+fn preview_time_of_day(
+    scene: &PreviewScene,
+    kind: &str,
+) -> Result<(&'static str, Vec<u8>), Box<dyn Error>> {
+    let timeline = match &scene.time_of_day {
+        Some(path) => Some(scene::load_time_of_day(path)?),
+        None => None,
+    };
+    match kind {
+        "info" => {
+            let image =
+                scene_pools::read_regular_nofollow(&scene.image, MAX_PREVIEW_BYTES, "scene PNG")?;
+            let decoded = scene::decode_index_png(&image)?;
+            let info = json!({
+                "width": decoded.width,
+                "height": decoded.height,
+                "source": scene.source,
+                "animation_manifest_present": scene.animation.is_some(),
+                "cycle_semantics": scene.cycle_semantics,
+                "time_of_day": timeline.as_ref().map(|timeline| json!({
+                    "rows": timeline.rows,
+                    "keyframe_count": timeline.keyframe_count(),
+                    "solar": timeline.solar_keyframes.is_some(),
+                })),
+            });
+            Ok((
+                "application/json; charset=utf-8",
+                serde_json::to_vec(&info)?,
+            ))
+        }
+        "tod-atlas" => {
+            let timeline = timeline.ok_or("scene has no time-of-day atlas")?;
+            let mut body = Vec::with_capacity(4 + timeline.rgba.len());
+            body.extend_from_slice(&timeline.rows.to_be_bytes());
+            body.extend_from_slice(&timeline.rgba);
+            Ok(("application/octet-stream", body))
+        }
+        "tod-keyframes" => {
+            let timeline = timeline.ok_or("scene has no time-of-day atlas")?;
+            let value = match &timeline.solar_keyframes {
+                Some(solar) => json!({
+                    "solar": true,
+                    "rows": timeline.rows,
+                    "keyframes": solar.iter().map(|keyframe| json!({
+                        "event": match keyframe.event {
+                            scene::SolarEvent::Sunrise => "sunrise",
+                            scene::SolarEvent::Sunset => "sunset",
+                        },
+                        "offset_minutes": keyframe.offset_minutes,
+                        "row": keyframe.row,
+                    })).collect::<Vec<_>>(),
+                }),
+                None => json!({
+                    "solar": false,
+                    "rows": timeline.rows,
+                    "keyframes": timeline.keyframes.iter().map(|keyframe| json!({
+                        "civil_seconds": keyframe.civil_seconds,
+                        "row": keyframe.row,
+                    })).collect::<Vec<_>>(),
+                }),
+            };
+            Ok((
+                "application/json; charset=utf-8",
+                serde_json::to_vec(&value)?,
+            ))
+        }
+        _ => Err("unknown time-of-day preview kind".into()),
     }
 }
 
@@ -1074,287 +1075,347 @@ fn write_response(stream: &mut TcpStream, response: HttpResponse) -> io::Result<
     stream.flush()
 }
 
+fn random_token() -> io::Result<String> {
+    let mut bytes = [0u8; 24];
+    fs::File::open("/dev/urandom")?.read_exact(&mut bytes)?;
+    Ok(bytes.iter().map(|byte| format!("{byte:02x}")).collect())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use png::{BitDepth, ColorType};
-    use std::{
-        os::unix::fs::symlink,
-        sync::atomic::{AtomicU64, Ordering},
-    };
-
-    static NEXT_TEMP: AtomicU64 = AtomicU64::new(0);
 
     fn temporary_root(label: &str) -> PathBuf {
-        let id = NEXT_TEMP.fetch_add(1, Ordering::Relaxed);
-        let path = env::temp_dir().join(format!(
-            "worldwall-curator-test-{}-{label}-{id}",
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!(
+            "worldwall-curator-{label}-{}-{nanos}",
             std::process::id()
         ));
-        fs::create_dir_all(&path).unwrap();
-        path
+        fs::create_dir_all(&root).unwrap();
+        root
     }
 
     fn png_bytes(width: u32, height: u32, color: ColorType, bytes: &[u8]) -> Vec<u8> {
-        let mut output = Vec::new();
+        let mut encoded = Vec::new();
         {
-            let mut encoder = png::Encoder::new(&mut output, width, height);
+            let mut encoder = png::Encoder::new(&mut encoded, width, height);
             encoder.set_color(color);
             encoder.set_depth(BitDepth::Eight);
+            if color == ColorType::Indexed {
+                encoder.set_palette(vec![0, 0, 0, 255, 255, 255]);
+            }
             let mut writer = encoder.write_header().unwrap();
             writer.write_image_data(bytes).unwrap();
         }
-        output
+        encoded
     }
 
     fn sample_library(root: &Path) {
-        let package = root.join("sample-package");
+        let package = root.join("canvascycle-demo");
         fs::create_dir_all(&package).unwrap();
-        let indices = png_bytes(2, 1, ColorType::Grayscale, &[0, 255]);
-        let mut palette = vec![0u8; 256 * 4];
-        for entry in palette.chunks_exact_mut(4) {
-            entry.copy_from_slice(&[10, 20, 30, 255]);
+        fs::write(
+            package.join("scene.png"),
+            png_bytes(2, 1, ColorType::Indexed, &[0, 1]),
+        )
+        .unwrap();
+        let mut palette = vec![7u8; 256 * 4];
+        for entry in palette.chunks_mut(4) {
+            entry[3] = 255;
         }
-        fs::write(package.join("scene.png"), &indices).unwrap();
         fs::write(
             package.join("palette.png"),
             png_bytes(256, 1, ColorType::Rgba, &palette),
         )
         .unwrap();
-        fs::write(package.join("scene.toml"), "schema_version = 1\nid = \"sample\"\nimage = \"scene.png\"\npalette = \"palette.png\"\n").unwrap();
+        fs::write(
+            package.join("scene.toml"),
+            "schema_version = 1\nid = \"canvascycle-demo\"\nimage = \"scene.png\"\npalette = \"palette.png\"\n",
+        )
+        .unwrap();
+        fs::write(
+            package.join("provenance.toml"),
+            "schema_version = 1\nsource_format = \"canvascycle-legacy-object-literal-v1\"\n",
+        )
+        .unwrap();
+        let digest = "a".repeat(64);
         fs::write(
             root.join("library.toml"),
-            r#"schema_version = 1
-[[scene]]
-id = "sample"
-package = "sample-package"
-source_collection = "local"
-world = "unknown"
-appearance = "unknown"
-image = "scene.png"
-image_sha256 = "0000000000000000000000000000000000000000000000000000000000000000"
-palette = "palette.png"
-palette_sha256 = "0000000000000000000000000000000000000000000000000000000000000000"
-source_format = "local-test"
-source_sha256 = "0000000000000000000000000000000000000000000000000000000000000000"
-source_url = "https://example.invalid/source"
-source_page = "https://example.invalid/"
-source_title = "Sample scene"
-license_state = "unreviewed"
-"#,
-        )
-        .unwrap();
-    }
-
-    #[test]
-    fn curator_options_use_xdg_defaults_and_allow_explicit_overrides() {
-        let home = env::var_os("HOME").unwrap_or_else(|| OsStr::new("/tmp").to_os_string());
-        let options = parse_options(&[]).unwrap();
-        let home_path = PathBuf::from(home);
-        let data_home = xdg_base("XDG_DATA_HOME", &home_path, ".local/share");
-        let config_home = xdg_base("XDG_CONFIG_HOME", &home_path, ".config");
-        assert_eq!(options.library, data_home.join("worldwall/scene-library"));
-        assert_eq!(
-            options.rules,
-            config_home.join("worldwall/scene-pools.toml")
-        );
-        assert!(options.rules_optional);
-        assert_eq!(
-            xdg_base_value(
-                Some(OsStr::new("relative/path")),
-                Path::new("/home/test"),
-                ".config"
+            format!(
+                "schema_version = 1\n\n[[scene]]\nid = \"canvascycle-demo\"\npackage = \"canvascycle-demo\"\nsource_collection = \"canvascycle\"\nworld = \"unknown\"\nappearance = \"unknown\"\nimage = \"scene.png\"\nimage_sha256 = \"{digest}\"\npalette = \"palette.png\"\npalette_sha256 = \"{digest}\"\nsource_format = \"canvascycle-legacy-object-literal-v1\"\nsource_sha256 = \"{digest}\"\nsource_url = \"https://example.invalid/capture\"\nsource_page = \"https://example.invalid/\"\nsource_title = \"Demo\"\nlicense_state = \"unreviewed\"\n"
             ),
-            PathBuf::from("/home/test/.config")
-        );
-        assert_eq!(
-            xdg_base_value(
-                Some(OsStr::new("/absolute/xdg")),
-                Path::new("/home/test"),
-                ".config"
-            ),
-            PathBuf::from("/absolute/xdg")
-        );
-        let explicit = parse_options(&[
-            "--library".into(),
-            "/tmp/library".into(),
-            "--rules".into(),
-            "/tmp/rules.toml".into(),
-        ])
-        .unwrap();
-        assert_eq!(explicit.library, PathBuf::from("/tmp/library"));
-        assert_eq!(explicit.rules, PathBuf::from("/tmp/rules.toml"));
-        assert!(!explicit.rules_optional);
-    }
-
-    #[test]
-    fn curator_options_reject_duplicates_unknowns_and_missing_values() {
-        assert!(parse_options(&["--other".into(), "x".into()]).is_err());
-        assert!(parse_options(&["--library".into()]).is_err());
-        assert!(
-            parse_options(&[
-                "--library".into(),
-                "a".into(),
-                "--library".into(),
-                "b".into()
-            ])
-            .is_err()
-        );
-    }
-
-    #[test]
-    fn catalog_loads_safe_metadata_and_preview_decodes_index_palette() {
-        let root = temporary_root("catalog");
-        sample_library(&root);
-        let catalog = load_catalog(&root).unwrap();
-        assert_eq!(catalog.scenes.len(), 1);
-        assert_eq!(catalog.scenes[0].title, "Sample scene");
-        let state = AppState {
-            catalog,
-            rules: None,
-            token: "token".into(),
-        };
-        let (_, indices) = preview_asset(&state, "sample", "indices").unwrap();
-        assert_eq!(&indices[..8], &[0, 0, 0, 2, 0, 0, 0, 1]);
-        assert_eq!(&indices[8..], &[0, 255]);
-        let (_, palette) = preview_asset(&state, "sample", "palette").unwrap();
-        assert_eq!(palette.len(), 1024);
-        assert_eq!(&palette[..4], &[10, 20, 30, 255]);
-        fs::remove_dir_all(root).unwrap();
-    }
-
-    #[test]
-    fn catalog_rejects_escaping_or_symlinked_package_assets_and_duplicate_ids() {
-        let root = temporary_root("unsafe");
-        sample_library(&root);
-        let package = root.join("sample-package");
-        let outside = root.join("outside.png");
-        fs::copy(package.join("scene.png"), &outside).unwrap();
-        fs::remove_file(package.join("scene.png")).unwrap();
-        symlink(&outside, package.join("scene.png")).unwrap();
-        assert!(load_catalog(&root).is_err());
-        fs::remove_file(package.join("scene.png")).unwrap();
-        fs::copy(&outside, package.join("scene.png")).unwrap();
-        let mut catalog = fs::read_to_string(root.join("library.toml")).unwrap();
-        catalog.push_str("\n[[scene]]\nid = \"sample\"\n");
-        fs::write(root.join("library.toml"), catalog).unwrap();
-        assert!(load_catalog(&root).is_err());
-        fs::remove_dir_all(root).unwrap();
-    }
-
-    #[test]
-    fn preview_routes_are_token_scoped_and_do_not_accept_filesystem_paths() {
-        let root = temporary_root("routes");
-        sample_library(&root);
-        let state = AppState {
-            catalog: load_catalog(&root).unwrap(),
-            rules: None,
-            token: "random-token".into(),
-        };
-        assert_eq!(route(&state, "/wrong/catalog").status, "404 Not Found");
-        assert_eq!(
-            route(&state, "/random-token/preview/../outside/indices").status,
-            "404 Not Found"
-        );
-        assert_eq!(
-            route(&state, "/random-token/preview/sample/indices").status,
-            "200 OK"
-        );
-        fs::remove_dir_all(root).unwrap();
-    }
-
-    #[test]
-    fn loopback_http_serves_token_scoped_catalog_json() {
-        let root = temporary_root("http");
-        sample_library(&root);
-        let state = AppState {
-            catalog: load_catalog(&root).unwrap(),
-            rules: None,
-            token: "local-token".into(),
-        };
-        let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
-        let address = listener.local_addr().unwrap();
-        let server = thread::spawn(move || {
-            let (stream, _) = listener.accept().unwrap();
-            handle_client(stream, &state).unwrap();
-        });
-        let mut client = TcpStream::connect(address).unwrap();
-        client
-            .write_all(b"GET /local-token/catalog HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n")
-            .unwrap();
-        let mut response = Vec::new();
-        client.read_to_end(&mut response).unwrap();
-        server.join().unwrap();
-        let response = String::from_utf8(response).unwrap();
-        assert!(response.starts_with("HTTP/1.1 200 OK\r\n"));
-        assert!(response.contains("Sample scene"));
-        assert!(!response.contains("scene.png"));
-        fs::remove_dir_all(root).unwrap();
-    }
-
-    #[test]
-    fn sidecar_summary_is_read_only_and_checks_pool_rule_structure() {
-        let root = temporary_root("rules");
-        let rules = root.join("scene-pools.toml");
-        fs::write(
-            &rules,
-            "schema_version = 1\n[[pool]]\nid = \"local-scenes\"\nsource = \"library\"\nenabled = true\nscene_ids = [\"sample\"]\n[[scene_rule]]\nscene_id = \"sample\"\nenabled = true\ntime_of_day = [\"day\"]\ntemperature_min_c = 20.0\nweather_any = [\"clear\", \"cloudy\"]\n",
         )
         .unwrap();
-        let summary = load_rules(&rules, false).unwrap().unwrap();
-        assert_eq!(summary.pools.len(), 1);
-        assert_eq!(summary.pools[0].id, "local-scenes");
-        assert_eq!(summary.rule_count, 1);
-        assert!(load_rules(&root.join("missing.toml"), false).is_err());
-        assert!(
-            load_rules(&root.join("missing.toml"), true)
-                .unwrap()
-                .is_none()
-        );
-        fs::write(
-            &rules,
-            "schema_version = 1\n[[pool]]\nid = \"local-scenes\"\nsource = \"library\"\nenabled = true\nscene_ids = [\"sample\"]\n[[scene_rule]]\nscene_id = \"sample\"\nenabled = true\ntemperature_min_c = 35.0\ntemperature_max_c = 20.0\n",
+    }
+
+    fn sample_state(root: &Path, rules_path: PathBuf) -> AppState {
+        let catalog = LibraryCatalog::load(root).unwrap();
+        app_state(
+            catalog
+                .scenes()
+                .iter()
+                .map(PreviewScene::from_catalog)
+                .collect(),
+            "".to_owned(),
+            rules_path,
         )
-        .unwrap();
-        assert!(load_rules(&rules, false).is_err());
+    }
+
+    fn app_state(
+        scenes: Vec<PreviewScene>,
+        registry_note: String,
+        rules_path: PathBuf,
+    ) -> AppState {
+        let mut by_id = HashMap::new();
+        for (index, scene) in scenes.iter().enumerate() {
+            by_id.entry(scene.id.clone()).or_insert(index);
+        }
+        AppState {
+            scenes,
+            by_id,
+            library_root: rules_path.clone(),
+            display_names: Mutex::new(HashMap::new()),
+            registry_note,
+            editor: Mutex::new(EditorState {
+                pools: None,
+                rules_path,
+                last_save: None,
+            }),
+            token: "0123".into(),
+        }
+    }
+
+    #[test]
+    fn editing_payloads_validate_and_save_atomically_with_private_permissions() {
+        let root = temporary_root("save");
+        sample_library(&root);
+        let rules_path = root.join("config").join("scene-pools.toml");
+        let state = sample_state(&root, rules_path.clone());
+        let body = br#"{"pools":[{"id":"canvascycle","source":"library","enabled":true,"scene_ids":["canvascycle-demo"]}],"scene_rules":[]}"#;
+        let value = save_rules_request(&state, body).unwrap();
+        assert_eq!(value["ok"], Value::Bool(true));
+        let saved = fs::read_to_string(&rules_path).unwrap();
+        assert!(saved.contains("id = \"canvascycle\""));
+        assert!(ScenePools::parse(&saved).is_ok(), "saved sidecar is valid");
+        let mode = fs::symlink_metadata(&rules_path)
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o777;
+        assert_eq!(mode, 0o600, "sidecar is same-user readable/writable only");
+        assert!(state.editor.lock().unwrap().pools.is_some());
+
+        // An invalid edit leaves the previous valid sidecar untouched.
+        let before = fs::read_to_string(&rules_path).unwrap();
+        let bad = br#"{"pools":[{"id":"a","source":"library","enabled":true,"scene_ids":["x"]},{"id":"b","source":"registry","enabled":true,"scene_ids":["x"]}],"scene_rules":[]}"#;
+        assert!(save_rules_request(&state, bad).is_err());
+        assert_eq!(fs::read_to_string(&rules_path).unwrap(), before);
         fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
-    fn private_firefox_profile_directory_is_mode_0700_and_removed() {
-        let profile = TempProfile::create().unwrap();
+    fn eligibility_uses_one_preview_snapshot_and_reports_reasons() {
+        let root = temporary_root("eligibility");
+        sample_library(&root);
+        let rules_path = root.join("scene-pools.toml");
+        let state = sample_state(&root, rules_path);
+        let body = br#"{"pools":[{"id":"canvascycle","source":"library","enabled":true,"scene_ids":["canvascycle-demo"]}],"scene_rules":[{"scene_id":"canvascycle-demo","enabled":true,"time_of_day":["day"],"temperature_min_c":10.0,"temperature_max_c":30.0,"weather_any":["clear"]}]}"#;
+        save_rules_request(&state, body).unwrap();
+
+        let eligible = eligibility_json(&state, "time=day&weather=clear&temperature=20");
+        assert_eq!(eligible["ok"], Value::Bool(true));
+        assert_eq!(eligible["scenes"][0]["eligible"], Value::Bool(true));
+
+        let mismatch = eligibility_json(&state, "time=night&weather=rain&temperature=unknown");
+        let reasons = mismatch["scenes"][0]["reasons"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|reason| reason["code"].as_str().unwrap())
+            .collect::<Vec<_>>();
         assert_eq!(
-            fs::metadata(&profile.0).unwrap().permissions().mode() & 0o777,
-            0o700
+            reasons,
+            [
+                "time-of-day-mismatch",
+                "weather-mismatch",
+                "temperature-unknown"
+            ]
         );
-        let prefs = profile.0.join("user.js");
-        assert_eq!(
-            fs::metadata(&prefs).unwrap().permissions().mode() & 0o777,
-            0o600
-        );
+        assert_eq!(mismatch["scenes"][0]["eligible"], Value::Bool(false));
+
+        let invalid = eligibility_json(&state, "time=sunset&weather=clear&temperature=20");
+        assert_eq!(invalid["ok"], Value::Bool(false));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn preview_routes_serve_real_indexed_pixels_palette_and_animation_metadata() {
+        let root = temporary_root("preview");
+        sample_library(&root);
+        let state = sample_state(&root, root.join("scene-pools.toml"));
+
+        let (_, indices) = preview_asset(&state, "canvascycle-demo", "indices").unwrap();
+        assert_eq!(&indices[..4], &2u32.to_be_bytes(), "width framing");
+        assert_eq!(&indices[4..8], &1u32.to_be_bytes(), "height framing");
+        assert_eq!(&indices[8..], &[0, 1], "raw decoded indices");
+
+        let (_, palette) = preview_asset(&state, "canvascycle-demo", "palette").unwrap();
+        assert_eq!(palette.len(), 256 * 4);
+
+        // No authored animation: the preview serves the runtime's static
+        // default (all slots effect=0) and never fabricates cycle data.
+        let (_, metadata) = preview_asset(&state, "canvascycle-demo", "animation").unwrap();
+        assert_eq!(metadata.len(), 256 * 32, "one metadata entry per slot");
         assert!(
-            fs::read_to_string(&prefs)
-                .unwrap()
-                .contains("toolkit.telemetry.enabled",)
+            metadata
+                .chunks(32)
+                .all(|entry| entry[0..4] == 0u32.to_ne_bytes()),
+            "static default metadata carries no effects"
         );
-        let path = profile.0.clone();
-        drop(profile);
-        assert!(!path.exists());
+        let (_, cycles) = preview_asset(&state, "canvascycle-demo", "cycle-indices").unwrap();
+        assert_eq!(cycles.len(), 256 * 4);
+        assert!(preview_asset(&state, "missing", "indices").is_err());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn registry_scenes_browse_with_source_marker_and_authored_animation() {
+        let root = temporary_root("registry-scenes");
+        let package = root.join("alpha");
+        fs::create_dir_all(&package).unwrap();
+        fs::write(
+            package.join("scene.png"),
+            png_bytes(2, 1, ColorType::Indexed, &[0, 1]),
+        )
+        .unwrap();
+        let mut palette = vec![7u8; 256 * 4];
+        for entry in palette.chunks_mut(4) {
+            entry[3] = 255;
+        }
+        fs::write(
+            package.join("palette.png"),
+            png_bytes(256, 1, ColorType::Rgba, &palette),
+        )
+        .unwrap();
+        fs::write(
+            package.join("scene.toml"),
+            "schema_version = 1\nid = \"alpha\"\nimage = \"scene.png\"\npalette = \"palette.png\"\nanimation = \"animation.toml\"\ntime_of_day = \"time_of_day.toml\"\n",
+        )
+        .unwrap();
+        fs::write(
+            package.join("animation.toml"),
+            "schema_version = 1\n\n[[group]]\nname = \"g\"\neffect = \"hue_cycle\"\nrange = [0, 3]\nspeed = 0.5\namplitude = 1.0\nphase = 0.0\n",
+        )
+        .unwrap();
+        fs::write(
+            package.join("time_of_day.toml"),
+            "schema_version = 1\natlas = \"time_of_day.png\"\n\n[[keyframe]]\ncivil_seconds = 0\nrow = 0\n\n[[keyframe]]\ncivil_seconds = 43200\nrow = 1\n",
+        )
+        .unwrap();
+        let mut atlas = vec![9u8; 256 * 2 * 4];
+        for entry in atlas.chunks_mut(4) {
+            entry[3] = 255;
+        }
+        fs::write(
+            package.join("time_of_day.png"),
+            png_bytes(256, 2, ColorType::Rgba, &atlas),
+        )
+        .unwrap();
+        fs::write(
+            root.join("registry.toml"),
+            "schema_version = 1\nscenes = [\"alpha\"]\nfallback = \"alpha\"\n",
+        )
+        .unwrap();
+
+        let registry = scene_registry::SceneRegistry::load(&root).unwrap();
+        let scenes = registry
+            .manifests()
+            .map(PreviewScene::from_manifest)
+            .collect::<Vec<_>>();
+        assert_eq!(scenes[0].source, "registry");
+        assert!(scenes[0].animation.is_some());
+        let state = app_state(
+            scenes,
+            "registry loaded".to_owned(),
+            root.join("rules.toml"),
+        );
+
+        // Registry scenes are browsable with their authored animation and
+        // time-of-day atlas through the same preview routes.
+        let catalog = catalog_json(&state);
+        assert_eq!(catalog["registry_note"], "registry loaded");
+        assert_eq!(catalog["scenes"][0]["source"], "registry");
+        assert_eq!(catalog["scenes"][0]["animation_manifest_present"], true);
+        assert_eq!(catalog["scenes"][0]["license_state"], "not-recorded");
+        let (_, metadata) = preview_asset(&state, "alpha", "animation").unwrap();
+        assert_eq!(metadata.len(), 256 * 32);
+        assert!(
+            metadata
+                .chunks(32)
+                .take(4)
+                .any(|entry| entry[0..4] != 0u32.to_ne_bytes()),
+            "authored effects reach the preview payload"
+        );
+        let (_, atlas) = preview_asset(&state, "alpha", "tod-atlas").unwrap();
+        assert_eq!(&atlas[..4], &2u32.to_be_bytes());
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
     fn preview_rejects_non_indexed_and_transparent_png_inputs() {
-        let root = temporary_root("png-reject");
-        sample_library(&root);
-        let package = root.join("sample-package");
-        let rgba = png_bytes(2, 1, ColorType::Rgba, &[1, 2, 3, 255, 1, 2, 3, 255]);
-        fs::write(package.join("scene.png"), rgba).unwrap();
-        let state = AppState {
-            catalog: load_catalog(&root).unwrap(),
-            rules: None,
-            token: "t".into(),
-        };
-        assert!(preview_asset(&state, "sample", "indices").is_err());
+        let root = temporary_root("preview-invalid");
+        let package = root.join("package");
+        fs::create_dir_all(&package).unwrap();
+        fs::write(
+            package.join("scene.png"),
+            png_bytes(1, 1, ColorType::Rgba, &[0, 0, 0, 255]),
+        )
+        .unwrap();
+        fs::write(
+            package.join("palette.png"),
+            png_bytes(256, 1, ColorType::Rgba, &vec![0; 256 * 4]),
+        )
+        .unwrap();
+        let bytes =
+            scene_pools::read_regular_nofollow(&package.join("scene.png"), MAX_PREVIEW_BYTES, "x")
+                .unwrap();
+        assert!(scene::decode_index_png(&bytes).is_err());
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn http_requests_accept_get_and_post_and_reject_oversized_bodies() {
+        let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let address = listener.local_addr().unwrap();
+        let mut client = TcpStream::connect(address).unwrap();
+        client
+            .write_all(b"POST /x/rules HTTP/1.1\r\nContent-Length: 4\r\n\r\nabcd")
+            .unwrap();
+        let (server, _) = listener.accept().unwrap();
+        server
+            .set_read_timeout(Some(Duration::from_secs(2)))
+            .unwrap();
+        let request = read_request(&server).unwrap();
+        assert_eq!(request.method, "POST");
+        assert_eq!(request.target, "/x/rules");
+        assert_eq!(request.body, b"abcd");
+        drop(server);
+        drop(client);
+
+        let mut client = TcpStream::connect(address).unwrap();
+        client
+            .write_all(b"POST /x/rules HTTP/1.1\r\nContent-Length: 999999999\r\n\r\n")
+            .unwrap();
+        let (server, _) = listener.accept().unwrap();
+        server
+            .set_read_timeout(Some(Duration::from_secs(2)))
+            .unwrap();
+        assert!(
+            read_request(&server).is_err(),
+            "oversized bodies are rejected"
+        );
     }
 }

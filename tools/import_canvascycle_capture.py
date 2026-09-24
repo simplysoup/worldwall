@@ -2,9 +2,15 @@
 """Import one explicitly captured CanvasCycle LBM object as a private package.
 
 This tool reads local bytes only. It never fetches or evaluates JavaScript.
-Source cycle fields are retained verbatim as raw metadata because their runtime
-rate/direction semantics have not been established from a captured source
-engine. Generated packages are local inspection data, not licensed assets.
+Source cycle fields are parsed as data and mapped to authored-byte
+`blend_shift` animation groups using the established Effect Games `Palette`
+cycle semantics (FM-0013): the source advances `rate * speed_adjust /
+CYCLE_SPEED` palette positions per second, the range length sets complete
+rotations, the site's Blend mode is exactly Worldwall's authored-byte
+`blend_shift`, and source reverse mode `2` is the reversed direction (signed
+speed). Unrepresented source modes are rejected, never guessed. The capture
+file remains the raw record. Generated packages are local inspection data,
+not licensed assets.
 """
 
 from __future__ import annotations
@@ -12,6 +18,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import math
 import os
 import re
 import shutil
@@ -28,6 +35,14 @@ MAX_CAPTURE_BYTES = 16 * 1024 * 1024
 MAX_PIXELS = 16 * 1024 * 1024
 MAX_CYCLES = 256
 PALETTE_ENTRIES = 256
+
+# Effect Games `Palette` cycle semantics (FM-0013): the source advances
+# `rate * source_speed_adjust / SOURCE_CYCLE_SPEED_BASE` palette positions per
+# second, the member count sets complete rotations, the site's Blend mode is
+# Worldwall's authored-byte blend_shift, and source reverse mode 2 is the
+# reversed direction (signed speed).
+SOURCE_CYCLE_SPEED_BASE = 280.0
+DEFAULT_SOURCE_SPEED_ADJUST = 1.0
 
 
 class CaptureError(ValueError):
@@ -217,8 +232,8 @@ class _LiteralReader:
                 break
             if set(fields) != {"reverse", "rate", "low", "high"}:
                 self._fail("cycle entry requires reverse, rate, low, and high")
-            if fields["low"] >= fields["high"]:
-                self._fail("cycle range must contain at least two palette indices")
+            if fields["low"] > fields["high"]:
+                self._fail("cycle range must not descend")
             cycles.append(SourceCycle(**fields))
             self._space()
             if self._take(","):
@@ -229,8 +244,18 @@ class _LiteralReader:
             self._expect("]")
             break
 
-        ordered = sorted(cycles, key=lambda cycle: (cycle.low, cycle.high))
-        for previous, current in zip(ordered, ordered[1:]):
+        # Inert slots (zero rate or single-member ranges, e.g. the engine's
+        # unused cycles) occupy nothing and are skipped by the animation
+        # mapping; only active real ranges can overlap.
+        active = sorted(
+            (
+                cycle
+                for cycle in cycles
+                if cycle.rate != 0 and cycle.low < cycle.high
+            ),
+            key=lambda cycle: (cycle.low, cycle.high),
+        )
+        for previous, current in zip(active, active[1:]):
             # Conservatively treat both authored endpoints as occupied; an
             # ambiguous shared index must not become overlapping GPU metadata.
             if current.low <= previous.high:
@@ -430,6 +455,56 @@ def _validate_url(value: str, label: str) -> None:
         raise CaptureError(f"{label} must be an HTTPS URL without user information")
 
 
+def derive_animation(
+    cycles: tuple[SourceCycle, ...], source_speed_adjust: float
+) -> str | None:
+    """Map active source cycles to signed blend_shift groups (FM-0013).
+
+    Active cycles are those with a nonzero rate and a range of at least two
+    palette indices. Source reverse mode 2 reverses the direction (negative
+    speed); any other reverse mode is unrepresented in Worldwall and is
+    rejected rather than silently mapped.
+    """
+    if not math.isfinite(source_speed_adjust) or source_speed_adjust <= 0:
+        raise CaptureError("source speed adjust must be a positive finite number")
+    active = [cycle for cycle in cycles if cycle.rate != 0 and cycle.low < cycle.high]
+    for cycle in active:
+        if cycle.reverse not in (0, 2):
+            raise CaptureError(
+                f"unsupported source reverse mode {cycle.reverse}; "
+                "only modes 0 and 2 map to signed blend_shift"
+            )
+    if not active:
+        return None
+    lines = [
+        "schema_version = 1",
+        f"# source-speed-adjust = {source_speed_adjust:g}",
+        f"# source-cycle-speed-base = {SOURCE_CYCLE_SPEED_BASE:g}",
+        "# mapping = FM-0013 signed authored-byte blend_shift; source reverse mode 2 = reversed",
+        "",
+    ]
+    for number, cycle in enumerate(active, 1):
+        member_count = cycle.high - cycle.low + 1
+        speed = (
+            cycle.rate * source_speed_adjust / SOURCE_CYCLE_SPEED_BASE / member_count
+        )
+        if cycle.reverse == 2:
+            speed = -speed
+        lines.extend(
+            [
+                "[[group]]",
+                f'name = "source-cycle-{number:02d}"',
+                'effect = "blend_shift"',
+                f"range = [{cycle.low}, {cycle.high}]",
+                f"speed = {speed:.6f}",
+                "amplitude = 1.0",
+                "phase = 0.0",
+                "",
+            ]
+        )
+    return "\n".join(lines)
+
+
 def materialize_package(
     capture: Capture,
     source_sha256: str,
@@ -438,6 +513,7 @@ def materialize_package(
     source_url: str,
     source_page: str,
     source_title: str,
+    source_speed_adjust: float = DEFAULT_SOURCE_SPEED_ADJUST,
 ) -> None:
     """Write a new private package directory without replacing existing data."""
     _validate_id(scene_id)
@@ -480,16 +556,19 @@ def materialize_package(
             capture.pixels[row * capture.width : (row + 1) * capture.width]
             for row in range(capture.height)
         ]
+        animation_document = derive_animation(capture.cycles, source_speed_adjust)
         palette_png = _png(256, 1, 6, [palette])
         scene_png = _png(capture.width, capture.height, 0, scene_rows)
         _write_private(staging / "scene.png", scene_png)
         _write_private(staging / "palette.png", palette_png)
 
+        animation_field = 'animation = "animation.toml"\n' if animation_document else ""
         scene_manifest = (
             "schema_version = 1\n"
             f"id = {_toml_string(scene_id)}\n"
             'image = "scene.png"\n'
             'palette = "palette.png"\n'
+            f"{animation_field}"
         )
         _write_private(staging / "scene.toml", scene_manifest.encode("utf-8"))
 
@@ -503,31 +582,12 @@ def materialize_package(
             f"source_page = {_toml_string(source_page)}",
             f"source_title = {_toml_string(source_title)}",
             'license_state = "unreviewed"',
-            'cycle_file = "source-cycles.toml"',
-            'cycle_semantics = "unmapped-source-native"',
             "",
         ]
         _write_private(staging / "provenance.toml", "\n".join(provenance).encode("utf-8"))
 
-        cycle_lines = [
-            "schema_version = 1",
-            'source_format = "canvascycle-legacy-object-literal-v1"',
-            'reverse_semantics = "unknown"',
-            'rate_semantics = "unknown"',
-            "",
-        ]
-        for cycle in capture.cycles:
-            cycle_lines.extend(
-                [
-                    "[[cycle]]",
-                    f"reverse = {cycle.reverse}",
-                    f"rate = {cycle.rate}",
-                    f"low = {cycle.low}",
-                    f"high = {cycle.high}",
-                    "",
-                ]
-            )
-        _write_private(staging / "source-cycles.toml", "\n".join(cycle_lines).encode("utf-8"))
+        if animation_document:
+            _write_private(staging / "animation.toml", animation_document.encode("utf-8"))
         os.chmod(staging, 0o700)
         if os.path.lexists(output):
             raise CaptureError("output appeared during import; refusing to overwrite it")
@@ -558,6 +618,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--source-url", help="provenance URL; never fetched")
     parser.add_argument("--source-page", help="provenance page URL; never fetched")
     parser.add_argument("--source-title", help="exact source title from local provenance notes")
+    parser.add_argument(
+        "--source-speed-adjust",
+        type=float,
+        default=DEFAULT_SOURCE_SPEED_ADJUST,
+        help="source site speed-control multiplier for cycle mapping (default 1.0 = base)",
+    )
     args = parser.parse_args(argv)
 
     try:
@@ -585,9 +651,12 @@ def main(argv: list[str] | None = None) -> int:
             args.source_url,
             args.source_page,
             args.source_title,
+            args.source_speed_adjust,
         )
         print(f"wrote private inspection package: {args.output}")
-        print("cycle rate/direction remain unmapped; license state is unreviewed")
+        print(
+            "source cycles mapped to signed blend_shift (FM-0013); license state is unreviewed"
+        )
         return 0
     except CaptureError as error:
         print(f"canvascycle-import: {error}", file=sys.stderr)

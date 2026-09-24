@@ -11,6 +11,7 @@ from tools.import_canvascycle_capture import (
     MAX_CYCLES,
     MAX_PIXELS,
     CaptureError,
+    derive_animation,
     parse_capture,
     read_capture,
     materialize_package,
@@ -162,20 +163,53 @@ class CanvasCycleCaptureTests(unittest.TestCase):
             scene_manifest = (output / "scene.toml").read_text(encoding="utf-8")
             self.assertIn("schema_version = 1\n", scene_manifest)
             self.assertIn('image = "scene.png"', scene_manifest)
+            self.assertIn('animation = "animation.toml"', scene_manifest)
             provenance = (output / "provenance.toml").read_text(encoding="utf-8")
             self.assertIn(f'source_sha256 = "{digest}"', provenance)
             self.assertIn('license_state = "unreviewed"', provenance)
-            self.assertIn('cycle_semantics = "unmapped-source-native"', provenance)
-            cycles = (output / "source-cycles.toml").read_text(encoding="utf-8")
-            self.assertIn('rate_semantics = "unknown"', cycles)
-            self.assertIn("rate = 2457", cycles)
-            self.assertFalse((output / "animation.toml").exists())
+            self.assertNotIn("cycle_semantics", provenance)
+            self.assertNotIn("cycle_file", provenance)
+            # FM-0013 mapping: rate 2457, range 10..=14 (5 members), base 280,
+            # adjust 1.0, source reverse mode 2 (reversed) -> signed speed.
+            animation = (output / "animation.toml").read_text(encoding="utf-8")
+            self.assertIn('effect = "blend_shift"', animation)
+            self.assertIn("range = [10, 14]", animation)
+            self.assertIn("speed = -1.755000", animation)
+            self.assertIn("# source-speed-adjust = 1", animation)
+            self.assertFalse((output / "source-cycles.toml").exists())
             self.assertFalse(
                 any(
                     key in provenance
                     for key in ("time_of_day =", "weather =", "temperature =")
                 )
             )
+
+    def test_cycle_mapping_uses_range_length_and_signed_reverse(self):
+        cycles = parse_capture(
+            sample_source(
+                cycles=(
+                    "{reverse:0,rate:280,low:4,high:5},"
+                    "{reverse:1,rate:560,low:8,high:9}"
+                )
+            )
+        ).cycles
+        # 280 * 1.0 / 280 / 2 members = 0.5 rotations per second, forward.
+        animation = derive_animation(cycles[:1], 1.0)
+        self.assertIn("speed = 0.500000", animation)
+        # Reverse mode 2 reverses; mode 1 is unrepresented and must be rejected.
+        reversed_only = tuple(
+            cycle for cycle in cycles[:1]
+        ) + (cycles[1].__class__(2, 560, 8, 9),)
+        self.assertIn("speed = -1.000000", derive_animation(reversed_only[1:], 1.0))
+        with self.assertRaisesRegex(CaptureError, "reverse mode 1"):
+            derive_animation(cycles[1:], 1.0)
+        # Inactive cycles (zero rate or inert single-member slots) map to no
+        # animation groups at all.
+        self.assertIsNone(
+            derive_animation((cycles[0].__class__(0, 0, 4, 5),), 1.0)
+        )
+        with_inert = cycles[:1] + (cycles[0].__class__(0, 0, 7, 7),)
+        self.assertEqual(derive_animation(with_inert, 1.0).count("[[group]]"), 1)
 
     def test_materializer_rejects_malformed_provenance_without_traceback_or_output(self):
         capture = parse_capture(sample_source())

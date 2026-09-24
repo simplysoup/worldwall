@@ -37,11 +37,12 @@ use crate::{
     power::{PausedAnimationClock, PowerAction, PowerEvent, PowerEventSource, PowerStateMachine},
     renderer::{AllocationCounters, OutputRenderer, RenderOutcome, Renderer, SharedRenderer},
     scene::{ResolvedPaletteSample, Scene},
+    scene_pools::{PoolEnvironment, PoolGate, ScenePools},
     scene_registry::{
         AdaptiveSelectionState, CommitOutcome, EnvironmentSnapshot, LoadedScene,
         PrecipitationAppearance, RegistryError, SceneLoadCompletion, SceneLoadJob, SceneLoadToken,
         SceneLoadWorker, SceneManifest, SceneRegistry, SceneTransaction, SelectionController,
-        SelectionRequest, SelectionTrigger,
+        SelectionRequest, SelectionResult, SelectionTrigger,
     },
     scheduler::{Fps, FrameScheduler},
     selection_state::AdaptiveSelectionStateStore,
@@ -183,9 +184,12 @@ pub fn run() -> Result<(), Box<dyn Error>> {
     // has no public control source yet, so only startup is invoked here; a
     // later explicit request must use the begin/complete handoff below rather
     // than letting output/config/weather callbacks select implicitly.
+    let (registry, pools) = config.prepare_sources()?;
     let (scene, mut registry_selection) = load_scene(
         civil_time.snapshot(weather.weather()),
-        config.registry_dir.as_deref(),
+        registry,
+        pools,
+        weather.adaptive_input().0,
     )?;
     let mut renderer = Renderer::new_with_scene(&connection, layer.wl_surface(), extent, &scene)?;
     println!(
@@ -313,9 +317,11 @@ pub fn run() -> Result<(), Box<dyn Error>> {
         if let Some(generation) = power.begin_resume_if_ready(client.physical_extent().is_some()) {
             weather.refresh_for_resume();
             let snapshot = civil_time.snapshot(weather.weather());
+            let (temperature_c, _) = weather.adaptive_input();
             if let Some(selection) = registry_selection.as_mut() {
                 match selection.begin_explicit_request(
                     snapshot,
+                    temperature_c,
                     generation,
                     SelectionTrigger::Resume,
                 ) {
@@ -331,7 +337,7 @@ pub fn run() -> Result<(), Box<dyn Error>> {
                         }
                     }
                     Err(error) => eprintln!(
-                        "trace resume-selection generation={generation} outcome=retained error={error}"
+                        "trace resume-selection generation={generation} outcome=retained error={error:?}"
                     ),
                 }
             } else {
@@ -802,8 +808,16 @@ struct RegistrySelection {
 
 impl RegistrySelection {
     fn from_registry(registry: SceneRegistry) -> Self {
+        Self::from_sources(registry, None)
+    }
+
+    /// Build one selection seam from a complete validated candidate: the
+    /// merged scene set plus the shared pool/rules gate (when configured).
+    fn from_sources(registry: SceneRegistry, pools: Option<ScenePools>) -> Self {
+        let mut controller = SelectionController::new(registry);
+        controller.set_pools(pools);
         Self {
-            controller: SelectionController::new(registry),
+            controller,
             transaction: SceneTransaction::default(),
             adaptive_state: None,
             pending_full_generation: None,
@@ -811,15 +825,24 @@ impl RegistrySelection {
     }
 
     fn startup(
-        root: std::path::PathBuf,
+        registry: SceneRegistry,
+        pools: Option<ScenePools>,
         snapshot: EnvironmentSnapshot,
+        temperature_c: Option<f32>,
     ) -> Result<(Self, Scene), Box<dyn Error>> {
-        let registry = SceneRegistry::load(root)?;
-        let mut selection = Self::from_registry(registry);
+        let pool_mode = pools.is_some();
+        let mut selection = Self::from_sources(registry, pools);
         let request = selection
             .controller
-            .request(snapshot, 0, SelectionTrigger::Startup)
-            .map_err(|result| format!("startup registry selection failed: {result:?}"))?;
+            .request(snapshot, temperature_c, 0, SelectionTrigger::Startup)
+            .map_err(|result| match &result {
+                // Startup fails closed before presentation; the diagnostic is
+                // bounded and never includes coordinates or weather details.
+                SelectionResult::NoScene(_) if pool_mode => {
+                    "startup selection unavailable: no eligible scene".to_owned()
+                }
+                other => format!("startup registry selection failed: {other:?}"),
+            })?;
         let token = selection.transaction.begin(&request);
         let manifest = selection
             .controller
@@ -851,20 +874,33 @@ impl RegistrySelection {
     }
 
     fn startup_adaptive(
-        root: std::path::PathBuf,
+        registry: SceneRegistry,
+        pools: Option<ScenePools>,
+        snapshot: EnvironmentSnapshot,
         temperature_c: Option<f32>,
         appearance: PrecipitationAppearance,
         previous_state: Option<AdaptiveSelectionState>,
     ) -> Result<(Self, Scene), Box<dyn Error>> {
-        let registry = SceneRegistry::load(root)?;
         registry.validate_adaptive()?;
-        let decision = registry.adaptive_full_selection(
-            temperature_c,
-            appearance,
-            previous_state.as_ref(),
-            None,
-        )?;
-        let mut selection = Self::from_registry(registry);
+        let pool_mode = pools.is_some();
+        let environment = PoolEnvironment::new(&snapshot, temperature_c);
+        let gate = pool_gate(pools.as_ref(), &environment);
+        let decision = registry
+            .adaptive_full_selection(
+                temperature_c,
+                appearance,
+                previous_state.as_ref(),
+                None,
+                gate.as_ref(),
+            )
+            .map_err(|error| {
+                if pool_mode && error.to_string() == "no eligible candidate" {
+                    "startup selection unavailable: no eligible scene".to_owned()
+                } else {
+                    error.to_string()
+                }
+            })?;
+        let mut selection = Self::from_sources(registry, pools);
         let request = selection
             .controller
             .request_selected(
@@ -912,6 +948,7 @@ impl RegistrySelection {
 
     fn begin_adaptive_full_job(
         &mut self,
+        snapshot: EnvironmentSnapshot,
         temperature_c: Option<f32>,
         appearance: PrecipitationAppearance,
         trigger: SelectionTrigger,
@@ -919,6 +956,8 @@ impl RegistrySelection {
         if !matches!(trigger, SelectionTrigger::Resume | SelectionTrigger::Reload) {
             return Err("adaptive full selection requires resume or reload".into());
         }
+        let environment = PoolEnvironment::new(&snapshot, temperature_c);
+        let gate = pool_gate(self.controller.pools(), &environment);
         let active_id = self
             .transaction
             .active()
@@ -937,6 +976,7 @@ impl RegistrySelection {
                 appearance,
                 previous_state.as_ref(),
                 active_id.as_deref(),
+                gate.as_ref(),
             )
             .map_err(|error| error.to_string())?;
         if active_id.as_deref() == Some(decision.scene_id.as_str()) {
@@ -970,6 +1010,8 @@ impl RegistrySelection {
 
     fn begin_adaptive_variant_job(
         &mut self,
+        snapshot: EnvironmentSnapshot,
+        temperature_c: Option<f32>,
         appearance: PrecipitationAppearance,
     ) -> Result<Option<SceneLoadJob>, String> {
         // Do not let a weather-only candidate supersede a full family choice.
@@ -977,6 +1019,8 @@ impl RegistrySelection {
         if self.pending_full_generation.is_some() {
             return Ok(None);
         }
+        let environment = PoolEnvironment::new(&snapshot, temperature_c);
+        let gate = pool_gate(self.controller.pools(), &environment);
         let Some(active_id) = self.transaction.active().map(|scene| scene.id.clone()) else {
             return Ok(None);
         };
@@ -992,12 +1036,24 @@ impl RegistrySelection {
             .clone()
             .filter(|state| state.family_id == active_state.family_id)
             .unwrap_or(active_state);
+        let ungated = self.controller.registry().adaptive_variant_in_family(
+            &state.family_id,
+            appearance,
+            None,
+        );
         let Some(manifest) = self
             .controller
             .registry()
-            .adaptive_variant_in_family(&state.family_id, appearance)
+            .adaptive_variant_in_family(&state.family_id, appearance, gate.as_ref())
             .cloned()
         else {
+            if ungated.is_some() && gate.is_some() {
+                // Retain the resident scene and report no eligible alternative
+                // without crossing families or mutating stored state.
+                eprintln!(
+                    "trace adaptive-scene-selection state=no-eligible-candidate trigger=weather reason=no-eligible-variant"
+                );
+            }
             return Ok(None);
         };
         if manifest.id == active_id {
@@ -1027,13 +1083,13 @@ impl RegistrySelection {
     fn begin_explicit_request(
         &mut self,
         snapshot: EnvironmentSnapshot,
+        temperature_c: Option<f32>,
         seed: u64,
         trigger: SelectionTrigger,
-    ) -> Result<(SelectionRequest, SceneLoadToken, SceneManifest), Box<dyn Error>> {
+    ) -> Result<(SelectionRequest, SceneLoadToken, SceneManifest), SelectionResult> {
         let request = self
             .controller
-            .request(snapshot, seed, trigger)
-            .map_err(|result| format!("explicit scene request was not accepted: {result:?}"))?;
+            .request(snapshot, temperature_c, seed, trigger)?;
         self.pending_full_generation = None;
         let token = self.transaction.begin(&request);
         let manifest = self
@@ -1041,7 +1097,12 @@ impl RegistrySelection {
             .registry()
             .get(&request.id)
             .cloned()
-            .ok_or_else(|| format!("validated registry lost requested scene {:?}", request.id))?;
+            .ok_or_else(|| {
+                SelectionResult::Rejected(format!(
+                    "validated registry lost requested scene {:?}",
+                    request.id
+                ))
+            })?;
         Ok((request, token, manifest))
     }
 
@@ -1141,13 +1202,22 @@ impl RegistrySelection {
     }
 }
 
+fn pool_gate<'a>(
+    pools: Option<&'a ScenePools>,
+    environment: &'a PoolEnvironment,
+) -> Option<PoolGate<'a>> {
+    pools.map(|pools| PoolGate { pools, environment })
+}
+
 fn load_scene(
     snapshot: EnvironmentSnapshot,
-    registry_dir: Option<&std::path::Path>,
+    registry: Option<SceneRegistry>,
+    pools: Option<ScenePools>,
+    temperature_c: Option<f32>,
 ) -> Result<(Scene, Option<RegistrySelection>), Box<dyn Error>> {
-    if let Some(root) = registry_dir {
+    if let Some(registry) = registry {
         let (selection, scene) =
-            RegistrySelection::startup(std::path::PathBuf::from(root), snapshot)?;
+            RegistrySelection::startup(registry, pools, snapshot, temperature_c)?;
         return Ok((scene, Some(selection)));
     }
 
@@ -1194,19 +1264,32 @@ fn load_startup_scene_off_thread(
     previous_state: Option<AdaptiveSelectionState>,
 ) -> Result<(Scene, Option<RegistrySelection>), Box<dyn Error>> {
     let adaptive = config.adaptive_scenes;
-    let registry_dir = config.registry_dir.clone();
+    let config = config.clone();
     thread::Builder::new()
         .name("worldwall-scene-startup".to_owned())
         .spawn(move || {
+            // Registry, sidecar, and pool packages are validated as one
+            // candidate on this worker, never on the Wayland owner.
+            let (registry, pools) = config
+                .prepare_sources()
+                .map_err(|error| error.to_string())?;
             if adaptive {
-                let root = registry_dir
+                let registry = registry
                     .ok_or_else(|| "adaptive selection has no validated registry".to_owned())?;
                 let (temperature_c, appearance) = adaptive_input;
-                RegistrySelection::startup_adaptive(root, temperature_c, appearance, previous_state)
-                    .map(|(selection, scene)| (scene, Some(selection)))
-                    .map_err(|error| error.to_string())
+                RegistrySelection::startup_adaptive(
+                    registry,
+                    pools,
+                    snapshot,
+                    temperature_c,
+                    appearance,
+                    previous_state,
+                )
+                .map(|(selection, scene)| (scene, Some(selection)))
+                .map_err(|error| error.to_string())
             } else {
-                load_scene(snapshot, registry_dir.as_deref()).map_err(|error| error.to_string())
+                load_scene(snapshot, registry, pools, adaptive_input.0)
+                    .map_err(|error| error.to_string())
             }
         })?
         .join()
@@ -2756,6 +2839,7 @@ fn apply_config_candidate(
     apply_config_candidate_with_weather_factory(
         prepared.config,
         prepared.registry,
+        prepared.pools,
         active_config,
         selection,
         schedulers,
@@ -2769,6 +2853,7 @@ fn apply_config_candidate(
 fn apply_config_candidate_with_weather_factory(
     mut candidate: AppConfig,
     prepared_registry: Option<SceneRegistry>,
+    prepared_pools: Option<ScenePools>,
     active_config: &mut AppConfig,
     selection: &mut Option<RegistrySelection>,
     schedulers: &mut BTreeMap<u32, FrameScheduler>,
@@ -2777,6 +2862,8 @@ fn apply_config_candidate_with_weather_factory(
     weather_factory: impl FnOnce(&AppConfig) -> Result<WeatherRuntime, Box<dyn Error>>,
 ) -> Result<Fps, String> {
     let registry_changed = candidate.registry_dir != active_config.registry_dir;
+    let pool_mode =
+        candidate.scene_pools_file.is_some() || active_config.scene_pools_file.is_some();
     let civil_time_changed = candidate.location != active_config.location
         || candidate.timezone != active_config.timezone;
     let weather_changed = candidate.weather_provider != active_config.weather_provider
@@ -2803,7 +2890,23 @@ fn apply_config_candidate_with_weather_factory(
         None
     };
 
-    if registry_changed {
+    if pool_mode {
+        // One validated pool/rule candidate (sidecar, merged scene set, and
+        // gate) commits atomically in a single step. Nothing here selects a
+        // scene; later automatic triggers see the new eligibility state.
+        if let Some(registry) = replacement {
+            if let Some(active) = selection.as_mut() {
+                active.controller.replace_sources(registry, prepared_pools);
+            } else {
+                *selection = Some(RegistrySelection::from_sources(registry, prepared_pools));
+            }
+        } else {
+            // Removing the last configured source (pool sidecar and registry)
+            // restores legacy synthetic-scene mode. Do not retain a synthetic
+            // empty registry that would make future requests fail.
+            *selection = None;
+        }
+    } else if registry_changed {
         match replacement {
             Some(registry) => {
                 if let Some(active) = selection.as_mut() {
@@ -3067,7 +3170,9 @@ fn handle_ipc_requests(
                     (Some(active), Some(_renderer)) => {
                         if config.adaptive_scenes && trigger == SelectionTrigger::Reload {
                             let (temperature_c, appearance) = weather.adaptive_input();
+                            let snapshot = civil_time.snapshot(weather.weather());
                             match active.begin_adaptive_full_job(
+                                snapshot,
                                 temperature_c,
                                 appearance,
                                 SelectionTrigger::Reload,
@@ -3112,7 +3217,13 @@ fn handle_ipc_requests(
                         } else {
                             let snapshot = civil_time.snapshot(weather.weather());
                             let seed = u64::from(civil_time.seconds());
-                            match active.begin_explicit_request(snapshot, seed, trigger) {
+                            let (temperature_c, _) = weather.adaptive_input();
+                            match active.begin_explicit_request(
+                                snapshot,
+                                temperature_c,
+                                seed,
+                                trigger,
+                            ) {
                                 Ok((selection_request, token, manifest)) => {
                                     let generation = selection_request.generation;
                                     let job = SceneLoadJob {
@@ -3136,9 +3247,22 @@ fn handle_ipc_requests(
                                         ),
                                     }
                                 }
-                                Err(error) => {
-                                    ipc::error_response("selection_rejected", error.to_string())
+                                Err(SelectionResult::Noop(reason))
+                                    if config.scene_pools_file.is_some() =>
+                                {
+                                    // With pool rules configured an automatic
+                                    // attempt with no eligible candidate is an
+                                    // explicit no-op with a bounded reason; it
+                                    // never selects an ineligible fallback.
+                                    ipc::success_response(
+                                        command_name,
+                                        json!({"applied": false, "outcome": "noop", "reason": reason}),
+                                    )
                                 }
+                                Err(error) => ipc::error_response(
+                                    "selection_rejected",
+                                    format!("explicit scene request was not accepted: {error:?}"),
+                                ),
                             }
                         }
                     }
@@ -3247,11 +3371,15 @@ fn run_multi_presenting<'wayland>(
                 if pending_ipc.is_some() {
                     deferred_weather_reconsideration = true;
                 } else {
-                    let (_, appearance) = weather.adaptive_input();
+                    let (temperature_c, appearance) = weather.adaptive_input();
                     if appearance != PrecipitationAppearance::Unknown
                         && let Some(active) = selection.as_mut()
                     {
-                        match active.begin_adaptive_variant_job(appearance) {
+                        match active.begin_adaptive_variant_job(
+                            civil_time.snapshot(weather.weather()),
+                            temperature_c,
+                            appearance,
+                        ) {
                             Ok(Some(job)) => {
                                 submit_scene_load_job(scene_loader.as_ref(), active, job)
                             }
@@ -3388,6 +3516,7 @@ fn run_multi_presenting<'wayland>(
                     let (temperature_c, appearance) = weather.adaptive_input();
                     if let Some(active) = selection.as_mut() {
                         match active.begin_adaptive_full_job(
+                            civil_time.snapshot(weather.weather()),
                             temperature_c,
                             appearance,
                             SelectionTrigger::Resume,
@@ -3485,9 +3614,13 @@ fn run_multi_presenting<'wayland>(
                         Ok(CommitOutcome::Applied { .. } | CommitOutcome::Unchanged { .. })
                     )
                 {
-                    let (_, appearance) = weather.adaptive_input();
+                    let (temperature_c, appearance) = weather.adaptive_input();
                     if appearance != PrecipitationAppearance::Unknown {
-                        match active.begin_adaptive_variant_job(appearance) {
+                        match active.begin_adaptive_variant_job(
+                            civil_time.snapshot(weather.weather()),
+                            temperature_c,
+                            appearance,
+                        ) {
                             Ok(Some(job)) => {
                                 submit_scene_load_job(scene_loader.as_ref(), active, job)
                             }
@@ -3507,6 +3640,7 @@ fn run_multi_presenting<'wayland>(
                 let (temperature_c, appearance) = weather.adaptive_input();
                 if let Some(active) = selection.as_mut() {
                     match active.begin_adaptive_full_job(
+                        civil_time.snapshot(weather.weather()),
                         temperature_c,
                         appearance,
                         SelectionTrigger::Resume,
@@ -3525,11 +3659,15 @@ fn run_multi_presenting<'wayland>(
                 && deferred_weather_reconsideration
             {
                 deferred_weather_reconsideration = false;
-                let (_, appearance) = weather.adaptive_input();
+                let (temperature_c, appearance) = weather.adaptive_input();
                 if appearance != PrecipitationAppearance::Unknown
                     && let Some(active) = selection.as_mut()
                 {
-                    match active.begin_adaptive_variant_job(appearance) {
+                    match active.begin_adaptive_variant_job(
+                        civil_time.snapshot(weather.weather()),
+                        temperature_c,
+                        appearance,
+                    ) {
                         Ok(Some(job)) => submit_scene_load_job(scene_loader.as_ref(), active, job),
                         Ok(None) => {}
                         Err(error) => eprintln!(
@@ -4095,6 +4233,7 @@ mod tests {
             weather_location: Some(location),
             cache_scope: Some(cache_scope),
             source_path: None,
+            scene_pools_file: None,
         }
     }
 
@@ -4155,6 +4294,7 @@ mod tests {
                 PreparedAppConfig {
                     config: candidate,
                     registry: None,
+                    pools: None,
                 },
                 &mut active_config,
                 &mut selection,
@@ -4213,6 +4353,7 @@ mod tests {
         let mut selection = adaptive_test_selection();
         let pending = selection
             .begin_adaptive_full_job(
+                EnvironmentSnapshot::unknown(),
                 Some(0.0),
                 PrecipitationAppearance::Clear,
                 SelectionTrigger::Resume,
@@ -4223,7 +4364,11 @@ mod tests {
         let selection_generation = selection.controller.generation();
         assert!(
             selection
-                .begin_adaptive_variant_job(PrecipitationAppearance::Rain)
+                .begin_adaptive_variant_job(
+                    EnvironmentSnapshot::unknown(),
+                    None,
+                    PrecipitationAppearance::Rain,
+                )
                 .unwrap()
                 .is_none(),
             "weather-only work must not supersede a pending family choice"
@@ -4232,6 +4377,7 @@ mod tests {
         assert!(
             selection
                 .begin_adaptive_full_job(
+                    EnvironmentSnapshot::unknown(),
                     Some(20.0),
                     PrecipitationAppearance::Clear,
                     SelectionTrigger::Reload,
@@ -4321,6 +4467,7 @@ mod tests {
         apply_config_candidate_with_weather_factory(
             candidate,
             None,
+            None,
             &mut active_config,
             &mut selection,
             &mut schedulers,
@@ -4369,6 +4516,101 @@ mod tests {
     }
 
     #[test]
+    fn pool_candidate_commits_atomically_without_selecting_and_keeps_resident_scene() {
+        use crate::scene_pools::ScenePools;
+
+        let mut active_config = AppConfig {
+            schema_version: 5,
+            registry_dir: None,
+            fps: Fps::Thirty,
+            animation_speed_multiplier: 0.5,
+            location: None,
+            timezone: None,
+            weather_provider: crate::config::WeatherProvider::Disabled,
+            adaptive_scenes: false,
+            weather_location: None,
+            cache_scope: None,
+            source_path: None,
+            scene_pools_file: None,
+        };
+        let mut civil_time = CivilTimeRuntime::from_config(&active_config).unwrap();
+        let mut weather = WeatherRuntime::from_config(&active_config).unwrap();
+        let mut selection = Some(resident_selection());
+        let generation = selection.as_ref().unwrap().controller.generation();
+        let mut schedulers = BTreeMap::new();
+
+        let mut candidate = active_config.clone();
+        candidate.scene_pools_file = Some("/tmp/test-scene-pools.toml".into());
+        let pools = ScenePools::parse(
+            "schema_version = 1\n\n[[pool]]\nid = \"demo\"\nsource = \"library\"\nenabled = true\nscene_ids = []\n",
+        )
+        .unwrap();
+        assert_eq!(
+            apply_config_candidate(
+                PreparedAppConfig {
+                    config: candidate,
+                    registry: Some(SceneRegistry::empty()),
+                    pools: Some(pools),
+                },
+                &mut active_config,
+                &mut selection,
+                &mut schedulers,
+                &mut civil_time,
+                &mut weather,
+            )
+            .unwrap(),
+            Fps::Thirty
+        );
+        let resident = selection.as_ref().unwrap();
+        // Atomic apply: pool state is live, nothing was selected, and the
+        // resident scene and its resources are retained.
+        assert!(resident.controller.pools().is_some());
+        assert_eq!(resident.controller.generation(), generation);
+        assert_eq!(resident.transaction.active().unwrap().id, "resident-scene");
+    }
+
+    #[test]
+    fn removing_pool_sidecar_without_registry_clears_selection_source() {
+        let mut active_config = AppConfig {
+            schema_version: 5,
+            registry_dir: None,
+            fps: Fps::Thirty,
+            animation_speed_multiplier: 0.5,
+            location: None,
+            timezone: None,
+            weather_provider: crate::config::WeatherProvider::Disabled,
+            adaptive_scenes: false,
+            weather_location: None,
+            cache_scope: None,
+            source_path: None,
+            scene_pools_file: Some("/tmp/old-scene-pools.toml".into()),
+        };
+        let mut civil_time = CivilTimeRuntime::from_config(&active_config).unwrap();
+        let mut weather = WeatherRuntime::from_config(&active_config).unwrap();
+        let mut selection = Some(resident_selection());
+        let mut schedulers = BTreeMap::new();
+        let mut candidate = active_config.clone();
+        candidate.scene_pools_file = None;
+
+        apply_config_candidate(
+            PreparedAppConfig {
+                config: candidate,
+                registry: None,
+                pools: None,
+            },
+            &mut active_config,
+            &mut selection,
+            &mut schedulers,
+            &mut civil_time,
+            &mut weather,
+        )
+        .unwrap();
+
+        assert!(selection.is_none());
+        assert!(active_config.scene_pools_file.is_none());
+    }
+
+    #[test]
     fn solar_palette_uses_base_when_location_or_timezone_is_unavailable() {
         let config = AppConfig {
             schema_version: 2,
@@ -4382,6 +4624,7 @@ mod tests {
             weather_location: None,
             cache_scope: None,
             source_path: None,
+            scene_pools_file: None,
         };
         let mut civil_time = CivilTimeRuntime::from_config(&config).unwrap();
         let timeline = crate::scene::TimeOfDayPalette::new_solar(

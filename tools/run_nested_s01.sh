@@ -2,6 +2,11 @@
 # Run the Wayland lifecycle and one GPU frame against a nested, real Hyprland instance.
 # The nested compositor uses the outer Wayland session as its display backend;
 # it is not a mock and it does not modify the outer compositor configuration.
+#
+# This harness exercises the preserved single-output S01/S02 baseline through
+# the explicit WORLDWALL_SINGLE_OUTPUT_BASELINE seam (see FM-0016): its
+# teardown assertions target that path's contract, which the production
+# run_multi() entry point replaced with the S09 multi-output behavior.
 set -Eeuo pipefail
 
 repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
@@ -107,7 +112,9 @@ stop_nested() {
 
 start_client() {
     local log=$1
-    WAYLAND_DISPLAY="$socket" "$repo_root/target/debug/worldwall" >"$log" 2>&1 &
+    WAYLAND_DISPLAY="$socket" \
+        WORLDWALL_SINGLE_OUTPUT_BASELINE=1 \
+        "$repo_root/target/debug/worldwall" >"$log" 2>&1 &
     client_pid=$!
     for _ in $(seq 1 100); do
         grep -q 'trace configure ' "$log" 2>/dev/null && return 0

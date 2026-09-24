@@ -1,86 +1,87 @@
 <!doctype html>
 <html lang="en">
 <head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="color-scheme" content="dark light">
-  <title>Worldwall Scene Curator</title>
-  <style>
-    :root { color-scheme: dark; font: 15px/1.5 system-ui, sans-serif; background: #11171d; color: #e8edf2; }
-    * { box-sizing: border-box; }
-    body { margin: 0; min-width: 320px; }
-    header { padding: 18px 22px; border-bottom: 1px solid #34414c; background: #182129; }
-    h1 { margin: 0; font-size: 1.35rem; }
-    header p { margin: 3px 0 0; color: #a8b7c3; font-size: .9rem; }
-    main { display: grid; grid-template-columns: minmax(270px, 370px) minmax(0, 1fr); gap: 16px; padding: 16px; max-width: 1500px; margin: auto; }
-    section { min-width: 0; border: 1px solid #34414c; border-radius: 12px; background: #192229; }
-    h2 { margin: 0; font-size: 1.05rem; }
-    .panel-head { padding: 14px; border-bottom: 1px solid #34414c; }
-    label[for="search"] { display: block; margin-bottom: 5px; color: #bbc7d0; font-size: .86rem; }
-    #search { width: 100%; padding: 10px; border: 1px solid #52616d; border-radius: 7px; background: #10171d; color: inherit; font: inherit; }
-    #search:focus, button:focus-visible, canvas:focus-visible { outline: 3px solid #70c9b6; outline-offset: 2px; }
-    #scene-count { margin: 8px 0 0; color: #a8b7c3; font-size: .84rem; }
-    #scene-list { max-height: calc(100vh - 205px); min-height: 260px; overflow-y: auto; padding: 8px; overscroll-behavior: contain; }
-    .scene-option { display: block; width: 100%; margin: 0 0 6px; padding: 10px; border: 1px solid transparent; border-radius: 8px; background: transparent; color: inherit; text-align: left; cursor: pointer; }
-    .scene-option:hover { background: #ffffff0a; }
-    .scene-option[aria-selected="true"] { border-color: #69b9a8; background: #337a6e32; }
-    .scene-option strong, .scene-option small { display: block; overflow-wrap: anywhere; }
-    .scene-option small { margin-top: 3px; color: #a8b7c3; }
-    .preview { padding: 16px; }
-    #selected-title { margin: 0; font-size: 1.2rem; overflow-wrap: anywhere; }
-    #selected-id { margin: 4px 0 12px; color: #a8b7c3; font-family: ui-monospace, monospace; }
-    .canvas-wrap { display: grid; min-height: 280px; max-height: 65vh; aspect-ratio: 4 / 3; place-items: center; overflow: hidden; border: 1px solid #45535f; border-radius: 8px; background: #0d1216; }
-    canvas { display: block; width: 100%; height: 100%; image-rendering: pixelated; }
-    #preview-status, #load-status { min-height: 1.5em; color: #b4c1ca; }
-    .notice { margin: 14px 0 0; padding: 11px 12px; border-left: 3px solid #d7ae67; background: #6a50231c; color: #e2d2b3; font-size: .88rem; }
-    .details { display: grid; grid-template-columns: minmax(120px, 180px) minmax(0, 1fr); gap: 7px 12px; margin: 16px 0 0; }
-    .details dt { color: #a8b7c3; }
-    .details dd { margin: 0; overflow-wrap: anywhere; }
-    #rules-panel { margin-top: 14px; padding: 12px; border: 1px solid #34414c; border-radius: 8px; background: #121a20; }
-    #rules-panel h3 { margin: 0 0 6px; font-size: .95rem; }
-    #rules-summary { margin: 0; color: #b4c1ca; white-space: pre-wrap; overflow-wrap: anywhere; font-size: .85rem; }
-    .empty { padding: 20px 10px; color: #a8b7c3; text-align: center; }
-    @media (max-width: 760px) {
-      main { grid-template-columns: 1fr; }
-      #scene-list { max-height: 32vh; min-height: 160px; }
-      .canvas-wrap { min-height: 200px; }
-      .details { grid-template-columns: minmax(105px, 145px) minmax(0, 1fr); }
-    }
-  </style>
-  <script src="app.js" defer></script>
+<meta charset="utf-8">
+<title>Worldwall scene-pool curator</title>
+<style>
+  :root { color-scheme: dark; }
+  body { margin: 0; font: 14px/1.4 system-ui, sans-serif; background: #14161a; color: #e6e6e6; }
+  header { display: flex; align-items: baseline; gap: 1rem; padding: 0.6rem 1rem; background: #1d2026; }
+  header h1 { font-size: 1.05rem; margin: 0; }
+  #status { color: #9ad1a4; }
+  #status.error { color: #ff9d9d; }
+  main { display: grid; grid-template-columns: 320px minmax(320px, 1fr) 360px; gap: 0.75rem; padding: 0.75rem; }
+  section { background: #1d2026; border-radius: 6px; padding: 0.6rem 0.75rem; min-height: 0; }
+  h2 { font-size: 0.95rem; margin: 0.4rem 0; }
+  #search { width: 100%; box-sizing: border-box; margin-bottom: 0.4rem; }
+  #scene-list { list-style: none; margin: 0; padding: 0; overflow-y: auto; max-height: 72vh; }
+  #scene-list li { display: flex; gap: 0.5rem; align-items: center; padding: 0.25rem; border-radius: 4px; cursor: pointer; }
+  #scene-list li:hover { background: #262b33; }
+  #scene-list li[aria-selected="true"] { background: #2e3a4d; outline: 1px solid #5b7bb4; }
+  #scene-list canvas { width: 48px; height: 48px; image-rendering: pixelated; background: #000; flex: none; }
+  .badge { font-size: 0.75rem; padding: 0 0.35rem; border-radius: 3px; background: #333a45; }
+  .badge.ok { background: #24472e; }
+  .badge.no { background: #4d2a2a; }
+  #preview { width: 100%; image-rendering: pixelated; background: #000; border-radius: 4px; }
+  .controls { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; margin: 0.4rem 0; }
+  label { display: inline-flex; gap: 0.3rem; align-items: center; }
+  button { background: #2e3a4d; color: inherit; border: 1px solid #4a5568; border-radius: 4px; padding: 0.3rem 0.6rem; cursor: pointer; }
+  button:focus-visible, input:focus-visible, select:focus-visible, #scene-list:focus-visible { outline: 2px solid #5b7bb4; }
+  .row { display: flex; flex-wrap: wrap; gap: 0.35rem; margin: 0.25rem 0; }
+  #eligibility li { margin-left: 1rem; }
+  #self-check.ok { color: #9ad1a4; }
+  #self-check.no { color: #ff9d9d; }
+  .hint { color: #9aa3af; font-size: 0.8rem; }
+  fieldset { border: 1px solid #333a45; border-radius: 4px; margin: 0.35rem 0; }
+</style>
 </head>
 <body>
-  <header>
-    <h1>Worldwall Scene Curator</h1>
-    <p>Local catalog explorer · read-only implementation slice</p>
-  </header>
-  <main>
-    <section aria-labelledby="catalog-heading">
-      <div class="panel-head">
-        <h2 id="catalog-heading">Scene library</h2>
-        <label for="search">Search scene title, ID, or appearance</label>
-        <input id="search" type="search" autocomplete="off" placeholder="Search this local catalog">
-        <p id="scene-count" aria-live="polite">Loading catalog…</p>
-      </div>
-      <div id="scene-list" role="listbox" aria-label="Local scene catalog" tabindex="0">
-        <p class="empty">Loading catalog…</p>
-      </div>
-    </section>
-    <section class="preview" aria-labelledby="selected-title">
-      <h2 id="selected-title">Select a scene</h2>
-      <p id="selected-id"></p>
-      <div class="canvas-wrap">
-        <canvas id="preview" role="img" aria-label="Selected indexed scene preview"></canvas>
-      </div>
-      <p id="preview-status" role="status" aria-live="polite">Preview not loaded.</p>
-      <p class="notice"><strong>Preview limitations:</strong> this slice displays the selected package’s static indexed image and base palette on a WebGL2 GPU shader. Authored animation, time-of-day scrubbing, criteria editing, pool controls, and eligibility evaluation are not implemented here. No preview action selects a Worldwall scene.</p>
-      <dl class="details" id="scene-details"></dl>
-      <div id="rules-panel" aria-labelledby="rules-heading">
-        <h3 id="rules-heading">Current sidecar summary</h3>
-        <p id="rules-summary">No sidecar loaded.</p>
-      </div>
-      <p id="load-status" role="status" aria-live="polite"></p>
-    </section>
-  </main>
+<header>
+  <h1>Worldwall scene-pool curator</h1>
+  <div id="status">Loading catalog…</div>
+</header>
+<main>
+  <section id="library" aria-label="Scene library">
+    <h2>Library</h2>
+    <input id="search" type="search" placeholder="Search scenes" aria-label="Search scenes">
+    <ul id="scene-list" tabindex="0" role="listbox" aria-label="Scenes"></ul>
+  </section>
+  <section id="detail" aria-label="Preview">
+    <h2 id="scene-title">No scene selected</h2>
+    <canvas id="preview" width="320" height="180"></canvas>
+    <div class="controls">
+      <label>Play <input id="play" type="checkbox" checked></label>
+      <label>Time-of-day <input id="tod" type="range" min="0" max="86399" value="43200"></label>
+      <span id="tod-label">12:00</span>
+    </div>
+    <div id="scene-info" class="hint"></div>
+    <div id="self-check"></div>
+    <h2>Preview snapshot</h2>
+    <div class="controls">
+      <label>Weather <select id="snap-weather">
+        <option selected>clear</option><option>cloudy</option><option>rain</option><option>snow</option>
+        <option>storm</option><option>fog</option><option value="unknown">unknown</option>
+      </select></label>
+      <label>°C <input id="snap-temp" type="number" step="0.5" value="20" style="width:5rem"></label>
+    </div>
+    <div class="hint">Preview state only (time comes from the slider); it never changes runtime selection.</div>
+  </section>
+  <section id="rules-panel" aria-label="Pool rules">
+    <h2>Scene rule</h2>
+    <div id="rule-editor"></div>
+    <h2>Pools</h2>
+    <div id="pools"></div>
+    <div class="controls">
+      <button id="save">Save sidecar</button>
+      <button id="reload">Request config reload</button>
+    </div>
+    <div id="rules-path" class="hint"></div>
+    <h2>Eligibility</h2>
+    <ul id="eligibility"></ul>
+  </section>
+</main>
+<script src="palette.js"></script>
+<script src="pools.js"></script>
+<script src="app.js"></script>
 </body>
 </html>

@@ -59,6 +59,19 @@ cadence.
 
 ## Regression coverage
 
+The generator and `tools/tests/test_canvascycle_import.py` lock the formula,
+the signed reverse mapping, and the rejection of unrepresented modes.
+
+## Application note (2026-09-23, maintainer-directed)
+
+On maintainer direction, the same mapping now also converts CanvasCycle LBM
+capture cycles (same `Palette` engine and `reverse/rate/low/high` fields) into
+`blend_shift` groups in `tools/import_canvascycle_capture.py`; V25HEAT's 16
+cycles are derived this way for the scene library. The importer defaults
+`source_speed_adjust` to the site's base control `1.0` (the CR-0003 fixtures
+used `4` for their requested fast run) and rejects reverse modes other than
+`0`/`2`. The capture file stays the raw record.
+
 `python3 tools/generate_effectgames_fixtures.py --check-only` passes for all 21
 available packages; generated representative mappings include `4914 / 280 /
 5 * 4 = 14.04` cycles per second. The local V05 rain package then completed a

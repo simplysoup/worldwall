@@ -55,6 +55,7 @@ CATALOG_KEY_ORDER = (
     "source_collection",
     "world",
     "appearance",
+    "display_name",
     "image",
     "image_sha256",
     "palette",
@@ -95,6 +96,7 @@ CATALOG_REQUIRED = {
     "license_state",
 }
 CATALOG_OPTIONAL = {
+    "display_name",
     "animation",
     "animation_sha256",
     "time_of_day",
@@ -438,6 +440,14 @@ def parse_catalog(text: str) -> list[dict[str, str]]:
         for key in ("world", "appearance"):
             if entry[key] != "unknown":
                 _id(entry[key], f"{entry_where}.{key}")
+        if "display_name" in entry:
+            name = entry["display_name"]
+            if not name.strip() or '"' in name or "\\" in name:
+                _fail(
+                    entry_where,
+                    "display_name must be non-empty plain text without quotes or backslashes",
+                )
+            _title(name, f"{entry_where}.display_name")
         if entry["appearance"] != "unknown" and entry["world"] == "unknown":
             _fail(entry_where, "appearance requires a known world")
         for key in ASSET_KEYS:
@@ -771,7 +781,11 @@ def build_entries(root: Path) -> list[dict[str, str]]:
     catalog_path = root / CATALOG_NAME
     if os.path.lexists(catalog_path):
         for entry in parse_catalog(_read_text(catalog_path, CATALOG_NAME)):
-            previous[entry["id"]] = (entry["world"], entry["appearance"])
+            previous[entry["id"]] = (
+                entry["world"],
+                entry["appearance"],
+                entry.get("display_name"),
+            )
 
     try:
         children = sorted(os.scandir(root), key=lambda item: item.name)
@@ -816,7 +830,12 @@ def build_entries(root: Path) -> list[dict[str, str]]:
         seen.add(scene_id)
         entry["id"] = scene_id
         entry["package"] = child.name
-        entry["world"], entry["appearance"] = previous.get(scene_id, ("unknown", "unknown"))
+        world, appearance, display_name = previous.get(
+            scene_id, ("unknown", "unknown", None)
+        )
+        entry["world"], entry["appearance"] = world, appearance
+        if display_name:
+            entry["display_name"] = display_name
 
         for key in ("image", "palette"):
             entry[key] = _name(_string(manifest, key, f"{where}/scene.toml.{key}"), f"{where}/scene.toml.{key}")

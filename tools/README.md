@@ -22,10 +22,15 @@ hash and structural counts without writing files. Materialization requires an
 explicit new output path, stable ID, and provenance URLs/title. Output
 `scene.png`/`palette.png` assets and `scene.toml` are placed in a mode-0700
 package with mode-0600 files; existing output is never overwritten. Provenance
-records `license_state = "unreviewed"`. Raw source cycle values are preserved
-in `source-cycles.toml` with rate/direction semantics marked `unknown`; no
-`animation.toml`, time/weather rules, or source-title-derived eligibility is
-created until the semantics and rules are independently established.
+records `license_state = "unreviewed"`. Source cycles are mapped to signed
+authored-byte `blend_shift` `animation.toml` groups using the Effect Games
+`Palette` semantics established in
+[FM-0013](../docs/knowledge/failures/FM-0013-effectgames-cycle-rate.md):
+`speed = rate * source_speed_adjust / 280 / member_count`, where
+`--source-speed-adjust` (default `1.0`, the site's base speed control) is the
+site's speed multiplier and source reverse mode `2` signs the speed as
+reversed. Unrepresented source modes are rejected, and no time/weather rules
+or source-title-derived eligibility is created.
 
 Example local-only validation:
 
@@ -71,7 +76,58 @@ Every non-hidden subdirectory of the library root must be a complete package
 regular files are ignored. Curated `world`/`appearance` relationships survive
 regeneration and are never inferred from source titles. License states and
 unmapped source-cycle semantics are recorded as declared and never upgraded.
-The runtime does not read these files yet (S12-AC4/AC5).
+The runtime consumes the same two formats through `src/scene_pools.rs`
+(schema-v5 `scene_pools_file`); this tool remains the full
+digest/provenance/package-set validator.
+
+## Preview fidelity goldens (S12-AC6)
+
+`fixtures/preview-palette-goldens.json` locks the accepted CPU reference
+(`Animation::apply_palette`) and the exact GPU metadata/cycle byte payloads for
+representative static/hue/pulse/cycle/BlendShift inputs. The Rust test
+`preview_palette_goldens_match_cpu_reference_and_byte_payloads` verifies and
+can regenerate them:
+
+```sh
+WORLDWALL_WRITE_PREVIEW_GOLDENS=1 cargo test --offline preview_palette_goldens
+```
+
+`tools/tests/test_preview_palette_fidelity.py` verifies the curator's
+JavaScript palette twin (`src/bin/curator_palette.js`) against the same goldens
+with Node.js; the WebGL2 preview compares its shader readback against that twin
+at runtime. `tools/tests/test_curator_pool_defaults.py` exercises the pure
+`src/bin/curator_pools.js` helper so a missing sidecar groups library and
+registry scenes into source-correct pools before the first save.
+
+## Live pool-mode smoke run (S12-AC4/AC5)
+
+`run_s12_pool_smoke.sh` is the re-runnable, maintainer-authorized live smoke of
+schema-v5 pool consumption and the shared selection filter. It assembles a
+temporary smoke registry/library/sidecar from the private untracked derived
+fixtures (clearly labelled local test material), starts a nested Hyprland on
+the outer session through `nested_wayland_connect.c`, and runs the real
+`worldwall` with a private `XDG_RUNTIME_DIR` (distinct control socket, absolute
+`WAYLAND_DISPLAY`) and `[weather]` disabled. It asserts pool-filtered startup
+and `next` cycling, the manual-ID override, no-selection `reload-config`, the
+`next` no-op reason, invalid-sidecar rollback, fail-closed no-eligible startup,
+and known-input match/mismatch criteria, and it never touches the production
+wallpaper, its socket, or session configuration. See the
+[live smoke record](../docs/updates/2026-09-23-s12-ac4-ac5-live-pool-smoke.md)
+for the recorded phases and limits.
+
+```sh
+# From a Wayland session; requires the private fixtures noted above.
+WORLDWALL_SMOKE_ARTIFACTS=~/.local/state/worldwall/s12-smoke \
+  bash tools/run_s12_pool_smoke.sh
+```
+
+`WORLDWALL_SMOKE_ARTIFACTS` optionally retains the phase logs and compositor
+captures for evidence records. The preserved `run_nested_s01.sh` assertions target the single-output S01/S02
+baseline, so the harness sets the explicit
+`WORLDWALL_SINGLE_OUTPUT_BASELINE` diagnostic seam rather than changing the
+assertions or production `run_multi()` entry point. The resolution and recorded
+passing nested-Hyprland run are documented in
+[FM-0016](../docs/knowledge/failures/FM-0016-nested-harness-single-output-traces.md).
 
 ## Effect Games matrix runner
 

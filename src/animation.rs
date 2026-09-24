@@ -832,6 +832,128 @@ mod tests {
         assert_eq!(animation.cycle_indices[..3], [9, 4, 11]);
     }
 
+    // ------------------------------------------------------------------
+    // S12-AC6 preview fidelity goldens.
+    //
+    // `fixtures/preview-palette-goldens.json` locks the accepted CPU reference
+    // (this module's `apply_palette`, the same vectors the S04 GPU readback
+    // gate compares against) and the exact metadata/cycle byte payloads used
+    // by the GPU path. The curator's JavaScript twin is verified against the
+    // same goldens by `tools/tests/test_preview_palette_fidelity.py`, and the
+    // preview shader is compared against its twin by the in-page self-check.
+    // Regenerate with:
+    //   WORLDWALL_WRITE_PREVIEW_GOLDENS=1 cargo test --offline preview_palette_goldens
+
+    fn golden_palette() -> [u8; 256 * 4] {
+        let mut palette = [0u8; 256 * 4];
+        for (index, entry) in palette.chunks_exact_mut(4).enumerate() {
+            let index = index as u8;
+            entry[0] = index.wrapping_mul(37);
+            entry[1] = index.wrapping_mul(91);
+            entry[2] = index.wrapping_mul(53);
+            entry[3] = 255;
+        }
+        palette
+    }
+
+    fn golden_cases() -> Vec<(&'static str, &'static str)> {
+        vec![
+            ("static", "schema_version = 1\n"),
+            (
+                "hue-cycle",
+                "schema_version = 1\n\n[[group]]\nname = \"hue\"\neffect = \"hue_cycle\"\nrange = [0, 3]\nspeed = 0.8\namplitude = 1.0\nphase = 0.1\n",
+            ),
+            (
+                "brightness-pulse",
+                "schema_version = 1\n\n[[group]]\nname = \"pulse\"\neffect = \"brightness_pulse\"\nrange = [4, 7]\nspeed = 0.5\namplitude = 0.6\nphase = 0.25\n",
+            ),
+            (
+                "palette-cycle",
+                "schema_version = 1\n\n[[group]]\nname = \"cycle\"\neffect = \"palette_cycle\"\nindices = [10, 11, 12, 13]\nspeed = 0.4\namplitude = 1.0\nphase = 0.5\n",
+            ),
+            (
+                "blend-shift",
+                "schema_version = 1\n\n[[group]]\nname = \"blend\"\neffect = \"blend_shift\"\nindices = [20, 21, 22, 23]\nspeed = 1.3\namplitude = 1.0\nphase = 0.0\n",
+            ),
+        ]
+    }
+
+    fn hex(bytes: &[u8]) -> String {
+        bytes.iter().map(|byte| format!("{byte:02x}")).collect()
+    }
+
+    fn unhex(text: &str) -> Vec<u8> {
+        (0..text.len())
+            .step_by(2)
+            .map(|at| u8::from_str_radix(&text[at..at + 2], 16).unwrap())
+            .collect()
+    }
+
+    const GOLDEN_TIMES: [f32; 3] = [0.0, 0.37, 1.85];
+
+    #[test]
+    fn preview_palette_goldens_match_cpu_reference_and_byte_payloads() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("fixtures/preview-palette-goldens.json");
+        let palette = golden_palette();
+        let mut generated = Vec::new();
+        for (name, document) in golden_cases() {
+            let animation = Animation::from_toml(document).unwrap();
+            let samples = GOLDEN_TIMES
+                .iter()
+                .map(|time| {
+                    serde_json::json!({
+                        "time": time,
+                        "output_hex": hex(&animation.apply_palette(&palette, *time)),
+                    })
+                })
+                .collect::<Vec<_>>();
+            generated.push(serde_json::json!({
+                "name": name,
+                "animation_toml": document,
+                "metadata_hex": hex(&animation.metadata_bytes()),
+                "cycle_indices_hex": hex(&animation.cycle_index_bytes()),
+                "samples": samples,
+            }));
+        }
+        let document = serde_json::json!({
+            "schema_version": 1,
+            "generated_by": "WORLDWALL_WRITE_PREVIEW_GOLDENS=1 cargo test --offline preview_palette_goldens",
+            "palette_formula": "rgba[i] = [(i*37)&255, (i*91)&255, (i*53)&255, 255]",
+            "times": GOLDEN_TIMES,
+            "cases": generated,
+        });
+        if std::env::var_os("WORLDWALL_WRITE_PREVIEW_GOLDENS").is_some() {
+            std::fs::write(&path, serde_json::to_string_pretty(&document).unwrap()).unwrap();
+        }
+
+        let stored: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(stored["schema_version"], 1);
+        let cases = stored["cases"].as_array().unwrap();
+        assert_eq!(cases.len(), golden_cases().len());
+        for (case, (name, document)) in cases.iter().zip(golden_cases()) {
+            assert_eq!(case["name"], name);
+            let animation = Animation::from_toml(document).unwrap();
+            // The byte payloads shipped to the GPU/preview must stay exact.
+            assert_eq!(case["metadata_hex"], hex(&animation.metadata_bytes()));
+            assert_eq!(
+                case["cycle_indices_hex"],
+                hex(&animation.cycle_index_bytes())
+            );
+            let samples = case["samples"].as_array().unwrap();
+            for (sample, time) in samples.iter().zip(GOLDEN_TIMES) {
+                assert_eq!(sample["time"], time as f64);
+                let expected = unhex(sample["output_hex"].as_str().unwrap());
+                assert_eq!(
+                    expected,
+                    animation.apply_palette(&palette, time),
+                    "case {name} at {time} diverged from the stored golden"
+                );
+            }
+        }
+    }
+
     #[test]
     fn absent_animation_is_static_and_reference_palette_is_unchanged() {
         let animation = Animation::static_default();

@@ -102,11 +102,11 @@ resident scene.
 ## Configuration file
 
 Set `WORLDWALL_CONFIG` to a regular, non-symlink file. It is loaded at startup
-and by `reload-config`. The current implementation reads schemas v1–v4: v2
+and by `reload-config`. The current implementation reads schemas v1–v5: v2
 adds optional location and weather tables; v3 adds the default-off adaptive
-switch inside `[weather]`; v4 adds a global animation-speed scalar. Approved
-CR-0008/S12 defines a future schema v5 with an optional `scene_pools_file`
-sidecar reference; v5 is not implemented yet. A minimal privacy-safe v4 file is:
+switch inside `[weather]`; v4 adds a global animation-speed scalar; v5 adds an
+optional `scene_pools_file` sidecar reference (below). A minimal privacy-safe
+v4 file is:
 
 ```toml
 schema_version = 4
@@ -146,20 +146,24 @@ location/timezone, and provider; legacy environment inputs are read only when
 `WORLDWALL_CONFIG` is unset. The environment variables
 `WORLDWALL_SCENE_DIR` and diagnostics remain separate scene-source/test inputs.
 
-### Approved schema-v5 target (S12; not implemented)
+### Schema-v5 pool sidecar reference (S12-AC4)
 
-Schema v5 adds optional `scene_pools_file`, pointing to a separately versioned
-pool/availability sidecar. If absent, the existing registry and selection
-behavior remains. When present, every automatic selection uses only enabled
-pools and scenes whose configured time/weather/temperature constraints match
-one current snapshot; a constrained unknown input is not a match. Manual
-`scene <id>` explicitly bypasses those filters but still validates/loads a
-known scene. Applying/reloading this configuration never selects by itself,
-and it adds no clock/weather triggers. If no scene is eligible, startup reports
-selection unavailable; later selection attempts keep the resident scene or
-return a no-op reason instead of using a disallowed fallback. The `worldwallctl curator` command is a local GUI and does not add an IPC command. Its current partial S12-AC3 implementation is read-only; see [scene-pool formats and curator limits](scene-pools.md). The AC2 sidecar schema is defined and accepted; schema-v5 config consumption,
-transaction behavior, and adaptive-family filtering remain S12 gates. Do not
-write schema-v5 config until the runtime implementation is available.
+Schema v5 adds optional `scene_pools_file`, an absolute path to a separately
+versioned pool/availability sidecar (see [scene-pools](scene-pools.md)). If
+absent, the existing registry and selection behavior is unchanged. When
+present, every automatic selection uses only enabled pools and scenes whose
+configured time/weather/temperature constraints match one current snapshot; a
+constrained unknown input is not a match. Manual `scene <id>` explicitly
+bypasses those filters but still validates/loads a known scene.
+Applying/reloading this configuration never selects by itself, and it adds no
+clock/weather triggers. If no scene is eligible, startup reports selection
+unavailable and exits nonzero; later selection attempts keep the resident scene
+or return a no-op reason instead of using a disallowed fallback. With a
+sidecar configured, a `next` no-op is a successful `{"applied": false,
+"outcome": "noop", "reason": "…"}` response (for example `no eligible scene for
+next`); without a sidecar the historical response shapes are unchanged. The
+`worldwallctl curator` command is a local GUI and does not add an IPC command;
+it edits the sidecar and requests `reload-config` only on explicit user action.
 
 ## CLI
 
@@ -180,10 +184,16 @@ worldwallctl weather
 Use `--socket PATH` only for a deliberately selected same-user test socket.
 For `scenes`, this socket is used only to query the active-scene marker; the
 scene IDs are read from the configured registry. Control commands return a
-nonzero exit status when the service returns an error.
+nonzero exit status when the service returns an error. `scenes` lists the
+configured registry and the curator library catalog together, marking the
+active scene in either source.
 
 S12 adds a separate `worldwallctl curator` GUI command for editing the pool
-sidecar. The current partial implementation browses/searches the local catalog,
-previews indexed pixels and palette through a static WebGL2 shader, and
-summarizes rules read-only. It does not edit the sidecar, evaluate eligibility,
-or use the control socket. The curator is not a socket/IPC command.
+sidecar. It browses and searches the local catalog with thumbnails, previews
+indexed pixels and authored palette cycles through a WebGL2 port of the GPU
+shader, scrubs known time-of-day variants as injected preview state, explains
+per-scene eligibility under one preview snapshot, and edits pool enable/disable
+plus per-scene time/weather/temperature rules. Saves are atomic with same-user
+permissions and preserve the previous valid file on failure; *Request config
+reload* is the only Worldwall contact and is never automatic. The curator is
+not a socket/IPC command.

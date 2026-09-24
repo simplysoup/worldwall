@@ -14,5 +14,6 @@ These are **recommended-unvalidated in Worldwall**, derived from the design revi
 | BP-0008 | Separate diagnosis from scope decisions | A blocker explains inability to proceed; only approved changes rewrite acceptance | Every blocked gate |
 | BP-0009 | Measure against the same host/workload before claiming improvement | Avoids misleading CPU/power statements; unmeasurable counters remain unavailable | S04, S11 |
 | BP-0010 | Read status/target stage first; load detailed references on demand | Keeps working context small; do not omit linked safety decisions needed by the task | Every increment |
+| BP-0011 | Run live runtime smoke tests on a nested compositor with a distinct child socket (`XDG_RUNTIME_DIR` override plus absolute `WAYLAND_DISPLAY`, `worldwallctl --socket`) | Keeps the production wallpaper and session config untouched while exercising real GPU/lifecycle paths; a private runtime dir needs the absolute Wayland path, and synthetic host input stays unavailable | S10, S12 |
 
 On validation, link actual evidence and record limitations/date/version. Use BP-0011 onward for new practices or expand existing IDs. Update related local skills with a short pointer rather than copying this catalogue into every skill.

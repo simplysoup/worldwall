@@ -198,13 +198,23 @@ class CatalogRoundTripTests(unittest.TestCase):
         curated = parse_catalog(text)
         curated[0]["world"] = "desert-world"
         curated[0]["appearance"] = "midday"
+        curated[0]["display_name"] = "Desert Heat (day)"
         (self.root / "library.toml").write_text(render_catalog(curated))
 
         rebuilt = build_entries(self.root)
         self.assertEqual(rebuilt[0]["world"], "desert-world")
         self.assertEqual(rebuilt[0]["appearance"], "midday")
+        self.assertEqual(rebuilt[0]["display_name"], "Desert Heat (day)")
         self.assertEqual(rebuilt[0]["image_sha256"], curated[0]["image_sha256"])
         self.assertEqual(render_catalog(parse_catalog(render_catalog(rebuilt))), render_catalog(rebuilt))
+
+    def test_invalid_display_names_are_rejected(self):
+        write_package(self.root)
+        entries = build_entries(self.root)
+        for bad in ("", "  ", "a" * 201, 'has "quotes"', "line\nbreak", "back\\slash"):
+            entries[0]["display_name"] = bad
+            with self.subTest(name=bad), self.assertRaises(PoolError):
+                parse_catalog(render_catalog(entries))
 
     def test_adaptive_registry_metadata_is_not_copied_into_the_catalog(self):
         write_package(self.root, with_family=True)

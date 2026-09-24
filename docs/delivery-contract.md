@@ -1,6 +1,6 @@
 # Worldwall delivery contract
 
-**Version:** 0.8 · **State:** approved · **Baseline date:** 2026-09-21 · **CR-0001 applied:** 2026-09-22 · **CR-0002 applied:** 2026-09-22 · **CR-0004 applied:** 2026-09-22 · **CR-0005 applied:** 2026-09-22 · **CR-0006 applied to policy:** 2026-09-23 (implementation/acceptance gates remain open) · **CR-0007 applied:** 2026-09-23 (implementation present; acceptance remains open) · **CR-0008 applied:** 2026-09-23 (post-M4 S12 approved; software gates remain open)
+**Version:** 0.8 · **State:** approved · **Baseline date:** 2026-09-21 · **CR-0001 applied:** 2026-09-22 · **CR-0002 applied:** 2026-09-22 · **CR-0004 applied:** 2026-09-22 · **CR-0005 applied:** 2026-09-22 · **CR-0006 applied to policy:** 2026-09-23 (implementation/acceptance gates remain open) · **CR-0007 applied:** 2026-09-23 (implementation present; acceptance remains open) · **CR-0008 applied:** 2026-09-23 (post-M4 S12 approved; historically accepted 2026-09-23; AC3/AC5 corrections under review)
 **Accountable maintainer / acceptance authority:** GitHub account `simplysoup`; baseline ratified in ADR-0001 on 2026-09-21.  
 **Target:** Linux desktop with Hyprland, Wayland layer-shell, and a supported Vulkan adapter. Library/compositor versions and the tested device matrix are established by evidence, not assumed here.
 
@@ -42,7 +42,7 @@ No dates or percentage estimates are promised without an assigned team and measu
 
 | Event | Refresh environment? | Reselect? | Resource action |
 | --- | --- | --- | --- |
-| Startup | Clock/astronomy and cached weather; bounded best-effort fetch if enabled | One full selection. With adaptive opt-in, choose family using available temperature/appearance; without S12 pool mode, unknown first-start data selects V29. With pool mode, only eligible candidates may be selected. A later fresh result may change only the selected family's eligible variant. | Upload selected scene, start outputs; family/band state stores only family and band |
+| Startup | Clock/astronomy and cached weather; bounded best-effort fetch if enabled | One full selection. With adaptive opt-in, choose family using available temperature/appearance; without S12 pool mode, unknown first-start data selects V29. With pool mode, only eligible candidates may be selected; a configured sidecar with no candidates fails closed rather than entering legacy synthetic-scene mode. A later fresh result may change only the selected family's eligible variant. | Upload selected scene, start outputs; family/band state stores only family and band |
 | Weather timer / completion | Update weather cache | With a valid adaptive opt-in, a fresh known result may request only a precipitation variant in the current family; never a family change | Decode candidate off the Wayland thread and commit through the existing transactional scene-swap boundary; stale/error/unknown results retain the resident scene |
 | Clock tick / sunrise boundary | May update status data and a resident civil/solar palette sample | No | Bounded uniform update only; no scene or atlas upload |
 | Suspend | No network work required | No | Pause deadlines/submission |
@@ -59,7 +59,7 @@ No dates or percentage estimates are promised without an assigned team and measu
 
 - X11/GTK/EGL wrapper windows, non-Linux ports, multiple independent GPU devices, or arbitrary compositor compatibility.
 - Video playback, CPU-recolored frames, per-frame network activity, automatic cross-family weather-driven swaps, or weather-driven scene changes without explicit schema-v3 opt-in.
-- Per-output scene choices, automatic IP geolocation, cloud accounts, telemetry, or bundled unlicensed artwork. CR-0008 approves a local curator and pool filtering as a post-M4 S12 extension; it is not part of M4 and remains unimplemented until its stage gates pass.
+- Per-output scene choices, automatic IP geolocation, cloud accounts, telemetry, or bundled unlicensed artwork. CR-0008 approves a local curator and pool filtering as a post-M4 S12 extension; it is not part of M4. S12 was accepted by `simplysoup` on 2026-09-23 with recorded limitations, but its AC3/AC5 corrections, including the empty-source fail-closed fix, are now under review (see the [correction record](updates/2026-09-24-s12-ac5-empty-source-correction.md)); publishing or distributing artifacts remains a separate, unauthorized action.
 - Scaling modes other than nearest-neighbor cover, systemd as a runtime prerequisite, and automatic battery-policy tuning.
 
 Other additions remain non-goals and require an approved roadmap change; CR-0008 is the approved exception for the post-M4 curator/pool scope. A user service may be documented in S11 only after session-environment handling is tested; `exec-once = worldwall` remains the simple launch path.
@@ -75,6 +75,6 @@ Other additions remain non-goals and require an approved roadmap change; CR-0008
 
 ## 6. Change and record policy
 
-Use [development updates](workflows/development.md) for progress, [roadblocks](workflows/roadblocks.md) for inability to proceed, and [change proposals](workflows/roadmap-changes.md) for a changed plan. [CR-0008](changes/CR-0008-worldwallctl-scene-curator.md) is applied to this v0.8 baseline; S12 remains in progress, with AC1/AC2 accepted and the first partial AC3 curator slice implemented. An ADR explains an architectural choice; it does not independently authorize changing scope. Approval identity/date and the affected files must be recorded, never inferred from silence.
+Use [development updates](workflows/development.md) for progress, [roadblocks](workflows/roadblocks.md) for inability to proceed, and [change proposals](workflows/roadmap-changes.md) for a changed plan. [CR-0008](changes/CR-0008-worldwallctl-scene-curator.md) is applied to this v0.8 baseline; S12's AC1/AC2 and AC3–AC7 acceptance by `simplysoup` on 2026-09-23 remains historical (see the [S12 acceptance record](updates/2026-09-23-s12-acceptance.md)). Following the AC5 empty-source finding, the stage is in review pending maintainer re-review of the [correction record](updates/2026-09-24-s12-ac5-empty-source-correction.md); recorded limitations remain open and visible. An ADR explains an architectural choice; it does not independently authorize changing scope. Approval identity/date and the affected files must be recorded, never inferred from silence.
 
 Until S00 approval, explicitly mark proposals rather than presenting new decisions as implemented facts. [ADR-0001](decisions/ADR-0001-delivery-baseline.md) identifies the proposed differences from the original outline.

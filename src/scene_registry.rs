@@ -25,6 +25,7 @@ use std::{
 use crate::{
     animation::Animation,
     scene::{self, Scene},
+    scene_pools::{PoolEnvironment, PoolGate, ScenePools},
 };
 
 pub use crate::environment::{EnvironmentSnapshot, Season, TimeOfDay, Weather};
@@ -348,6 +349,9 @@ struct SceneFamily {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SceneRegistry {
     scenes: BTreeMap<String, SceneManifest>,
+    /// Pool-sourced packages that are manually selectable but never automatic
+    /// candidates (kept out of `scenes` so adaptive validation is unchanged).
+    extras: BTreeMap<String, SceneManifest>,
     fallback: Option<String>,
     families: BTreeMap<String, SceneFamily>,
 }
@@ -452,6 +456,7 @@ impl SceneRegistry {
         }
         Ok(Self {
             scenes,
+            extras: BTreeMap::new(),
             fallback,
             families,
         })
@@ -462,13 +467,40 @@ impl SceneRegistry {
     pub fn empty() -> Self {
         Self {
             scenes: BTreeMap::new(),
+            extras: BTreeMap::new(),
             fallback: None,
             families: BTreeMap::new(),
         }
     }
 
+    /// Attach validated pool-sourced packages. In non-adaptive pool mode the
+    /// packages join the automatic candidate set (the union of enabled pools
+    /// is then narrowed by the shared eligibility gate). In adaptive mode they
+    /// stay manual-only: non-adaptive library entries must never become
+    /// adaptive families and CR-0006 registry validation is unchanged.
+    pub fn add_pool_packages(
+        &mut self,
+        manifests: impl IntoIterator<Item = SceneManifest>,
+        automatic: bool,
+    ) -> Result<(), RegistryError> {
+        for manifest in manifests {
+            if self.scenes.contains_key(&manifest.id) || self.extras.contains_key(&manifest.id) {
+                return Err(error(format!(
+                    "pool package {:?} duplicates a known scene",
+                    manifest.id
+                )));
+            }
+            if automatic {
+                self.scenes.insert(manifest.id.clone(), manifest);
+            } else {
+                self.extras.insert(manifest.id.clone(), manifest);
+            }
+        }
+        Ok(())
+    }
+
     pub fn get(&self, id: &str) -> Option<&SceneManifest> {
-        self.scenes.get(id)
+        self.scenes.get(id).or_else(|| self.extras.get(id))
     }
 
     pub fn len(&self) -> usize {
@@ -578,6 +610,7 @@ impl SceneRegistry {
         appearance: PrecipitationAppearance,
         previous: Option<&AdaptiveSelectionState>,
         active_scene_id: Option<&str>,
+        gate: Option<&PoolGate<'_>>,
     ) -> Result<AdaptiveSelectionDecision, RegistryError> {
         self.validate_adaptive()?;
         let previous = previous.filter(|state| {
@@ -619,14 +652,38 @@ impl SceneRegistry {
                 .and_then(|manifest| manifest.family_id.as_deref())
                 == Some(family_id)
         });
-        let scene_id = if appearance == PrecipitationAppearance::Unknown {
-            active_in_family.map(str::to_owned)
+        let scene_id = if let Some(gate) = gate {
+            // CR-0006 composition is unchanged: the family was already chosen;
+            // only its ordered candidates are filtered in the existing
+            // appearance-preference order. A rejected candidate never crosses
+            // to another family/band and never mutates stored state.
+            let mut candidates: Vec<&str> = Vec::new();
+            if appearance == PrecipitationAppearance::Unknown {
+                candidates.extend(active_in_family);
+            }
+            if let Some(family) = self.families.get(family_id) {
+                for weather in appearance.preferences() {
+                    if let Some(id) = family.variants.get(weather) {
+                        candidates.push(id);
+                    }
+                }
+            }
+            candidates.extend(active_in_family);
+            candidates
+                .into_iter()
+                .find(|id| gate.is_eligible(id))
+                .ok_or_else(|| error("no eligible candidate"))?
+                .to_owned()
         } else {
-            None
-        }
-        .or_else(|| self.variant_id(family_id, appearance).map(str::to_owned))
-        .or_else(|| active_in_family.map(str::to_owned))
-        .ok_or_else(|| error(format!("family {family_id:?} has no usable variant")))?;
+            if appearance == PrecipitationAppearance::Unknown {
+                active_in_family.map(str::to_owned)
+            } else {
+                None
+            }
+            .or_else(|| self.variant_id(family_id, appearance).map(str::to_owned))
+            .or_else(|| active_in_family.map(str::to_owned))
+            .ok_or_else(|| error(format!("family {family_id:?} has no usable variant")))?
+        };
         let state = self
             .adaptive_state_for_scene(&scene_id)
             .ok_or_else(|| error(format!("selected scene {scene_id:?} lacks family metadata")))?;
@@ -644,15 +701,19 @@ impl SceneRegistry {
         &self,
         family_id: &str,
         appearance: PrecipitationAppearance,
+        gate: Option<&PoolGate<'_>>,
     ) -> Option<&SceneManifest> {
         if appearance == PrecipitationAppearance::Unknown {
             return None;
         }
         let family = self.families.get(family_id)?;
+        // Walk the approved same-family fallback order and permit only
+        // eligible variants; nothing crosses to another family.
         appearance
             .preferences()
             .iter()
-            .find_map(|weather| family.variants.get(weather))
+            .filter_map(|weather| family.variants.get(weather))
+            .find(|id| gate.is_none_or(|gate| gate.is_eligible(id)))
             .and_then(|id| self.scenes.get(id))
     }
 
@@ -693,10 +754,13 @@ impl SceneRegistry {
         snapshot: EnvironmentSnapshot,
         seed: u64,
         trigger: SelectionTrigger,
+        gate: Option<&PoolGate<'_>>,
     ) -> SelectionResult {
         match trigger {
             SelectionTrigger::ManualId(id) => {
-                if self.scenes.contains_key(&id) {
+                // Manual IDs are the explicit override: pool and availability
+                // rules never block them, but the package must still be known.
+                if self.scenes.contains_key(&id) || self.extras.contains_key(&id) {
                     SelectionResult::Selected(SelectionDecision {
                         id: id.clone(),
                         trigger: SelectionTrigger::ManualId(id),
@@ -708,9 +772,9 @@ impl SceneRegistry {
                     SelectionResult::Rejected(format!("scene ID {id:?} is not registered"))
                 }
             }
-            SelectionTrigger::Next => self.select_next(snapshot, None),
+            SelectionTrigger::Next => self.select_next(snapshot, None, gate),
             SelectionTrigger::Startup | SelectionTrigger::Resume | SelectionTrigger::Reload => {
-                self.select_scored(snapshot, seed, trigger)
+                self.select_scored(snapshot, seed, trigger, gate)
             }
             SelectionTrigger::WeatherUpdated
             | SelectionTrigger::ClockTick
@@ -724,10 +788,12 @@ impl SceneRegistry {
         snapshot: EnvironmentSnapshot,
         seed: u64,
         trigger: SelectionTrigger,
+        gate: Option<&PoolGate<'_>>,
     ) -> SelectionResult {
         let mut candidates = self
             .scenes
             .values()
+            .filter(|manifest| gate.is_none_or(|gate| gate.is_eligible(&manifest.id)))
             .map(|manifest| {
                 let match_score = manifest.environmental_score(snapshot);
                 let random_value = deterministic_unit(seed, &manifest.id);
@@ -735,6 +801,12 @@ impl SceneRegistry {
             })
             .collect::<Vec<_>>();
         if candidates.is_empty() {
+            if gate.is_some() {
+                // An empty eligible set never reaches the designated fallback:
+                // report that no scene is eligible and let the caller retain a
+                // resident scene or fail closed at startup.
+                return SelectionResult::NoScene("no eligible scene".into());
+            }
             return self
                 .fallback
                 .as_ref()
@@ -752,14 +824,26 @@ impl SceneRegistry {
                 ));
         }
         if candidates.iter().all(|(_, score, _)| *score == 0) {
-            let fallback = self.fallback.as_ref().expect("validated registry fallback");
-            return SelectionResult::Selected(SelectionDecision {
-                id: fallback.clone(),
-                trigger,
-                match_score: None,
-                random_value: None,
-                rationale: "designated fallback; no environmental tag matched".into(),
-            });
+            // The fallback is selectable only inside the eligible set; it is
+            // never a bypass around the pool/rules filter.
+            let fallback = self
+                .fallback
+                .as_ref()
+                .filter(|id| gate.is_none_or(|gate| gate.is_eligible(id.as_str())));
+            if let Some(fallback) = fallback {
+                return SelectionResult::Selected(SelectionDecision {
+                    id: fallback.clone(),
+                    trigger,
+                    match_score: None,
+                    random_value: None,
+                    rationale: "designated fallback; no environmental tag matched".into(),
+                });
+            }
+            if gate.is_none() {
+                // Legacy behavior: a validated registry always permits this
+                // branch to reach its fallback.
+                unreachable!("validated registry fallback is missing")
+            }
         }
         candidates.sort_by(|left, right| {
             right
@@ -782,15 +866,23 @@ impl SceneRegistry {
         &self,
         snapshot: EnvironmentSnapshot,
         current_id: Option<&str>,
+        gate: Option<&PoolGate<'_>>,
     ) -> SelectionResult {
         let compatible = self
             .scenes
             .values()
             .filter(|manifest| manifest.compatible(snapshot))
+            .filter(|manifest| gate.is_none_or(|gate| gate.is_eligible(&manifest.id)))
             .map(|manifest| manifest.id.as_str())
             .collect::<Vec<_>>();
         if compatible.is_empty() {
-            return SelectionResult::NoScene("no compatible scene for next".into());
+            return if gate.is_some() {
+                // With pool rules configured, `next` is a no-op with a bounded
+                // reason; it never cycles to an ineligible scene.
+                SelectionResult::Noop("no eligible scene for next".into())
+            } else {
+                SelectionResult::NoScene("no compatible scene for next".into())
+            };
         }
         if compatible.len() == 1 && current_id == Some(compatible[0]) {
             return SelectionResult::Noop("only the active scene is compatible".into());
@@ -860,6 +952,7 @@ pub struct SelectionRequest {
 #[derive(Debug, Clone)]
 pub struct SelectionController {
     registry: SceneRegistry,
+    pools: Option<ScenePools>,
     active_id: Option<String>,
     next_generation: u64,
     selection_generation: u64,
@@ -869,26 +962,44 @@ impl SelectionController {
     pub fn new(registry: SceneRegistry) -> Self {
         Self {
             registry,
+            pools: None,
             active_id: None,
             next_generation: 0,
             selection_generation: 0,
         }
     }
 
+    /// Install (or clear) the validated pool/rule state. This never selects;
+    /// later automatic requests use one current environment snapshot.
+    pub fn set_pools(&mut self, pools: Option<ScenePools>) {
+        self.pools = pools;
+    }
+
+    pub fn pools(&self) -> Option<&ScenePools> {
+        self.pools.as_ref()
+    }
+
     pub fn request(
         &mut self,
         snapshot: EnvironmentSnapshot,
+        temperature_c: Option<f32>,
         seed: u64,
         trigger: SelectionTrigger,
     ) -> Result<SelectionRequest, SelectionResult> {
         if !trigger.is_explicit() {
             return Err(SelectionResult::Ignored);
         }
+        let environment = PoolEnvironment::new(&snapshot, temperature_c);
+        let gate = self.pools.as_ref().map(|pools| PoolGate {
+            pools,
+            environment: &environment,
+        });
         let result = match trigger {
-            SelectionTrigger::Next => self
-                .registry
-                .select_next(snapshot, self.active_id.as_deref()),
-            trigger => self.registry.select(snapshot, seed, trigger),
+            SelectionTrigger::Next => {
+                self.registry
+                    .select_next(snapshot, self.active_id.as_deref(), gate.as_ref())
+            }
+            trigger => self.registry.select(snapshot, seed, trigger, gate.as_ref()),
         };
         match result {
             SelectionResult::Selected(decision) => {
@@ -961,6 +1072,13 @@ impl SelectionController {
         let active_id = self.active_id.clone();
         self.registry = registry;
         self.active_id = active_id.filter(|id| self.registry.get(id).is_some());
+    }
+
+    /// Install one complete validated candidate (registry plus pool state) in
+    /// a single step so a config reload can never mix generations.
+    pub fn replace_sources(&mut self, registry: SceneRegistry, pools: Option<ScenePools>) {
+        self.replace_registry(registry);
+        self.set_pools(pools);
     }
 }
 
@@ -1841,18 +1959,18 @@ phase = 0.25
             weather: Weather::Unknown,
             season: Season::Unknown,
         };
-        let first = registry.select(snapshot, 42, SelectionTrigger::Reload);
-        let second = registry.select(snapshot, 42, SelectionTrigger::Reload);
+        let first = registry.select(snapshot, 42, SelectionTrigger::Reload, None);
+        let second = registry.select(snapshot, 42, SelectionTrigger::Reload, None);
         assert_eq!(first, second);
         match first {
             SelectionResult::Selected(decision) => assert_eq!(decision.id, "night"),
             other => panic!("unexpected selection: {other:?}"),
         }
         assert_eq!(
-            registry.select(snapshot, 42, SelectionTrigger::WeatherUpdated),
+            registry.select(snapshot, 42, SelectionTrigger::WeatherUpdated, None),
             SelectionResult::Ignored
         );
-        match registry.select(snapshot, 42, SelectionTrigger::ManualId("day".into())) {
+        match registry.select(snapshot, 42, SelectionTrigger::ManualId("day".into()), None) {
             SelectionResult::Selected(decision) => {
                 assert_eq!(decision.id, "day");
                 assert_eq!(decision.match_score, None);
@@ -1860,7 +1978,12 @@ phase = 0.25
             other => panic!("unexpected manual selection: {other:?}"),
         }
         assert!(matches!(
-            registry.select(snapshot, 42, SelectionTrigger::ManualId("missing".into())),
+            registry.select(
+                snapshot,
+                42,
+                SelectionTrigger::ManualId("missing".into()),
+                None
+            ),
             SelectionResult::Rejected(_)
         ));
         std::fs::remove_dir_all(root).unwrap();
@@ -1872,7 +1995,7 @@ phase = 0.25
         let mut controller = SelectionController::new(registry);
         let initial = EnvironmentSnapshot::unknown();
         let startup = controller
-            .request(initial, 1, SelectionTrigger::Startup)
+            .request(initial, None, 1, SelectionTrigger::Startup)
             .unwrap();
         controller.mark_active(&startup.id).unwrap();
         let changed = EnvironmentSnapshot {
@@ -1881,14 +2004,14 @@ phase = 0.25
             season: Season::Winter,
         };
         assert!(matches!(
-            controller.request(changed, 2, SelectionTrigger::ClockTick),
+            controller.request(changed, None, 2, SelectionTrigger::ClockTick),
             Err(SelectionResult::Ignored)
         ));
         assert_eq!(controller.generation(), 1);
         controller.invalidate_requests();
         assert_eq!(controller.generation(), 1);
         let reload = controller
-            .request(changed, 2, SelectionTrigger::Reload)
+            .request(changed, None, 2, SelectionTrigger::Reload)
             .unwrap();
         assert_eq!(reload.generation, 3);
         assert_eq!(controller.generation(), 2);
@@ -1899,13 +2022,13 @@ phase = 0.25
     fn unknown_values_need_explicit_unknown_or_wildcard_and_fallback_is_used() {
         let (root, registry) = loaded_registry();
         let unknown = EnvironmentSnapshot::unknown();
-        match registry.select(unknown, 1, SelectionTrigger::Startup) {
+        match registry.select(unknown, 1, SelectionTrigger::Startup, None) {
             SelectionResult::Selected(decision) => assert_eq!(decision.id, "day"),
             other => panic!("unexpected selection: {other:?}"),
         }
         let empty = SceneRegistry::empty();
         assert!(matches!(
-            empty.select(unknown, 1, SelectionTrigger::Startup),
+            empty.select(unknown, 1, SelectionTrigger::Startup, None),
             SelectionResult::NoScene(_)
         ));
         std::fs::remove_dir_all(root).unwrap();
@@ -1923,6 +2046,7 @@ phase = 0.25
                     weather: Weather::Unknown,
                     season: Season::Unknown,
                 },
+                None,
                 0,
                 SelectionTrigger::Next,
             )
@@ -1936,7 +2060,7 @@ phase = 0.25
             SelectionTrigger::ConfigChanged,
         ] {
             assert!(matches!(
-                controller.request(EnvironmentSnapshot::unknown(), 0, trigger),
+                controller.request(EnvironmentSnapshot::unknown(), None, 0, trigger),
                 Err(SelectionResult::Ignored)
             ));
         }
@@ -2339,14 +2463,14 @@ phase = 0.25
         registry.validate_adaptive().unwrap();
 
         let cool = registry
-            .adaptive_full_selection(Some(8.0), PrecipitationAppearance::Cloudy, None, None)
+            .adaptive_full_selection(Some(8.0), PrecipitationAppearance::Cloudy, None, None, None)
             .unwrap();
         assert_eq!(cool.scene_id, "v19-mountain-stream--cloudy");
         assert_eq!(cool.state.family_id, "v19-mountain-stream");
         assert_eq!(cool.state.temperature_band, TemperatureBand::Cool);
 
         let mild = registry
-            .adaptive_full_selection(Some(19.0), PrecipitationAppearance::Rain, None, None)
+            .adaptive_full_selection(Some(19.0), PrecipitationAppearance::Rain, None, None, None)
             .unwrap();
         assert_eq!(mild.scene_id, "v30-deep-forest--rain");
         assert_eq!(mild.state.temperature_band, TemperatureBand::Mild);
@@ -2357,6 +2481,7 @@ phase = 0.25
                 PrecipitationAppearance::Clear,
                 Some(&mild.state),
                 Some("v30-deep-forest"),
+                None,
             )
             .unwrap();
         assert_eq!(held.state.family_id, "v30-deep-forest");
@@ -2369,6 +2494,7 @@ phase = 0.25
                 PrecipitationAppearance::Clear,
                 Some(&mild.state),
                 Some("v30-deep-forest"),
+                None,
             )
             .unwrap();
         assert_eq!(changed.state.temperature_band, TemperatureBand::Warm);
@@ -2389,13 +2515,14 @@ phase = 0.25
                     temperature_band: TemperatureBand::Warm,
                 }),
                 Some("v29-seascape--cloudy"),
+                None,
             )
             .unwrap();
         assert_eq!(retained.scene_id, "v29-seascape--cloudy");
         assert_eq!(retained.state.family_id, "v29-seascape");
 
         let fallback = registry
-            .adaptive_full_selection(None, PrecipitationAppearance::Unknown, None, None)
+            .adaptive_full_selection(None, PrecipitationAppearance::Unknown, None, None, None)
             .unwrap();
         assert_eq!(fallback.scene_id, "v29-seascape");
         assert_eq!(fallback.state.temperature_band, TemperatureBand::Warm);
@@ -2409,6 +2536,7 @@ phase = 0.25
                     temperature_band: TemperatureBand::Cold,
                 }),
                 None,
+                None,
             )
             .unwrap();
         assert_eq!(restored.scene_id, "v29-seascape");
@@ -2420,19 +2548,22 @@ phase = 0.25
     fn weather_variant_selection_is_strictly_same_family_and_uses_fallback_order() {
         let (root, registry) = adaptive_registry();
         let snow = registry
-            .adaptive_variant_in_family("v26-winter-forest", PrecipitationAppearance::Snow)
+            .adaptive_variant_in_family("v26-winter-forest", PrecipitationAppearance::Snow, None)
             .unwrap();
         assert_eq!(snow.id, "v26-winter-forest--snow");
         let rain_without_rain_variant = registry
-            .adaptive_variant_in_family("v29-seascape", PrecipitationAppearance::Rain)
+            .adaptive_variant_in_family("v29-seascape", PrecipitationAppearance::Rain, None)
             .unwrap();
         assert_eq!(rain_without_rain_variant.id, "v29-seascape--cloudy");
-        let unknown =
-            registry.adaptive_variant_in_family("v29-seascape", PrecipitationAppearance::Unknown);
+        let unknown = registry.adaptive_variant_in_family(
+            "v29-seascape",
+            PrecipitationAppearance::Unknown,
+            None,
+        );
         assert!(unknown.is_none());
         assert!(
             registry
-                .adaptive_variant_in_family("missing-family", PrecipitationAppearance::Clear)
+                .adaptive_variant_in_family("missing-family", PrecipitationAppearance::Clear, None)
                 .is_none()
         );
         assert_eq!(
@@ -2465,6 +2596,434 @@ phase = 0.25
         std::fs::write(path, contents).unwrap();
         let error = SceneManifest::load(root.join("incomplete/scene.toml")).unwrap_err();
         assert!(error.to_string().contains("requires a safe family ID"));
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    // -----------------------------------------------------------------------
+    // S12-AC5: the shared eligibility gate over every automatic path.
+
+    use crate::scene_pools::{PoolEntry, PoolSource, ScenePools, SceneRule};
+
+    fn pool_state(scene_ids: &[&str], disabled: &[&str]) -> ScenePools {
+        let rules = disabled
+            .iter()
+            .map(|id| {
+                (
+                    (*id).to_owned(),
+                    SceneRule {
+                        enabled: false,
+                        ..SceneRule::default()
+                    },
+                )
+            })
+            .collect::<Vec<_>>();
+        ScenePools::from_parts(
+            vec![PoolEntry {
+                id: "test-pool".into(),
+                source: PoolSource::Registry,
+                enabled: true,
+                scene_ids: scene_ids.iter().map(|id| (*id).to_owned()).collect(),
+            }],
+            rules,
+        )
+        .unwrap()
+    }
+
+    fn cycling_registry() -> (PathBuf, SceneRegistry) {
+        let root = package_root("cycling");
+        std::fs::create_dir_all(&root).unwrap();
+        for id in ["alpha", "beta", "gamma"] {
+            write_package(&root, id, "times = [\"day\", \"night\"]\n", [1, 2, 3]);
+        }
+        write_registry(&root, "alpha", &["alpha", "beta", "gamma"]);
+        let registry = SceneRegistry::load(&root).unwrap();
+        (root, registry)
+    }
+
+    fn tagged_registry() -> (PathBuf, SceneRegistry) {
+        let root = package_root("tagged");
+        std::fs::create_dir_all(&root).unwrap();
+        write_package(
+            &root,
+            "day",
+            "times = [\"day\"]\nweather = [\"clear\"]\nseasons = [\"summer\"]\n",
+            [20, 30, 40],
+        );
+        write_package(
+            &root,
+            "night",
+            "times = [\"night\"]\nweather = [\"rain\"]\nseasons = [\"winter\"]\n",
+            [50, 60, 70],
+        );
+        write_registry(&root, "day", &["day", "night"]);
+        let registry = SceneRegistry::load(&root).unwrap();
+        (root, registry)
+    }
+
+    const ADAPTIVE_POOL_SCENES: &[&str] = &[
+        "v26-winter-forest",
+        "v26-winter-forest--snow",
+        "v19-mountain-stream",
+        "v19-mountain-stream--cloudy",
+        "v16-mirror-pond",
+        "v16-mirror-pond--rain",
+        "v30-deep-forest",
+        "v30-deep-forest--rain",
+        "vw3b-monolith-plains",
+        "v20-crystal-caves",
+        "v08-jungle-waterfall",
+        "v08-jungle-waterfall--cloudy",
+        "v29-seascape",
+        "v29-seascape--cloudy",
+        "coral-aquarius",
+        "v25-desert",
+        "v25-desert--cloudy",
+    ];
+
+    #[test]
+    fn pool_gate_constrains_automatic_paths_and_manual_id_is_an_override() {
+        let (root, registry) = cycling_registry();
+        let pools = pool_state(&["alpha", "beta", "gamma"], &["beta"]);
+        let snapshot = EnvironmentSnapshot {
+            time: TimeOfDay::Day,
+            weather: Weather::Clear,
+            season: Season::Summer,
+        };
+        let environment = PoolEnvironment::new(&snapshot, None);
+        let gate = PoolGate {
+            pools: &pools,
+            environment: &environment,
+        };
+
+        // Full selection sees only eligible candidates.
+        match registry.select(snapshot, 42, SelectionTrigger::Reload, Some(&gate)) {
+            SelectionResult::Selected(decision) => assert_ne!(
+                decision.id, "beta",
+                "the disabled scene must never be selected"
+            ),
+            other => panic!("unexpected selection: {other:?}"),
+        }
+        // Manual IDs are the explicit override and still load known packages.
+        match registry.select(
+            snapshot,
+            42,
+            SelectionTrigger::ManualId("beta".into()),
+            Some(&gate),
+        ) {
+            SelectionResult::Selected(decision) => assert_eq!(decision.id, "beta"),
+            other => panic!("unexpected manual selection: {other:?}"),
+        }
+        // Clock/weather/config triggers stay inert with or without the gate.
+        for trigger in [
+            SelectionTrigger::WeatherUpdated,
+            SelectionTrigger::ClockTick,
+            SelectionTrigger::OutputChanged,
+            SelectionTrigger::ConfigChanged,
+        ] {
+            assert_eq!(
+                registry.select(snapshot, 42, trigger.clone(), Some(&gate)),
+                SelectionResult::Ignored
+            );
+        }
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn gated_next_cycles_eligible_entries_with_wrap_and_no_op_reasons() {
+        let (root, registry) = cycling_registry();
+        let snapshot = EnvironmentSnapshot {
+            time: TimeOfDay::Day,
+            weather: Weather::Clear,
+            season: Season::Summer,
+        };
+
+        // Deterministic ID order with wrap over the eligible set.
+        let pools = pool_state(&["alpha", "beta", "gamma"], &[]);
+        let mut controller = SelectionController::new(registry);
+        controller.set_pools(Some(pools));
+        controller.mark_active("alpha").unwrap();
+        let first = controller
+            .request(snapshot, None, 7, SelectionTrigger::Next)
+            .unwrap();
+        assert_eq!(first.id, "beta");
+        controller.mark_active("beta").unwrap();
+        let second = controller
+            .request(snapshot, None, 7, SelectionTrigger::Next)
+            .unwrap();
+        assert_eq!(second.id, "gamma");
+        controller.mark_active("gamma").unwrap();
+        let wrapped = controller
+            .request(snapshot, None, 7, SelectionTrigger::Next)
+            .unwrap();
+        assert_eq!(wrapped.id, "alpha");
+
+        // Disabled scenes are skipped, never cycled to.
+        controller.set_pools(Some(pool_state(&["alpha", "beta", "gamma"], &["beta"])));
+        controller.mark_active("alpha").unwrap();
+        let skipped = controller
+            .request(snapshot, None, 7, SelectionTrigger::Next)
+            .unwrap();
+        assert_eq!(skipped.id, "gamma");
+
+        // With no eligible candidate, `next` is a no-op with a bounded reason.
+        controller.set_pools(Some(pool_state(
+            &["alpha", "beta", "gamma"],
+            &["alpha", "beta", "gamma"],
+        )));
+        match controller.request(snapshot, None, 7, SelectionTrigger::Next) {
+            Err(SelectionResult::Noop(reason)) => {
+                assert_eq!(reason, "no eligible scene for next")
+            }
+            other => panic!("unexpected next result: {other:?}"),
+        }
+        // Startup with an empty eligible set reports no eligible scene.
+        match controller.request(snapshot, None, 7, SelectionTrigger::Startup) {
+            Err(SelectionResult::NoScene(reason)) => assert_eq!(reason, "no eligible scene"),
+            other => panic!("unexpected startup result: {other:?}"),
+        }
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn designated_fallback_is_selectable_only_inside_the_eligible_set() {
+        let (root, registry) = tagged_registry();
+        let unknown = EnvironmentSnapshot::unknown();
+
+        // Legacy behavior with no sidecar is unchanged: all-zero scores use
+        // the designated fallback.
+        match registry.select(unknown, 1, SelectionTrigger::Startup, None) {
+            SelectionResult::Selected(decision) => assert_eq!(decision.id, "day"),
+            other => panic!("unexpected legacy selection: {other:?}"),
+        }
+
+        // With pool rules the fallback is never a bypass: only the eligible
+        // candidate is ranked.
+        let pools = pool_state(&["day", "night"], &["day"]);
+        let environment = PoolEnvironment::new(&unknown, None);
+        let gate = PoolGate {
+            pools: &pools,
+            environment: &environment,
+        };
+        match registry.select(unknown, 1, SelectionTrigger::Startup, Some(&gate)) {
+            SelectionResult::Selected(decision) => assert_eq!(decision.id, "night"),
+            other => panic!("unexpected gated selection: {other:?}"),
+        }
+
+        // An empty eligible set fails closed instead of using the fallback.
+        let pools = pool_state(&["day", "night"], &["day", "night"]);
+        let gate = PoolGate {
+            pools: &pools,
+            environment: &environment,
+        };
+        match registry.select(unknown, 1, SelectionTrigger::Startup, Some(&gate)) {
+            SelectionResult::NoScene(reason) => assert_eq!(reason, "no eligible scene"),
+            other => panic!("unexpected empty-set result: {other:?}"),
+        }
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn temperature_criteria_need_known_values_and_match_exact_boundaries() {
+        let (root, registry) = tagged_registry();
+        let rules = vec![(
+            "night".to_owned(),
+            SceneRule {
+                enabled: true,
+                time_of_day: None,
+                weather_any: None,
+                temperature_min_c: Some(5.0),
+                temperature_max_c: Some(10.0),
+            },
+        )];
+        let pools = ScenePools::from_parts(
+            vec![PoolEntry {
+                id: "test-pool".into(),
+                source: PoolSource::Registry,
+                enabled: true,
+                scene_ids: vec!["day".into(), "night".into()],
+            }],
+            rules,
+        )
+        .unwrap();
+        let snapshot = EnvironmentSnapshot {
+            time: TimeOfDay::Night,
+            weather: Weather::Rain,
+            season: Season::Winter,
+        };
+        for (temperature, expected) in [(Some(5.0), "night"), (Some(10.0), "night")] {
+            let environment = PoolEnvironment::new(&snapshot, temperature);
+            let gate = PoolGate {
+                pools: &pools,
+                environment: &environment,
+            };
+            match registry.select(snapshot, 3, SelectionTrigger::Startup, Some(&gate)) {
+                SelectionResult::Selected(decision) => assert_eq!(decision.id, expected),
+                other => panic!("unexpected selection: {other:?}"),
+            }
+        }
+        // An unknown required temperature does not match the criterion, so
+        // only the unconstrained candidate remains.
+        let environment = PoolEnvironment::new(&snapshot, None);
+        let gate = PoolGate {
+            pools: &pools,
+            environment: &environment,
+        };
+        match registry.select(snapshot, 3, SelectionTrigger::Startup, Some(&gate)) {
+            SelectionResult::Selected(decision) => assert_eq!(decision.id, "day"),
+            other => panic!("unexpected unknown-temperature selection: {other:?}"),
+        }
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn adaptive_variant_filter_walks_preference_order_without_crossing_families() {
+        let (root, registry) = adaptive_registry();
+        // Rain falls back rain -> cloudy -> clear within the family.
+        assert_eq!(
+            registry
+                .adaptive_variant_in_family("v29-seascape", PrecipitationAppearance::Rain, None)
+                .unwrap()
+                .id,
+            "v29-seascape--cloudy"
+        );
+        // The shared filter skips the preferred variant and continues in the
+        // approved same-family order instead of crossing families.
+        let pools = pool_state(ADAPTIVE_POOL_SCENES, &["v29-seascape--cloudy"]);
+        let environment = PoolEnvironment::new(&EnvironmentSnapshot::unknown(), None);
+        let gate = PoolGate {
+            pools: &pools,
+            environment: &environment,
+        };
+        assert_eq!(
+            registry
+                .adaptive_variant_in_family(
+                    "v29-seascape",
+                    PrecipitationAppearance::Rain,
+                    Some(&gate)
+                )
+                .unwrap()
+                .id,
+            "v29-seascape",
+            "eligible clear fallback stays inside the family"
+        );
+        // With every variant filtered, there is no eligible alternative.
+        let pools = pool_state(
+            ADAPTIVE_POOL_SCENES,
+            &["v29-seascape--cloudy", "v29-seascape"],
+        );
+        let gate = PoolGate {
+            pools: &pools,
+            environment: &environment,
+        };
+        assert!(
+            registry
+                .adaptive_variant_in_family(
+                    "v29-seascape",
+                    PrecipitationAppearance::Rain,
+                    Some(&gate)
+                )
+                .is_none(),
+            "no ineligible fallback and no cross-family variant"
+        );
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn adaptive_full_selection_fails_closed_without_crossing_family_or_using_v29() {
+        let (root, registry) = adaptive_registry();
+        let environment = PoolEnvironment::new(&EnvironmentSnapshot::unknown(), None);
+        // Cool band resolves to v19-mountain-stream; if all of its variants
+        // are filtered the decision reports no eligible candidate instead of
+        // crossing bands or falling back to V29.
+        let pools = pool_state(
+            ADAPTIVE_POOL_SCENES,
+            &["v19-mountain-stream--cloudy", "v19-mountain-stream"],
+        );
+        let gate = PoolGate {
+            pools: &pools,
+            environment: &environment,
+        };
+        let error = registry
+            .adaptive_full_selection(
+                Some(8.0),
+                PrecipitationAppearance::Cloudy,
+                None,
+                None,
+                Some(&gate),
+            )
+            .unwrap_err();
+        assert_eq!(error.to_string(), "no eligible candidate");
+
+        // The offline V29 fallback is only selectable inside the eligible set.
+        let pools = pool_state(ADAPTIVE_POOL_SCENES, &["v29-seascape"]);
+        let gate = PoolGate {
+            pools: &pools,
+            environment: &environment,
+        };
+        let error = registry
+            .adaptive_full_selection(
+                None,
+                PrecipitationAppearance::Unknown,
+                None,
+                None,
+                Some(&gate),
+            )
+            .unwrap_err();
+        assert_eq!(error.to_string(), "no eligible candidate");
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn adaptive_mode_pool_packages_stay_manual_only() {
+        let (root, registry) = loaded_registry();
+        let (extra_root, _) = loaded_registry();
+        let mut registry = registry;
+        let extra = SceneManifest::load(extra_root.join("day/scene.toml"))
+            .unwrap()
+            .0;
+        // A package ID conflict is always refused.
+        assert!(registry.add_pool_packages([extra], false).is_err());
+        let (pool_root, pool_registry) = loaded_registry();
+        let mut merged = pool_registry;
+        let mut renamed = SceneManifest::load(pool_root.join("night/scene.toml"))
+            .unwrap()
+            .0;
+        renamed.id = "library-extra".into();
+        merged.add_pool_packages([renamed], false).unwrap();
+        // Manual selection may load it, but no automatic path can select it.
+        assert!(merged.get("library-extra").is_some());
+        let unknown = EnvironmentSnapshot::unknown();
+        match merged.select(unknown, 5, SelectionTrigger::Reload, None) {
+            SelectionResult::Selected(decision) => assert_ne!(decision.id, "library-extra"),
+            other => panic!("unexpected selection: {other:?}"),
+        }
+        match merged.select(
+            unknown,
+            5,
+            SelectionTrigger::ManualId("library-extra".into()),
+            None,
+        ) {
+            SelectionResult::Selected(decision) => assert_eq!(decision.id, "library-extra"),
+            other => panic!("unexpected manual selection: {other:?}"),
+        }
+        std::fs::remove_dir_all(root).unwrap();
+        std::fs::remove_dir_all(extra_root).unwrap();
+        std::fs::remove_dir_all(pool_root).unwrap();
+    }
+
+    #[test]
+    fn absent_sidecar_preserves_legacy_next_and_startup_outcomes() {
+        let (root, registry) = loaded_registry();
+        let unknown = EnvironmentSnapshot::unknown();
+        // Legacy empty-compatible `next` keeps its historical NoScene outcome.
+        let mut controller = SelectionController::new(registry);
+        controller.set_pools(None);
+        match controller.request(unknown, None, 0, SelectionTrigger::Next) {
+            Err(SelectionResult::NoScene(reason)) => {
+                assert_eq!(reason, "no compatible scene for next")
+            }
+            other => panic!("unexpected legacy next result: {other:?}"),
+        }
         std::fs::remove_dir_all(root).unwrap();
     }
 }
