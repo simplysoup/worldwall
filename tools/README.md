@@ -20,18 +20,27 @@ The S02 nested lifecycle harness is `run_nested_s01.sh`. On a Wayland host with 
 
 `worldwall-theme-watch` is an opt-in companion script, not part of the
 Worldwall daemon or its scene-selection policy. It reads the active scene via
-`worldwallctl` and derives local Waybar, Alacritty, and Vim theme files; it may
-also update a running Waybar, Alacritty/Vim instances, and the Hyprland active
-border. It makes no weather requests. Running `--dry-run` computes and prints
-one theme without writing files; installing it into session startup is a
-separate operator choice.
+`worldwallctl` and derives local Waybar, Alacritty, and Vim theme files. The
+terminal colors stay close to the existing dark Alacritty palette, with a
+subtle wallpaper tint and a slightly translucent window; Vim separators and
+the Hyprland active border reuse Waybar's scene-derived outline color. It may
+also update a running Waybar and Alacritty/Vim instances. It makes no weather
+requests. Running `--dry-run` computes and prints one theme without writing
+files; installing it into session startup is a separate operator choice.
 
-The continuous watcher polls every 8 seconds. It writes a changed Waybar theme
-immediately but coalesces Waybar reload signals until 16 seconds (two polling
-intervals) have passed without another Waybar palette change. Each new change
-restarts that quiet period. `--once` retains immediate notification behavior.
-The debounce state machine has deterministic unit tests in
-`tests/test_waybar_reload_debounce.py`.
+The continuous watcher records the active scene at startup without changing
+any themes, then polls `worldwallctl status` every second and loads scene files
+only after the active scene ID changes. It does not resample when the selected
+scene's time-of-day palette changes. A changed Waybar palette reloads
+immediately; repeated palette changes within two seconds are coalesced into one
+trailing reload after two quiet seconds. A detected active scene-ID shift
+(including one caused by `worldwallctl next` or `worldwallctl scene <id>`)
+reloads immediately when the generated CSS changes and flushes any pending
+notification. Scene shifts are observed through status polling, not a direct
+command hook, so detection may take up to one second; any source of an actual
+scene-ID change can trigger the same refresh. `--once` remains an explicit
+manual refresh. Deterministic tests cover the debounce and scene-shift policy in
+`tests/test_waybar_reload_debounce.py` and `tests/test_worldwall_theme_watch.py`.
 
 The watcher requires Python 3.11+ (for `tomllib`) and Pillow. Its contrast
 helper source can be supplied with `WORLDWALL_APCA_HELPER_DIR`; by default it

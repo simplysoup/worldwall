@@ -1,0 +1,20 @@
+pkgbase = worldwall
+	pkgdesc = GPU-accelerated indexed pixel-art wallpaper engine for Hyprland/Wayland
+	pkgver = 0.1.0.r20260924.gfe42865
+	pkgrel = 1
+	url = https://github.com/simplysoup/worldwall
+	arch = x86_64
+	license = MIT
+	makedepends = rust
+	makedepends = pkgconf
+	depends = wayland
+	depends = vulkan-icd-loader
+	optdepends = vulkan-driver: Vulkan implementation for your GPU
+	optdepends = systemd: logind-based suspend/resume notifications
+	options = !debug
+	source = worldwall::git+https://github.com/simplysoup/worldwall.git#commit=fe42865000d71802231bd64baed12ca8e4e247ce
+	source = README.md
+	sha256sums = SKIP
+	sha256sums = 92f6814a32447e6120199442abe0a4de001e2f10ae82b33ba2cc8437359574a9
+
+pkgname = worldwall

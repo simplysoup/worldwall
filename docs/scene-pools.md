@@ -266,9 +266,18 @@ preserve the previous valid sidecar on failure; an explicit *Request config
 reload* action is the only contact with a running Worldwall and never starts,
 stops, or terminates it. It serves only token-scoped data on an ephemeral
 loopback port and prints a token-scoped link for the operator's regular
-browser (it launches no browser of its own). Pool membership is
-established when a sidecar is created (one pool per source collection);
-membership set changes use the offline validator. The curator checks catalog
+browser (it launches no browser of its own). With no sidecar, the UI starts
+with an unsaved suggested draft: every currently loaded library and registry
+scene is placed in an enabled pool grouped by source collection, with no
+per-scene criteria (therefore unrestricted by time, weather, or temperature).
+For an existing sidecar, *Add unassigned scene(s)* explicitly adds currently
+loaded scenes not already in any pool; existing pool enablement and scene rules
+are preserved, while a newly created source-collection pool defaults enabled.
+These are drafts until *Save sidecar* is used. Saving does not enable pool mode
+by itself: `worldwall.toml` must reference the sidecar, and the operator must
+explicitly request a config reload. This lets newly imported or active registry
+scenes become candidates for `worldwallctl next` without silently changing the
+running selection policy. The curator checks catalog
 structure, contained non-symlink package/asset paths, and selected PNG data,
 but it does not replace the full offline validator's
 digest/provenance/rule-set validation (`tools/scene_pool_library.py`): the

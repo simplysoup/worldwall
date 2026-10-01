@@ -27,7 +27,7 @@
     return id;
   }
 
-  function defaultPools(scenes) {
+  function defaultPools(scenes, existingPools = []) {
     const groups = new Map();
     for (const scene of scenes) {
       if (scene.source !== "library" && scene.source !== "registry") {
@@ -44,13 +44,57 @@
       groups.get(key).scene_ids.push(scene.id);
     }
 
-    const used = new Set();
-    return Array.from(groups.values(), (group) => ({
-      id: safePoolId(group.source, group.collection, used),
-      source: group.source,
-      enabled: true,
-      scene_ids: group.scene_ids,
+    // Keep user-authored state intact. Only scenes not already assigned to a
+    // pool are added, so an existing disabled pool stays disabled and existing
+    // scene criteria are never rewritten.
+    const pools = existingPools.map((pool) => ({
+      ...pool,
+      scene_ids: [...pool.scene_ids],
     }));
+    const assigned = new Set(pools.flatMap((pool) => pool.scene_ids));
+    const used = new Set(pools.map((pool) => pool.id));
+    const canonicalIds = new Map();
+    const canonicalUsed = new Set();
+    for (const [key, group] of groups) {
+      canonicalIds.set(key, safePoolId(group.source, group.collection, canonicalUsed));
+    }
+
+    for (const [key, group] of groups) {
+      const missing = group.scene_ids.filter((id) => !assigned.has(id));
+      if (missing.length === 0) {
+        continue;
+      }
+
+      // Extend a pool already containing scenes from this exact source group;
+      // reuse its canonical empty pool too, and preserve a user-renamed ID.
+      // Otherwise create an enabled, unrestricted-by-default pool.
+      const existing = pools.find((pool) =>
+        pool.source === group.source && (
+          pool.id === canonicalIds.get(key) ||
+          pool.scene_ids.some((id) => group.scene_ids.includes(id))
+        )
+      );
+      if (existing) {
+        existing.scene_ids.push(...missing);
+      } else {
+        let id = canonicalIds.get(key);
+        if (used.has(id)) {
+          id = safePoolId(group.source, group.collection, used);
+        } else {
+          used.add(id);
+        }
+        pools.push({
+          id,
+          source: group.source,
+          enabled: true,
+          scene_ids: missing,
+        });
+      }
+      for (const id of missing) {
+        assigned.add(id);
+      }
+    }
+    return pools;
   }
 
   return { defaultPools };

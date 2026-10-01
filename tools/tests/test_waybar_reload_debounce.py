@@ -11,23 +11,43 @@ WaybarReloadDebouncer = MODULE.WaybarReloadDebouncer
 
 
 class WaybarReloadDebouncerTests(unittest.TestCase):
-    def test_one_reload_becomes_due_after_a_quiet_period(self):
+    def test_one_palette_change_requests_an_immediate_reload(self):
         debouncer = WaybarReloadDebouncer(16.0)
 
         self.assertFalse(debouncer.take_if_due(100.0))
-        debouncer.palette_changed(100.0)
-        self.assertFalse(debouncer.take_if_due(115.999))
-        self.assertTrue(debouncer.take_if_due(116.0))
-        self.assertFalse(debouncer.take_if_due(132.0))
+        self.assertTrue(debouncer.palette_changed(100.0))
+        self.assertFalse(debouncer.has_pending)
+        self.assertFalse(debouncer.take_if_due(116.0))
 
-    def test_each_palette_change_restarts_the_quiet_period(self):
+    def test_successive_palette_changes_coalesce_until_the_quiet_period(self):
         debouncer = WaybarReloadDebouncer(16.0)
 
-        debouncer.palette_changed(100.0)
-        debouncer.palette_changed(108.0)
-        self.assertFalse(debouncer.take_if_due(123.999))
-        self.assertTrue(debouncer.take_if_due(124.0))
-        self.assertFalse(debouncer.take_if_due(140.0))
+        self.assertTrue(debouncer.palette_changed(100.0))
+        self.assertFalse(debouncer.palette_changed(108.0))
+        self.assertFalse(debouncer.palette_changed(112.0))
+        self.assertTrue(debouncer.has_pending)
+        self.assertFalse(debouncer.take_if_due(127.999))
+        self.assertTrue(debouncer.take_if_due(128.0))
+        self.assertFalse(debouncer.has_pending)
+        self.assertFalse(debouncer.take_if_due(144.0))
+
+    def test_a_new_change_after_quiet_period_is_immediate(self):
+        debouncer = WaybarReloadDebouncer(16.0)
+
+        self.assertTrue(debouncer.palette_changed(100.0))
+        self.assertTrue(debouncer.palette_changed(116.0))
+        self.assertFalse(debouncer.has_pending)
+
+    def test_reset_cancels_pending_reload(self):
+        debouncer = WaybarReloadDebouncer(16.0)
+
+        self.assertTrue(debouncer.palette_changed(100.0))
+        self.assertFalse(debouncer.palette_changed(108.0))
+        debouncer.reset()
+
+        self.assertFalse(debouncer.has_pending)
+        self.assertFalse(debouncer.take_if_due(124.0))
+        self.assertTrue(debouncer.palette_changed(125.0))
 
     def test_invalid_delay_is_rejected(self):
         for delay in (0.0, -1.0, float("inf"), float("nan")):

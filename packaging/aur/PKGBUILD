@@ -1,0 +1,59 @@
+_pkgcommit=fe42865000d71802231bd64baed12ca8e4e247ce
+pkgname=worldwall
+pkgver=0.1.0.r20260924.gfe42865
+pkgrel=1
+pkgdesc='GPU-accelerated indexed pixel-art wallpaper engine for Hyprland/Wayland'
+arch=('x86_64')
+url='https://github.com/simplysoup/worldwall'
+license=('MIT')
+options=('!debug')
+depends=('wayland' 'vulkan-icd-loader')
+makedepends=('rust' 'pkgconf')
+optdepends=(
+  'vulkan-driver: Vulkan implementation for your GPU'
+  'systemd: logind-based suspend/resume notifications'
+)
+if [[ -n ${WORLDWALL_LOCAL_REPO:-} ]]; then
+  # Useful for local/private builds; AUR builds use the public HTTPS source.
+  source=("${pkgname}::git+file://${WORLDWALL_LOCAL_REPO}#commit=${_pkgcommit}" 'README.md')
+else
+  source=("${pkgname}::git+https://github.com/simplysoup/worldwall.git#commit=${_pkgcommit}" 'README.md')
+fi
+sha256sums=('SKIP' '92f6814a32447e6120199442abe0a4de001e2f10ae82b33ba2cc8437359574a9')
+
+prepare() {
+  cd "$srcdir/$pkgname"
+  export CARGO_HOME="$srcdir/cargo-home"
+  cargo fetch --locked
+}
+
+_cargo_build_environment() {
+  export CARGO_HOME="$srcdir/cargo-home"
+  # GCC LTO objects from makepkg's CFLAGS cannot be linked by rust-lld.
+  export CFLAGS="${CFLAGS//-flto=auto/}"
+  # Avoid embedding the temporary makepkg source path in Rust debug metadata.
+  export RUSTFLAGS="${RUSTFLAGS:+$RUSTFLAGS }--remap-path-prefix=$srcdir=/usr/src/debug/$pkgname"
+}
+
+build() {
+  cd "$srcdir/$pkgname"
+  _cargo_build_environment
+  cargo build --frozen --release --all-features --bins
+}
+
+check() {
+  cd "$srcdir/$pkgname"
+  _cargo_build_environment
+  cargo test --frozen --all-targets --all-features
+}
+
+package() {
+  cd "$srcdir/$pkgname"
+
+  install -Dm755 target/release/worldwall "$pkgdir/usr/bin/worldwall"
+  install -Dm755 target/release/worldwallctl "$pkgdir/usr/bin/worldwallctl"
+  install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+  install -Dm644 "$srcdir/README.md" "$pkgdir/usr/share/doc/$pkgname/README.md"
+  install -Dm644 examples/worldwall.toml \
+    "$pkgdir/usr/share/doc/$pkgname/examples/worldwall.toml"
+}

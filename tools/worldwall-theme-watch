@@ -2,8 +2,9 @@
 """Keep Waybar, Alacritty, and Vim colors in sync with Worldwall's active scene.
 
 The palette is sampled from scene assets and the civil-time atlas. GPU animation
-phase is intentionally not mirrored: updates are coarse and only occur on a
-scene change or every 15 minutes.
+phase is intentionally not mirrored: the continuous watcher resamples only
+when the active scene ID changes, not at startup or when its time-of-day palette
+changes.
 """
 from __future__ import annotations
 
@@ -55,11 +56,14 @@ TERMINAL_SYNC_DISABLED_FILE = STATE_DIR / "terminal-sync.disabled"
 LOG_FILE = STATE_DIR / "watcher.log"
 PID_FILE = STATE_DIR / "watcher.pid"
 LOCK_FILE = STATE_DIR / "watcher.lock"
-POLL_SECONDS = 8
-TIME_RESAMPLE_SECONDS = 900
+POLL_SECONDS = 1
 WAYBAR_RELOAD_DEBOUNCE_SECONDS = POLL_SECONDS * 2
-BASE_SURFACE = (16, 11, 27)  # dark plum legacy tint seed
-LIGHT_SURFACE = (255, 253, 247)  # warm paper for normal-polarity terminal text
+BASE_SURFACE = (16, 11, 27)  # dark plum legacy seed for the palette-selection fallback
+TERMINAL_BASE_BACKGROUND = (20, 24, 28)  # current Alacritty theme: #14181c
+TERMINAL_BASE_FOREGROUND = (222, 216, 230)  # current Alacritty theme: #ded8e6
+TERMINAL_BACKGROUND_WALLPAPER_TINT = 0.14
+TERMINAL_FOREGROUND_WALLPAPER_TINT = 0.06
+TERMINAL_DEFAULT_OPACITY = 0.90
 WAYBAR_FOREGROUND = (243, 237, 248)
 WAYBAR_MATERIAL_SURFACE_LIGHTNESS = 0.20
 WAYBAR_MATERIAL_OPACITY = 0.90
@@ -84,6 +88,7 @@ GRUVBOX = {
     "bright_white": "#ebdbb2",
     "bright_black": "#928374",
 }
+WAYBAR_OUTLINE_OPACITY = 0.62
 
 
 def log(message: str) -> None:
@@ -485,6 +490,31 @@ def wcag_contrast_ratio(
     return (light + 0.05) / (dark + 0.05)
 
 
+def minimum_wcag_contrast(
+    foreground: tuple[int, int, int], backgrounds: Counter[tuple[int, int, int]]
+) -> float:
+    if not backgrounds:
+        raise ValueError("cannot score text against an empty set of backgrounds")
+    return min(wcag_contrast_ratio(foreground, background) for background in backgrounds)
+
+
+def lift_to_wcag_contrast(
+    color: tuple[int, int, int],
+    backgrounds: Counter[tuple[int, int, int]],
+    target: float = 4.5,
+) -> tuple[tuple[int, int, int], float]:
+    """Lighten a terminal color only as much as needed for dark-surface contrast."""
+    if not math.isfinite(target) or target <= 1.0:
+        raise ValueError("WCAG contrast target must be finite and greater than one")
+    for step in range(101):
+        candidate = mix(color, (255, 255, 255), step / 100)
+        score = minimum_wcag_contrast(candidate, backgrounds)
+        if score >= target:
+            return candidate, score
+    white = (255, 255, 255)
+    return white, minimum_wcag_contrast(white, backgrounds)
+
+
 def waybar_material_backdrops(
     palette: list[tuple[int, int, int]],
     waybar_counts: Counter[int],
@@ -708,10 +738,10 @@ def choose_palette_colors(palette: list[tuple[int, int, int]], counts: Counter[i
 def alacritty_window_opacity() -> float:
     try:
         config = tomllib.loads(ALACRITTY_CONFIG.read_text(encoding="utf-8"))
-        opacity = float(config.get("window", {}).get("opacity", 1.0))
-        return opacity if math.isfinite(opacity) and 0.0 <= opacity <= 1.0 else 1.0
+        opacity = float(config.get("window", {}).get("opacity", TERMINAL_DEFAULT_OPACITY))
+        return opacity if math.isfinite(opacity) and 0.0 <= opacity <= 1.0 else TERMINAL_DEFAULT_OPACITY
     except (OSError, ValueError, TypeError, tomllib.TOMLDecodeError):
-        return 1.0
+        return TERMINAL_DEFAULT_OPACITY
 
 
 def terminal_backdrop_histogram(
@@ -764,6 +794,32 @@ def best_scene_palette_color(
     return best_color, best_minimum, best_average
 
 
+def best_wcag_scene_palette_color(
+    palette: list[tuple[int, int, int]],
+    scene_counts: Counter[int],
+    backgrounds: Counter[tuple[int, int, int]],
+) -> tuple[tuple[int, int, int], float, float]:
+    """Choose a wallpaper color with strong worst-case and weighted WCAG contrast."""
+    if not palette or not scene_counts or not backgrounds:
+        raise ValueError("cannot choose terminal text without scene and background samples")
+    if any(not 0 <= index < len(palette) or count < 0 for index, count in scene_counts.items()):
+        raise ValueError("scene histogram is invalid")
+    candidates = [palette[index] for index in sorted(scene_counts) if scene_counts[index] > 0]
+    if not candidates:
+        raise ValueError("scene histogram has no used colors")
+    total_backgrounds = sum(backgrounds.values())
+    scores = []
+    for color in candidates:
+        ratios = [
+            (wcag_contrast_ratio(color, background), weight)
+            for background, weight in backgrounds.items()
+        ]
+        minimum = min(ratio for ratio, _weight in ratios)
+        average = sum(ratio * weight for ratio, weight in ratios) / total_backgrounds
+        scores.append((color, minimum, average))
+    return max(scores, key=lambda row: (row[1], row[2]))
+
+
 def best_contrast_palette_color(
     palette: list[tuple[int, int, int]],
     scene_counts: Counter[int],
@@ -780,50 +836,67 @@ def best_contrast_palette_color(
     return best_scene_palette_color(palette, scene_counts, backgrounds)
 
 
-def apca_safe_ui_backgrounds(
+def wcag_safe_ui_backgrounds(
     text: tuple[int, int, int],
     proposals: dict[str, tuple[int, int, int]],
     surface: tuple[int, int, int],
     palette: list[tuple[int, int, int]],
     counts: Counter[int],
     opacity: float,
-    target_lc: float = APCA_TEXT_TARGET_LC,
+    target: float = 4.5,
 ) -> tuple[dict[str, tuple[int, int, int]], dict[str, float]]:
-    """Keep subtle UI surfaces near their proposal while protecting text Lc."""
-    pairs: list[tuple[tuple[int, int, int], tuple[int, int, int]]] = []
-    weights: list[int] = []
-    groups: list[tuple[str, list[tuple[int, int, int]], list[tuple[int, int]]]] = []
-    for name, proposed in proposals.items():
-        candidates = [quantize(mix(proposed, surface, step / 64)) for step in range(65)]
-        group_rows: list[tuple[int, int]] = []
-        for candidate in candidates:
-            background_samples = terminal_backdrop_histogram(candidate, palette, counts, opacity)
-            start = len(pairs)
-            for background, weight in sorted(background_samples.items()):
-                pairs.append((text, background))
-                weights.append(weight)
-            group_rows.append((start, len(pairs)))
-        groups.append((name, candidates, group_rows))
-
-    contrasts = apca_contrast_pairs(pairs)
+    """Keep Vim UI surfaces near their proposal while maintaining WCAG AA."""
     chosen: dict[str, tuple[int, int, int]] = {}
     scores: dict[str, float] = {}
-    for name, candidates, ranges in groups:
+    for name, proposed in proposals.items():
         evaluated = []
-        for candidate, (start, end) in zip(candidates, ranges, strict=True):
-            values = [abs(value) for value in contrasts[start:end]]
-            minimum = min(values)
-            weighted_average = sum(
-                abs(contrasts[index]) * weights[index]
-                for index in range(start, end)
-            ) / sum(weights[start:end])
-            evaluated.append((candidate, minimum, weighted_average))
-        chosen_row = next((row for row in evaluated if row[1] >= target_lc), None)
+        for step in range(65):
+            candidate = quantize(mix(proposed, surface, step / 64))
+            backdrops = terminal_backdrop_histogram(candidate, palette, counts, opacity)
+            minimum = minimum_wcag_contrast(text, backdrops)
+            evaluated.append((candidate, minimum))
+        chosen_row = next((row for row in evaluated if row[1] >= target), None)
         if chosen_row is None:
-            chosen_row = max(evaluated, key=lambda row: (row[1], row[2]))
+            chosen_row = max(evaluated, key=lambda row: row[1])
         chosen[name] = chosen_row[0]
         scores[name] = chosen_row[1]
     return chosen, scores
+
+
+def choose_wallpaper_surface(
+    palette: list[tuple[int, int, int]], counts: Counter[int]
+) -> tuple[int, int, int]:
+    """Nudge the existing dark terminal background toward wallpaper shadows."""
+    if not palette or not counts or any(
+        not 0 <= index < len(palette) or count <= 0 for index, count in counts.items()
+    ):
+        raise ValueError("cannot choose a terminal surface without valid scene colors")
+
+    dark_colors = [
+        (palette[index], count)
+        for index, count in counts.items()
+        if relative_luminance(palette[index]) <= 0.10
+    ]
+    if dark_colors:
+        dark_weight = sum(count for _color, count in dark_colors)
+        wallpaper_shadow = tuple(
+            round(sum(color[channel] * count for color, count in dark_colors) / dark_weight)
+            for channel in range(3)
+        )
+    else:
+        wallpaper_shadow = min(
+            ((palette[index], count) for index, count in counts.items()),
+            key=lambda row: (relative_luminance(row[0]), -row[1], row[0]),
+        )[0]
+        # Preserve a bright scene's hue without allowing it to turn the
+        # terminal's established dark surface into a light background.
+        while relative_luminance(wallpaper_shadow) > 0.10:
+            wallpaper_shadow = tuple(round(channel * 0.8) for channel in wallpaper_shadow)
+
+    return quantize(
+        mix(TERMINAL_BASE_BACKGROUND, wallpaper_shadow, TERMINAL_BACKGROUND_WALLPAPER_TINT),
+        step=2,
+    )
 
 
 def build_theme(
@@ -834,8 +907,7 @@ def build_theme(
     waybar_total: int | None = None,
 ) -> dict[str, str]:
     _dark_surface, accent_source, secondary_source = choose_palette_colors(palette, counts, total)
-    scene_average = weighted_average_color(palette, counts, total)
-    surface = quantize(mix(LIGHT_SURFACE, scene_average, 0.02))
+    surface = choose_wallpaper_surface(palette, counts)
     waybar_counts = waybar_counts or counts
     waybar_total = waybar_total or sum(waybar_counts.values())
     waybar_average = weighted_average_color(palette, waybar_counts, waybar_total)
@@ -857,12 +929,15 @@ def build_theme(
 
     opacity = alacritty_window_opacity()
     terminal_backgrounds = terminal_backdrop_histogram(surface, palette, counts, opacity)
-    foreground_source, terminal_source_min_lc, _terminal_average_lc = best_scene_palette_color(
+    foreground_source, _source_min_wcag, _source_average_wcag = best_wcag_scene_palette_color(
         palette, counts, terminal_backgrounds
     )
-    foreground_result = apca_lift_colors([foreground_source], terminal_backgrounds)[0]
-    foreground = foreground_result["rgb"]
-    terminal_min_lc = foreground_result["minimum_lc"]
+    foreground_seed = mix(
+        TERMINAL_BASE_FOREGROUND,
+        foreground_source,
+        TERMINAL_FOREGROUND_WALLPAPER_TINT,
+    )
+    foreground, terminal_min_wcag = lift_to_wcag_contrast(foreground_seed, terminal_backgrounds)
 
     palette_sources = {
         "accent": accent_source,
@@ -882,17 +957,20 @@ def build_theme(
         "ansi_bright_magenta": hex_rgb(GRUVBOX["bright_magenta"]),
         "ansi_bright_white": hex_rgb(GRUVBOX["bright_white"]),
     }
-    lifted_palette = apca_lift_colors(list(palette_sources.values()), terminal_backgrounds)
-    apca_palette = {
-        name: result
-        for name, result in zip(palette_sources, lifted_palette, strict=True)
+    lifted_palette = {
+        name: lift_to_wcag_contrast(color, terminal_backgrounds)
+        for name, color in palette_sources.items()
     }
-    accent = apca_palette["accent"]["rgb"]
-    bright_accent = apca_palette["bright_accent"]["rgb"]
-    secondary = apca_palette["secondary"]["rgb"]
-    bright_secondary = apca_palette["bright_secondary"]["rgb"]
+    terminal_palette = {
+        name: {"rgb": result[0], "minimum_wcag": result[1]}
+        for name, result in lifted_palette.items()
+    }
+    accent = terminal_palette["accent"]["rgb"]
+    bright_accent = terminal_palette["bright_accent"]["rgb"]
+    secondary = terminal_palette["secondary"]["rgb"]
+    bright_secondary = terminal_palette["bright_secondary"]["rgb"]
 
-    ui_backgrounds, ui_min_lc = apca_safe_ui_backgrounds(
+    ui_backgrounds, ui_min_wcag = wcag_safe_ui_backgrounds(
         foreground,
         {
             "selection": mix(surface, secondary, 0.52),
@@ -908,38 +986,39 @@ def build_theme(
         counts,
         opacity,
     )
-    palette_min_lc = min(result["minimum_lc"] for result in apca_palette.values())
+    palette_min_wcag = min(result["minimum_wcag"] for result in terminal_palette.values())
     return {
         "background": rgb_hex(surface),
         "foreground": rgb_hex(foreground),
         "foreground_source": rgb_hex(foreground_source),
-        "muted": rgb_hex(apca_palette["muted"]["rgb"]),
+        "muted": rgb_hex(terminal_palette["muted"]["rgb"]),
         "waybar_foreground": rgb_hex(waybar_foreground),
         "waybar_tooltip_foreground": rgb_hex(WAYBAR_FOREGROUND),
         "waybar_average": rgb_hex(waybar_average),
         "waybar_accent": rgb_hex(waybar_accent),
+        "outline": rgb_hex(waybar_accent),
         "waybar_accent_min_wcag": f"{waybar_accent_min_wcag:.3f}",
         "waybar_text_min_wcag": f"{waybar_text_min_wcag:.3f}",
         "waybar_min_lc": f"{waybar_min_lc:.3f}",
         "waybar_average_lc": f"{waybar_average_lc:.3f}",
-        "terminal_min_lc": f"{terminal_min_lc:.3f}",
-        "palette_min_lc": f"{palette_min_lc:.3f}",
-        "palette_target_lc": f"{APCA_TEXT_TARGET_LC:.1f}",
+        "terminal_min_wcag": f"{terminal_min_wcag:.3f}",
+        "palette_min_wcag": f"{palette_min_wcag:.3f}",
+        "palette_target_wcag": "4.5",
         "accent": rgb_hex(accent),
         "bright_accent": rgb_hex(bright_accent),
         "secondary": rgb_hex(secondary),
         "bright_secondary": rgb_hex(bright_secondary),
-        "ansi_red": rgb_hex(apca_palette["ansi_red"]["rgb"]),
-        "ansi_green": rgb_hex(apca_palette["ansi_green"]["rgb"]),
-        "ansi_yellow": rgb_hex(apca_palette["ansi_yellow"]["rgb"]),
-        "ansi_magenta": rgb_hex(apca_palette["ansi_magenta"]["rgb"]),
-        "ansi_white": rgb_hex(apca_palette["ansi_white"]["rgb"]),
-        "ansi_bright_black": rgb_hex(apca_palette["ansi_bright_black"]["rgb"]),
-        "ansi_bright_red": rgb_hex(apca_palette["ansi_bright_red"]["rgb"]),
-        "ansi_bright_green": rgb_hex(apca_palette["ansi_bright_green"]["rgb"]),
-        "ansi_bright_yellow": rgb_hex(apca_palette["ansi_bright_yellow"]["rgb"]),
-        "ansi_bright_magenta": rgb_hex(apca_palette["ansi_bright_magenta"]["rgb"]),
-        "ansi_bright_white": rgb_hex(apca_palette["ansi_bright_white"]["rgb"]),
+        "ansi_red": rgb_hex(terminal_palette["ansi_red"]["rgb"]),
+        "ansi_green": rgb_hex(terminal_palette["ansi_green"]["rgb"]),
+        "ansi_yellow": rgb_hex(terminal_palette["ansi_yellow"]["rgb"]),
+        "ansi_magenta": rgb_hex(terminal_palette["ansi_magenta"]["rgb"]),
+        "ansi_white": rgb_hex(terminal_palette["ansi_white"]["rgb"]),
+        "ansi_bright_black": rgb_hex(terminal_palette["ansi_bright_black"]["rgb"]),
+        "ansi_bright_red": rgb_hex(terminal_palette["ansi_bright_red"]["rgb"]),
+        "ansi_bright_green": rgb_hex(terminal_palette["ansi_bright_green"]["rgb"]),
+        "ansi_bright_yellow": rgb_hex(terminal_palette["ansi_bright_yellow"]["rgb"]),
+        "ansi_bright_magenta": rgb_hex(terminal_palette["ansi_bright_magenta"]["rgb"]),
+        "ansi_bright_white": rgb_hex(terminal_palette["ansi_bright_white"]["rgb"]),
         "selection": rgb_hex(ui_backgrounds["selection"]),
         "cursorline": rgb_hex(ui_backgrounds["cursorline"]),
         "statusline": rgb_hex(ui_backgrounds["statusline"]),
@@ -947,13 +1026,13 @@ def build_theme(
         "cursor": rgb_hex(ui_backgrounds["cursor"]),
         "search": rgb_hex(ui_backgrounds["search"]),
         "search_emphasis": rgb_hex(ui_backgrounds["search_emphasis"]),
-        "selection_min_lc": f"{ui_min_lc['selection']:.3f}",
-        "cursorline_min_lc": f"{ui_min_lc['cursorline']:.3f}",
-        "statusline_min_lc": f"{ui_min_lc['statusline']:.3f}",
-        "pumenu_min_lc": f"{ui_min_lc['pumenu']:.3f}",
-        "cursor_min_lc": f"{ui_min_lc['cursor']:.3f}",
-        "search_min_lc": f"{ui_min_lc['search']:.3f}",
-        "search_emphasis_min_lc": f"{ui_min_lc['search_emphasis']:.3f}",
+        "selection_min_wcag": f"{ui_min_wcag['selection']:.3f}",
+        "cursorline_min_wcag": f"{ui_min_wcag['cursorline']:.3f}",
+        "statusline_min_wcag": f"{ui_min_wcag['statusline']:.3f}",
+        "pumenu_min_wcag": f"{ui_min_wcag['pumenu']:.3f}",
+        "cursor_min_wcag": f"{ui_min_wcag['cursor']:.3f}",
+        "search_min_wcag": f"{ui_min_wcag['search']:.3f}",
+        "search_emphasis_min_wcag": f"{ui_min_wcag['search_emphasis']:.3f}",
     }
 
 
@@ -1010,6 +1089,7 @@ def render_vim(theme: dict[str, str]) -> str:
     statusline = theme["statusline"]
     pumenu = theme["pumenu"]
     selection = theme["selection"]
+    outline = theme["outline"]
 
     groups = [
         ("Normal", foreground, background, 254, 0, None),
@@ -1052,8 +1132,8 @@ def render_vim(theme: dict[str, str]) -> str:
         ("TabLine", muted, statusline, 8, 4, None),
         ("TabLineSel", foreground, theme["search_emphasis"], 7, 4, "bold"),
         ("TabLineFill", muted, background, 8, 0, None),
-        ("VertSplit", muted, background, 8, 0, None),
-        ("WinSeparator", muted, background, 8, 0, None),
+        ("VertSplit", outline, background, 6, 0, None),
+        ("WinSeparator", outline, background, 6, 0, None),
         ("Pmenu", foreground, pumenu, 254, 4, None),
         ("PmenuSel", foreground, selection, 7, 4, "bold"),
         ("PmenuSbar", None, statusline, None, 4, None),
@@ -1201,14 +1281,29 @@ def resolve_scene_package(scene_id: str, config: dict) -> Path:
     raise ValueError(f"active scene is not listed in configured registry or library: {scene_id}")
 
 
-def read_worldwall_state() -> tuple[dict, dict, Path, str]:
-    if not WW_CONFIG.is_file():
-        raise ValueError(f"Worldwall config is unavailable: {WW_CONFIG}")
-    config = tomllib.loads(WW_CONFIG.read_text(encoding="utf-8"))
+def read_worldwall_status() -> dict:
     status_result = subprocess.run([str(WWCTL), "status"], check=True, capture_output=True, text=True, timeout=3)
     status = json.loads(status_result.stdout)
     if status.get("ok") is not True:
         raise ValueError("worldwallctl status returned an unsuccessful response")
+    return status
+
+
+def read_current_scene_id() -> str:
+    status = read_worldwall_status()
+    return safe_scene_id(status.get("data", {}).get("scene"))
+
+
+def scene_theme_refresh_due(previous_scene: str | None, current_scene: str) -> bool:
+    """Refresh only after a previously observed active scene ID changes."""
+    return previous_scene is not None and current_scene != previous_scene
+
+
+def read_worldwall_state() -> tuple[dict, dict, Path, str]:
+    if not WW_CONFIG.is_file():
+        raise ValueError(f"Worldwall config is unavailable: {WW_CONFIG}")
+    config = tomllib.loads(WW_CONFIG.read_text(encoding="utf-8"))
+    status = read_worldwall_status()
     scene_id = safe_scene_id(status.get("data", {}).get("scene"))
     package = resolve_scene_package(scene_id, config)
     scene_doc = tomllib.loads(contained_file(package, "scene.toml").read_text(encoding="utf-8"))
@@ -1242,15 +1337,27 @@ def reload_waybar() -> None:
         pass
 
 
+def waybar_reload_needed(
+    debouncer: WaybarReloadDebouncer,
+    *,
+    scene_shifted: bool,
+    palette_changed: bool,
+    now: float,
+) -> bool:
+    """Reload changed palettes immediately for scene shifts; debounce only repeats."""
+    if scene_shifted:
+        reload_needed = palette_changed or debouncer.has_pending
+        debouncer.reset()
+        return reload_needed
+    return palette_changed and debouncer.palette_changed(now)
+
+
 def update_hyprland_border(theme: dict[str, str]) -> None:
     if not os.environ.get("HYPRLAND_INSTANCE_SIGNATURE"):
         return
-    accent = hex_rgb(theme["accent"])
-    surface = hex_rgb(theme["background"])
-    # Keep the frame in the scene's accent family but tone it down against the
-    # wallpaper and terminal text; this replaces the old cyan/green gradient.
-    border = quantize(mix(accent, surface, 0.40))
-    color = f"rgba({rgb_hex(border)[1:]}bb)"
+    # Match Waybar's material outline exactly: same scene-derived accent and
+    # the same 62% opacity, encoded in Hyprland's 8-bit alpha channel.
+    color = f"rgba({theme['outline'][1:]}{round(WAYBAR_OUTLINE_OPACITY * 255):02x})"
     try:
         command = f'hl.config({{ ["general.col.active_border"] = "{color}" }})'
         result = subprocess.run(
@@ -1275,6 +1382,7 @@ def update_alacritty_runtime(theme: dict[str, str]) -> None:
         f"colors.cursor.cursor={json.dumps(theme['cursor'])}",
         f"colors.selection.text={json.dumps(theme['foreground'])}",
         f"colors.selection.background={json.dumps(theme['selection'])}",
+        f"window.opacity={alacritty_window_opacity():.2f}",
         f"colors.normal.black={json.dumps(theme['background'])}",
         f"colors.normal.red={json.dumps(theme['ansi_red'])}",
         f"colors.normal.green={json.dumps(theme['ansi_green'])}",
@@ -1394,7 +1502,6 @@ def run_watcher(supervisor_pid: int | None = None) -> int:
     signal.signal(signal.SIGTERM, request_stop)
     signal.signal(signal.SIGINT, request_stop)
     last_scene = None
-    last_sample = 0.0
     waybar_reload_debouncer = WaybarReloadDebouncer(WAYBAR_RELOAD_DEBOUNCE_SECONDS)
     try:
         while not stop_requested:
@@ -1405,19 +1512,32 @@ def run_watcher(supervisor_pid: int | None = None) -> int:
                 log(f"session supervisor PID {supervisor_pid} exited; stopping watcher")
                 break
             try:
-                # Status is cheap; re-read the palette only on scene changes or
-                # at a deliberately coarse cadence for civil-time transitions.
-                _config, _doc, _package, scene_id = read_worldwall_state()
+                # Poll only the status response at this cadence; time-of-day
+                # palette changes do not cause a theme refresh.
+                scene_id = read_current_scene_id()
                 now = time.monotonic()
-                if scene_id != last_scene or now - last_sample >= TIME_RESAMPLE_SECONDS:
+                if last_scene is None:
+                    # Establish a baseline without changing desktop themes.
+                    last_scene = scene_id
+                elif scene_theme_refresh_due(last_scene, scene_id):
                     # read_worldwall_state already confirmed a healthy active scene.
                     applied_scene, _theme, _source, changed = apply_once(
                         quiet=True, defer_waybar_reload=True
                     )
+                    scene_shifted = last_scene is not None and applied_scene != last_scene
                     last_scene = applied_scene
-                    last_sample = now
-                    if WAYBAR_THEME in changed:
-                        waybar_reload_debouncer.palette_changed(now)
+                    if waybar_reload_needed(
+                        waybar_reload_debouncer,
+                        scene_shifted=scene_shifted,
+                        palette_changed=WAYBAR_THEME in changed,
+                        now=now,
+                    ):
+                        reload_waybar()
+                        log(
+                            "Waybar reload dispatched after scene shift"
+                            if scene_shifted
+                            else "Waybar reload dispatched for palette change"
+                        )
             except Exception as exc:
                 log(f"sync deferred: {type(exc).__name__}: {exc}")
                 for _ in range(30):

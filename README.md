@@ -88,6 +88,10 @@ worldwallctl next
 worldwallctl weather
 ```
 
+For an x86_64 Arch package and transfer/install instructions, see the
+[Arch/AUR package section](docs/release.md#arch-linux-package). Its package
+archive is a local build artifact; the recipe is not published to the AUR.
+
 The post-M4 curator is under development. Its current read-only slice can be
 opened independently of Worldwall with an explicit local library, for example:
 

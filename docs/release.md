@@ -160,6 +160,56 @@ power savings, driver allocator/VRAM statistics, or completed S11 acceptance.
 Those claims require the approved matrix, numeric budgets, raw measurements,
 and retained evidence described in [validation](validation.md).
 
+## Arch Linux package
+
+A pinned, build-from-source PKGBUILD is maintained at
+[`packaging/aur/`](../packaging/aur/). From the project checkout, build and
+install it on an Arch Linux machine with the standard development tools and
+dependencies available:
+
+```sh
+cd packaging/aur
+WORLDWALL_LOCAL_REPO="$(git -C ../.. rev-parse --show-toplevel)" makepkg -si
+```
+
+The local-source override builds the pinned revision from the existing checkout
+without requiring an upstream Git fetch. In a public AUR checkout, the default
+source fetches that pinned revision over HTTPS. Both paths fetch locked Rust
+crate dependencies, run the Rust test suite, and build an x86_64 package.
+
+`makepkg -si` installs the built package after its confirmation prompt. To
+build an archive for transfer without installing it, run `makepkg -f`; copy the
+resulting `worldwall-*.pkg.tar.zst` to the other Arch machine. Install the
+runtime dependencies there (plus the Vulkan driver package appropriate to that
+GPU), then install Worldwall:
+
+```sh
+sudo pacman -S wayland vulkan-icd-loader
+sudo pacman -U ./worldwall-*.pkg.tar.zst
+```
+
+`vulkan-driver` is an optional virtual dependency because the correct provider
+depends on the target GPU. A source fetch attempted during this update
+was denied pending GitHub authentication; anonymous AUR build availability is
+therefore unverified, and a public AUR listing would require publicly
+fetchable source.
+
+The PKGBUILD installs `/usr/bin/worldwall` and `/usr/bin/worldwallctl`, a
+package-specific quick-start at `/usr/share/doc/worldwall/README.md`, and an
+example configuration under `/usr/share/doc/worldwall/examples/`. It does not
+add a service, edit Hyprland configuration, create a private config, or bundle
+a scene registry/artwork.
+For Hyprland, configure one startup entry such as
+`exec-once = /usr/bin/worldwall`, and point `WORLDWALL_CONFIG` at a config with
+your own validated registry and settings. Install the example config only if
+you want a starting point; it contains no artwork or location data.
+
+This checkout contains an AUR-compatible PKGBUILD but has **not** been
+published to the AUR. Until it is published separately, build from the source
+checkout as shown above or transfer the generated package archive. When
+updating the recipe, update its pinned commit and `pkgver` together, then
+regenerate `.SRCINFO` with `makepkg --printsrcinfo`.
+
 ## Operator configuration and privacy
 
 Scene registries and scene packages are supplied separately. Art assets are not

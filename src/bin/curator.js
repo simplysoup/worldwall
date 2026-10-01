@@ -951,16 +951,41 @@ function collectRulesPayload() {
   };
 }
 
-function defaultPools() {
-  return CuratorPools.defaultPools(state.catalog.scenes);
+function defaultPools(existingPools = []) {
+  return CuratorPools.defaultPools(state.catalog.scenes, existingPools);
+}
+
+function includeAvailableScenes() {
+  const before = new Set(state.rules.pools.flatMap((pool) => pool.scene_ids));
+  state.rules.pools = defaultPools(state.rules.pools);
+  const added = state.rules.pools
+    .flatMap((pool) => pool.scene_ids)
+    .filter((id) => !before.has(id)).length;
+  renderPools();
+  setStatus(
+    `${added} available scene(s) added to the draft. Save the sidecar, then request config reload to apply it.`,
+  );
 }
 
 function renderPools() {
   const container = $("pools");
   container.replaceChildren();
+  const note = $("pool-defaults-note");
+  note.textContent = state.catalog.rules_present
+    ? "Unassigned scenes can be added without changing existing pool switches or scene rules. New pools default enabled; scenes have no extra criteria. Save and request config reload to apply."
+    : "Suggested defaults include every loaded scene in enabled pools with no extra criteria. This is an unsaved draft; save it, ensure worldwall.toml references this sidecar, then request config reload.";
   if (!state.rules) {
     container.textContent = "No sidecar yet.";
     return;
+  }
+  const assigned = new Set(state.rules.pools.flatMap((pool) => pool.scene_ids));
+  const available = state.catalog.scenes.filter((scene) => !assigned.has(scene.id)).length;
+  if (available > 0) {
+    const add = document.createElement("button");
+    add.type = "button";
+    add.textContent = `Add ${available} unassigned scene(s)`;
+    add.addEventListener("click", includeAvailableScenes);
+    container.appendChild(add);
   }
   for (const pool of state.rules.pools) {
     const row = document.createElement("div");
@@ -1026,13 +1051,16 @@ async function loadCatalog() {
   const catalog = await fetchJson("catalog");
   state.catalog = catalog;
   state.rules = catalog.rules || state.rules;
+  if (!state.rules) {
+    state.rules = { pools: defaultPools(), scene_rules: [] };
+  }
   $("rules-path").textContent = `Sidecar: ${catalog.rules_path}${catalog.rules_present ? "" : " (not created yet)"}`;
   renderPools();
   renderSceneList();
   const libraryCount = catalog.scenes.filter((scene) => scene.source === "library").length;
   const registryCount = catalog.scenes.length - libraryCount;
   setStatus(
-    `${catalog.rules_present ? "Catalog and sidecar loaded" : "Catalog loaded; no sidecar yet — Save sidecar creates one"} ` +
+    `${catalog.rules_present ? "Catalog and sidecar loaded" : "Suggested defaults loaded as an unsaved draft"} ` +
       `(${libraryCount} library, ${registryCount} registry scenes; ${catalog.registry_note}).`,
   );
 }

@@ -32,7 +32,31 @@ assert.deepStrictEqual(pools, [
   { id: "library-foo-bar", source: "library", enabled: true, scene_ids: ["derived-a"] },
   { id: "library-foo-bar-2", source: "library", enabled: true, scene_ids: ["derived-b"] },
 ]);
-console.log("source-aware default pools verified");
+const existing = [
+  { id: "curated-library", source: "library", enabled: false, scene_ids: ["canvas-a"] },
+  { id: "curated-registry", source: "registry", enabled: true, scene_ids: ["registry-a"] },
+];
+const before = JSON.stringify(existing);
+const extended = defaultPools([
+  { id: "canvas-a", source: "library", source_collection: "canvascycle" },
+  { id: "canvas-b", source: "library", source_collection: "canvascycle" },
+  { id: "registry-a", source: "registry", source_collection: "registry" },
+  { id: "registry-b", source: "registry", source_collection: "registry" },
+  { id: "new-library", source: "library", source_collection: "new-set" },
+], existing);
+assert.deepStrictEqual(extended, [
+  { id: "curated-library", source: "library", enabled: false, scene_ids: ["canvas-a", "canvas-b"] },
+  { id: "curated-registry", source: "registry", enabled: true, scene_ids: ["registry-a", "registry-b"] },
+  { id: "library-new-set", source: "library", enabled: true, scene_ids: ["new-library"] },
+]);
+assert.strictEqual(JSON.stringify(existing), before, "adding available scenes does not mutate saved pool state");
+assert.deepStrictEqual(defaultPools(
+  [{ id: "registry-new", source: "registry", source_collection: "registry" }],
+  [{ id: "registry-registry", source: "registry", enabled: false, scene_ids: [] }],
+), [
+  { id: "registry-registry", source: "registry", enabled: false, scene_ids: ["registry-new"] },
+], "an existing empty default pool is reused without enabling it");
+console.log("source-aware default and incremental pool membership verified");
 """
         result = subprocess.run(
             ["node", "-e", script],

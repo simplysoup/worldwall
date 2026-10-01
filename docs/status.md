@@ -1,6 +1,28 @@
 # Current project status
 
-**As of:** 2026-09-24 · **Evidence basis:** historical S00–S11 reviews/acceptances, CR-0005 evidence, CR-0006/CR-0007 in contract v0.7, RB-0005 bounded-loader tests, the [authorized live Hyprland activation](updates/2026-09-23-hyprland-session-activation.md), and the S12 correction record below. Both outputs run configured time/weather-aware animation with live rate/reload evidence; the assigned-session V15 scene was applied successfully on 2026-09-24. CR-0006/CR-0007 supplemental acceptance remains open; physical resume remains not-run. S09/S11 retain historical acceptances and CR-0004's separate incompatible-output limitation. S12's 2026-09-23 acceptance is historical; AC5 is back in review after an empty-source fail-closed defect was reproduced and corrected.
+**As of:** 2026-10-01 · **Evidence basis:** historical S00–S11 reviews/acceptances, CR-0005 evidence, CR-0006/CR-0007 in contract v0.7, RB-0005 bounded-loader tests, the [authorized live Hyprland activation](updates/2026-09-23-hyprland-session-activation.md), the S12 correction record below, and the [local Arch package increment](updates/2026-10-01-aur-package.md) (not installed or published). Both outputs run configured time/weather-aware animation with live rate/reload evidence; the assigned-session V15 scene was applied successfully on 2026-09-24. CR-0006/CR-0007 supplemental acceptance remains open; physical resume remains not-run. S09/S11 retain historical acceptances and CR-0004's separate incompatible-output limitation. S12's 2026-09-23 acceptance is historical; AC5 is back in review after an empty-source fail-closed defect was reproduced and corrected.
+
+## 2026-10-01 — Arch package artifact
+
+Added a pinned x86_64 Arch `PKGBUILD`/`.SRCINFO` and built a package from
+revision `fe428650` into
+`target/worldwall-aur-packages/worldwall-0.1.0.r20260924.gfe42865-1-x86_64.pkg.tar.zst`.
+Cargo tests, package metadata/archive inspection, documentation validation
+(284 Markdown files), and 117 Python tool tests passed. Its SHA-256 and exact
+limits are in the [package increment record](updates/2026-10-01-aur-package.md).
+This is a locally built transfer artifact, not a local installation or an AUR
+publication; anonymous GitHub source access was not verified. Existing S11
+acceptance remains unchanged.
+
+## 2026-10-01 — Curator default pools
+
+The curator now offers an unsaved unrestricted-pool draft when no sidecar exists
+and an explicit action to add unassigned loaded scenes to existing pool drafts,
+preserving current pool switches and scene rules. Saving remains explicit; the
+runtime still requires a configured sidecar reference and explicit config
+reload. Offline Rust, Python, documentation, JavaScript, and whitespace checks
+passed. No live curator/session test or private config/runtime change was made;
+S12 stays in review. See the [curator defaults increment](updates/2026-10-01-s12-curator-default-pools.md).
 
 ## Earlier increment — CR-0006 (initial implementation update)
 
