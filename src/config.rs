@@ -176,8 +176,35 @@ impl AppConfig {
     pub fn prepare_sources(
         &self,
     ) -> Result<(Option<SceneRegistry>, Option<ScenePools>), ConfigError> {
-        let mut registry = self.load_validated_registry()?;
-        let Some(rules_path) = self.scene_pools_file.as_ref() else {
+        self.prepare_sources_for_adaptive_mode(self.adaptive_scenes)
+    }
+
+    /// Prepare a complete source candidate for a process-local adaptive-mode
+    /// change. This revalidates the existing config policy and every referenced
+    /// package before the caller commits the effective mode.
+    pub fn prepare_effective_adaptive_mode(
+        &self,
+        enabled: bool,
+    ) -> Result<PreparedAppConfig, ConfigError> {
+        let mut config = self.clone();
+        config.adaptive_scenes = enabled;
+        let (registry, pools) = config.prepare_sources_for_adaptive_mode(enabled)?;
+        Ok(PreparedAppConfig {
+            config,
+            registry,
+            pools,
+        })
+    }
+
+    fn prepare_sources_for_adaptive_mode(
+        &self,
+        adaptive_scenes: bool,
+    ) -> Result<(Option<SceneRegistry>, Option<ScenePools>), ConfigError> {
+        let mut effective = self.clone();
+        effective.adaptive_scenes = adaptive_scenes;
+        effective.validate_fields()?;
+        let mut registry = effective.load_validated_registry()?;
+        let Some(rules_path) = effective.scene_pools_file.as_ref() else {
             return Ok((registry, None));
         };
         let pools = ScenePools::load(rules_path).map_err(|pools_error| {
@@ -238,7 +265,7 @@ impl AppConfig {
             // unchanged. Non-adaptive pool mode selects from the union of
             // pool sources, narrowed by the shared eligibility gate.
             registry
-                .add_pool_packages(library_manifests, !self.adaptive_scenes)
+                .add_pool_packages(library_manifests, !effective.adaptive_scenes)
                 .map_err(|registry_error| {
                     ConfigError(format!("pool package conflict: {registry_error}"))
                 })?;
@@ -500,6 +527,11 @@ impl AppConfig {
                 "adaptive scene selection requires the Open-Meteo provider to be enabled",
             ));
         }
+        if self.adaptive_scenes && (self.location.is_none() || self.timezone.is_none()) {
+            return Err(error(
+                "adaptive scene selection requires an explicit location and timezone",
+            ));
+        }
         Ok(())
     }
 
@@ -742,6 +774,50 @@ mod tests {
         .unwrap();
     }
 
+    fn write_adaptive_registry(root: &Path) {
+        let families = [
+            ("v26-winter", "cold"),
+            ("v19-cool", "cool"),
+            ("v30-meadow", "mild"),
+            ("v29-seascape", "warm"),
+            ("v25-desert", "hot"),
+        ];
+        fs::create_dir_all(root).unwrap();
+        for (id, band) in families {
+            let package = root.join(id);
+            write_package(&package, id);
+            fs::write(
+                package.join("scene.toml"),
+                format!(
+                    r#"schema_version = 2
+id = "{id}"
+image = "scene.png"
+palette = "palette.png"
+family = "{id}"
+temperature_band = "{band}"
+weather = ["clear"]
+"#
+                ),
+            )
+            .unwrap();
+        }
+        let scene_ids = families
+            .iter()
+            .map(|(id, _)| format!(r#""{id}""#))
+            .collect::<Vec<_>>()
+            .join(", ");
+        fs::write(
+            root.join("registry.toml"),
+            format!(
+                r#"schema_version = 1
+scenes = [{scene_ids}]
+fallback = "v29-seascape"
+"#
+            ),
+        )
+        .unwrap();
+    }
+
     fn write_pools(path: &Path, document: &str) {
         fs::write(path, document).unwrap();
     }
@@ -810,6 +886,15 @@ mod tests {
         // Library pool packages join the automatic candidate set and are
         // fully decoded before the candidate may commit.
         let prepared = AppConfig::load_prepared(root.join("config.toml")).unwrap();
+        assert!(!prepared.config.adaptive_scenes);
+        assert!(
+            prepared
+                .config
+                .prepare_effective_adaptive_mode(true)
+                .unwrap_err()
+                .to_string()
+                .contains("Open-Meteo provider")
+        );
         let registry = prepared.registry.unwrap();
         assert!(registry.get("canvascycle-demo").is_some());
         assert!(registry.get("village").is_some());
@@ -844,6 +929,91 @@ mod tests {
         // applies only validated candidates).
         write_pools(&sidecar, "schema_version = 99\n");
         assert!(AppConfig::load_prepared(root.join("config.toml")).is_err());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn runtime_mode_preparation_switches_library_automatic_membership_atomically() {
+        let root = path("adaptive-source-toggle");
+        fs::create_dir_all(&root).unwrap();
+        write_library(&root);
+        let registry_dir = root.join("registry");
+        write_adaptive_registry(&registry_dir);
+        let sidecar = root.join("scene-pools.toml");
+        write_pools(&sidecar, LIBRARY_POOL);
+        let config_path = root.join("config.toml");
+        fs::write(
+            &config_path,
+            format!(
+                r#"schema_version = 5
+fps = 30
+registry_dir = "{}"
+scene_pools_file = "{}"
+[location]
+latitude = 10.0
+longitude = 20.0
+timezone = "Etc/UTC"
+[weather]
+provider = "open-meteo"
+adaptive_scenes = true
+"#,
+                registry_dir.display(),
+                sidecar.display()
+            ),
+        )
+        .unwrap();
+        let configured = AppConfig::load_prepared(&config_path).unwrap();
+        let configured_mode = configured.config.clone();
+        let pools = configured.pools.as_ref().unwrap().clone();
+        let adaptive_registry = configured.registry.unwrap();
+        assert_eq!(adaptive_registry.len(), 5);
+        assert!(adaptive_registry.get("canvascycle-demo").is_some());
+        let mut adaptive_selector =
+            crate::scene_registry::SelectionController::new(adaptive_registry);
+        adaptive_selector.set_pools(Some(pools.clone()));
+        assert!(matches!(
+            adaptive_selector.request(
+                crate::scene_registry::EnvironmentSnapshot::unknown(),
+                None,
+                0,
+                crate::scene_registry::SelectionTrigger::Next,
+            ),
+            Err(crate::scene_registry::SelectionResult::Noop(reason))
+                if reason == "no eligible scene for next"
+        ));
+        assert!(matches!(
+            adaptive_selector.request(
+                crate::scene_registry::EnvironmentSnapshot::unknown(),
+                None,
+                0,
+                crate::scene_registry::SelectionTrigger::ManualId("canvascycle-demo".into()),
+            ),
+            Ok(request) if request.id == "canvascycle-demo"
+        ));
+
+        let non_adaptive = configured_mode
+            .prepare_effective_adaptive_mode(false)
+            .unwrap();
+        assert!(!non_adaptive.config.adaptive_scenes);
+        let mut non_adaptive_selector =
+            crate::scene_registry::SelectionController::new(non_adaptive.registry.unwrap());
+        non_adaptive_selector.set_pools(non_adaptive.pools);
+        assert!(matches!(
+            non_adaptive_selector.request(
+                crate::scene_registry::EnvironmentSnapshot::unknown(),
+                None,
+                0,
+                crate::scene_registry::SelectionTrigger::Next,
+            ),
+            Ok(request) if request.id == "canvascycle-demo"
+        ));
+
+        let restored = non_adaptive
+            .config
+            .prepare_effective_adaptive_mode(true)
+            .unwrap();
+        assert!(restored.config.adaptive_scenes);
+        assert_eq!(restored.registry.unwrap().len(), 5);
         fs::remove_dir_all(root).unwrap();
     }
 
@@ -1042,6 +1212,54 @@ adaptive_scenes = true
         std::fs::write(&path, schema2).unwrap();
         assert!(AppConfig::load(&path).is_err());
         std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn runtime_adaptive_enable_revalidates_explicit_location_and_complete_registry() {
+        let root = path("runtime-adaptive-enable");
+        fs::create_dir_all(&root).unwrap();
+        let registry = root.join("registry");
+        write_registry(&registry);
+        let config_path = root.join("config.toml");
+        fs::write(
+            &config_path,
+            format!(
+                r#"schema_version = 5
+fps = 30
+registry_dir = "{}"
+[location]
+latitude = 10.0
+longitude = 20.0
+timezone = "Etc/UTC"
+[weather]
+provider = "open-meteo"
+adaptive_scenes = false
+"#,
+                registry.display()
+            ),
+        )
+        .unwrap();
+        let prepared = AppConfig::load_prepared(&config_path).unwrap();
+        assert!(
+            prepared
+                .config
+                .prepare_effective_adaptive_mode(true)
+                .unwrap_err()
+                .to_string()
+                .contains("adaptive registry validation failed")
+        );
+
+        let mut missing_location = prepared.config.clone();
+        missing_location.location = None;
+        missing_location.timezone = None;
+        assert!(
+            missing_location
+                .prepare_effective_adaptive_mode(true)
+                .unwrap_err()
+                .to_string()
+                .contains("explicit location and timezone")
+        );
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

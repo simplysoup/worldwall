@@ -220,7 +220,7 @@ Do not persist a borrowed selector return into mutable registry operations. Retu
 
 ## Pool eligibility (CR-0008 / S12-AC5, implemented)
 
-Approved contract v0.8 adds an optional schema-v5 `scene_pools_file` reference to a separately versioned pool/availability sidecar. The curator's local library and package sources remain separate from the CR-0006 adaptive registry; the selector may draw candidates from the configured source pools without weakening adaptive-registry validation. With no sidecar, existing registry selection behavior is unchanged.
+CR-0008 (applied in contract v0.8) adds an optional schema-v5 `scene_pools_file` reference to a separately versioned pool/availability sidecar. The curator's local library and package sources remain separate from the CR-0006 adaptive registry; the selector may draw candidates from the configured source pools without weakening adaptive-registry validation. With no sidecar, existing registry selection behavior is unchanged.
 
 When configured, every automatic selection path—including startup/full selection, resume, explicit `reload`, `next`, and an approved CR-0006 same-family weather-variant replacement—must select only a scene in an enabled pool that is itself enabled and whose configured time, temperature, and weather criteria all match the same environment snapshot. Multiple accepted weather values within one rule are alternatives; enabled criteria categories combine with AND. A required but unknown environment value does not match. `next` preserves stable ordering and wrap behavior. No clock/weather/config-reload trigger is added. `reload-config` applies sidecar changes transactionally without selecting a scene.
 

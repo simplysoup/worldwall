@@ -33,7 +33,7 @@ use crate::{
         AstronomyProvider, CivilDate, EnvironmentProvider, Location, NoaaAstronomy, SolarEvents,
         SystemWallClock, UtcOffsetSchedule, WallClock, Weather,
     },
-    ipc::{self, Command, ControlRequest, IpcServer},
+    ipc::{self, AdaptiveModeCommand, Command, ControlRequest, IpcServer},
     power::{PausedAnimationClock, PowerAction, PowerEvent, PowerEventSource, PowerStateMachine},
     renderer::{AllocationCounters, OutputRenderer, RenderOutcome, Renderer, SharedRenderer},
     scene::{ResolvedPaletteSample, Scene},
@@ -1297,21 +1297,33 @@ fn load_startup_scene_off_thread(
         .map_err(Into::into)
 }
 
+enum ConfigLoadJob {
+    Reload(PathBuf),
+    AdaptiveMode { config: AppConfig, enabled: bool },
+}
+
 struct ConfigLoadWorker {
-    jobs: mpsc::SyncSender<PathBuf>,
+    jobs: mpsc::SyncSender<ConfigLoadJob>,
     completions: mpsc::Receiver<Result<PreparedAppConfig, String>>,
     wakeups: Option<Channel<()>>,
 }
 
 impl ConfigLoadWorker {
     fn new() -> Result<Self, Box<dyn Error>> {
-        Self::with_loader(|path| AppConfig::load_prepared(path).map_err(|error| error.to_string()))
+        Self::with_loader(|job| match job {
+            ConfigLoadJob::Reload(path) => {
+                AppConfig::load_prepared(path).map_err(|error| error.to_string())
+            }
+            ConfigLoadJob::AdaptiveMode { config, enabled } => config
+                .prepare_effective_adaptive_mode(enabled)
+                .map_err(|error| error.to_string()),
+        })
     }
 
     fn with_loader(
-        loader: impl Fn(PathBuf) -> Result<PreparedAppConfig, String> + Send + 'static,
+        loader: impl Fn(ConfigLoadJob) -> Result<PreparedAppConfig, String> + Send + 'static,
     ) -> Result<Self, Box<dyn Error>> {
-        let (jobs, job_receiver) = mpsc::sync_channel::<PathBuf>(1);
+        let (jobs, job_receiver) = mpsc::sync_channel::<ConfigLoadJob>(1);
         let (completion_sender, completions) = mpsc::sync_channel(1);
         let (wakeup_sender, wakeups) = channel::sync_channel(1);
         thread::Builder::new()
@@ -1335,7 +1347,15 @@ impl ConfigLoadWorker {
     }
 
     fn submit(&self, path: PathBuf) -> Result<(), String> {
-        self.jobs.try_send(path).map_err(|error| match error {
+        self.submit_job(ConfigLoadJob::Reload(path))
+    }
+
+    fn submit_adaptive_mode(&self, config: AppConfig, enabled: bool) -> Result<(), String> {
+        self.submit_job(ConfigLoadJob::AdaptiveMode { config, enabled })
+    }
+
+    fn submit_job(&self, job: ConfigLoadJob) -> Result<(), String> {
+        self.jobs.try_send(job).map_err(|error| match error {
             mpsc::TrySendError::Full(_) => "config-load worker queue is full".to_owned(),
             mpsc::TrySendError::Disconnected(_) => "config-load worker is unavailable".to_owned(),
         })
@@ -1353,6 +1373,7 @@ impl ConfigLoadWorker {
 #[derive(Clone, Copy)]
 enum PendingIpcKind {
     Config,
+    AdaptiveMode { enabled: bool },
     Scene { generation: u64 },
 }
 
@@ -3062,6 +3083,81 @@ fn finish_config_reload(
     Ok(fps)
 }
 
+#[allow(clippy::too_many_arguments)]
+fn finish_adaptive_mode_change(
+    prepared: PreparedAppConfig,
+    active_config: &mut AppConfig,
+    selection: &mut Option<RegistrySelection>,
+    schedulers: &mut BTreeMap<u32, FrameScheduler>,
+    civil_time: &mut CivilTimeRuntime,
+    weather: &mut WeatherRuntime,
+    adaptive_state_store: &mut Option<AdaptiveSelectionStateStore>,
+) -> Result<Fps, String> {
+    let was_enabled = active_config.adaptive_scenes;
+    let enabled = prepared.config.adaptive_scenes;
+    if was_enabled == enabled {
+        return Ok(active_config.fps);
+    }
+    let prepared_state_store = if enabled && adaptive_state_store.is_none() {
+        Some(AdaptiveSelectionStateStore::default_path().map_err(|error| error.to_string())?)
+    } else {
+        None
+    };
+    let fps = apply_config_candidate(
+        prepared,
+        active_config,
+        selection,
+        schedulers,
+        civil_time,
+        weather,
+    )?;
+    if enabled {
+        if adaptive_state_store.is_none() {
+            *adaptive_state_store = prepared_state_store;
+        }
+        let persisted = adaptive_state_store
+            .as_ref()
+            .and_then(|store| match store.load() {
+                Ok(state) => state,
+                Err(error) => {
+                    eprintln!(
+                        "trace adaptive-state state=error action=retain-active reason={error}"
+                    );
+                    None
+                }
+            });
+        if let Some(active) = selection.as_mut() {
+            let active_state = active.transaction.active().and_then(|loaded| {
+                active
+                    .controller
+                    .registry()
+                    .adaptive_state_for_scene(&loaded.id)
+            });
+            active.adaptive_state = active_state.or(persisted);
+        }
+    } else {
+        *adaptive_state_store = None;
+    }
+    Ok(fps)
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AdaptiveModeAction {
+    Status,
+    Unchanged { enabled: bool },
+    Change { enabled: bool },
+}
+
+fn adaptive_mode_action(command: AdaptiveModeCommand, current: bool) -> AdaptiveModeAction {
+    match command {
+        AdaptiveModeCommand::Status => AdaptiveModeAction::Status,
+        AdaptiveModeCommand::On if current => AdaptiveModeAction::Unchanged { enabled: true },
+        AdaptiveModeCommand::On => AdaptiveModeAction::Change { enabled: true },
+        AdaptiveModeCommand::Off if !current => AdaptiveModeAction::Unchanged { enabled: false },
+        AdaptiveModeCommand::Off => AdaptiveModeAction::Change { enabled: false },
+    }
+}
+
 fn scene_selection_response(
     command_name: &str,
     outcome: &Result<CommitOutcome, Box<dyn Error>>,
@@ -3108,6 +3204,7 @@ fn handle_ipc_requests(
             Command::Scene(_) => "scene",
             Command::Next => "next",
             Command::Weather => "weather",
+            Command::Adaptive(_) => "adaptive",
         };
         let command = request.command.clone();
         let response = match command {
@@ -3127,10 +3224,43 @@ fn handle_ipc_requests(
                         "backend": "vulkan",
                         "degraded_outputs": client.degraded_outputs.iter().copied().collect::<Vec<_>>(),
                         "selection_generation": selection.as_ref().map_or(0, |value| value.controller.generation()),
+                        "adaptive_scenes": config.adaptive_scenes,
                     }),
                 )
             }
             Command::Weather => ipc::success_response(command_name, weather.status_value()),
+            Command::Adaptive(mode) => match adaptive_mode_action(mode, config.adaptive_scenes) {
+                AdaptiveModeAction::Status => ipc::success_response(
+                    command_name,
+                    json!({
+                        "mode": if config.adaptive_scenes { "on" } else { "off" },
+                        "adaptive_scenes": config.adaptive_scenes,
+                    }),
+                ),
+                AdaptiveModeAction::Unchanged { enabled } => ipc::success_response(
+                    command_name,
+                    json!({
+                        "applied": false,
+                        "reselected": false,
+                        "outcome": "unchanged",
+                        "mode": if enabled { "on" } else { "off" },
+                        "adaptive_scenes": enabled,
+                    }),
+                ),
+                AdaptiveModeAction::Change { enabled } => {
+                    match config_loader.submit_adaptive_mode(config.clone(), enabled) {
+                        Ok(()) => {
+                            *pending_ipc = Some(PendingIpc {
+                                request,
+                                command_name,
+                                kind: PendingIpcKind::AdaptiveMode { enabled },
+                            });
+                            break;
+                        }
+                        Err(error) => ipc::error_response("adaptive_mode_rejected", error),
+                    }
+                }
+            },
             Command::ReloadConfig => match config.reload_path() {
                 Ok(path) => match config_loader.submit(path) {
                     Ok(()) => {
@@ -3438,14 +3568,15 @@ fn run_multi_presenting<'wayland>(
             diagnostics,
         );
         if let Some(PendingIpc {
-            kind: PendingIpcKind::Config,
+            kind: kind @ (PendingIpcKind::Config | PendingIpcKind::AdaptiveMode { .. }),
             ..
         }) = pending_ipc.as_ref()
             && let Some(result) = config_loader.try_recv()
         {
+            let kind = *kind;
             let pending = pending_ipc.take().expect("checked pending config request");
-            let response = match result {
-                Ok(prepared) => match finish_config_reload(
+            let response = match (kind, result) {
+                (PendingIpcKind::Config, Ok(prepared)) => match finish_config_reload(
                     prepared,
                     config,
                     selection,
@@ -3468,7 +3599,46 @@ fn run_multi_presenting<'wayland>(
                     }
                     Err(error) => ipc::error_response("invalid_config", error),
                 },
-                Err(error) => ipc::error_response("invalid_config", error),
+                (PendingIpcKind::AdaptiveMode { enabled }, Ok(prepared))
+                    if prepared.config.adaptive_scenes == enabled =>
+                {
+                    match finish_adaptive_mode_change(
+                        prepared,
+                        config,
+                        selection,
+                        schedulers,
+                        civil_time,
+                        weather,
+                        adaptive_state_store,
+                    ) {
+                        Ok(fps) => {
+                            applied_fps = Some(fps);
+                            ipc::success_response(
+                                pending.command_name,
+                                json!({
+                                    "applied": true,
+                                    "reselected": false,
+                                    "mode": if enabled { "on" } else { "off" },
+                                    "adaptive_scenes": enabled,
+                                }),
+                            )
+                        }
+                        Err(error) => ipc::error_response("adaptive_mode_rejected", error),
+                    }
+                }
+                (PendingIpcKind::AdaptiveMode { .. }, Ok(_)) => ipc::error_response(
+                    "adaptive_mode_rejected",
+                    "prepared adaptive mode did not match the requested mode",
+                ),
+                (PendingIpcKind::AdaptiveMode { .. }, Err(error)) => {
+                    ipc::error_response("adaptive_mode_rejected", error)
+                }
+                (PendingIpcKind::Config, Err(error)) => {
+                    ipc::error_response("invalid_config", error)
+                }
+                (PendingIpcKind::Scene { .. }, _) => {
+                    unreachable!("scene completions are not delivered by the config worker")
+                }
             };
             record_ipc_failure(diagnostics, &response);
             pending.request.respond(response);
@@ -3542,10 +3712,12 @@ fn run_multi_presenting<'wayland>(
                 !presenters.is_empty()
             );
         }
-        if !pending_ipc
-            .as_ref()
-            .is_some_and(|pending| matches!(pending.kind, PendingIpcKind::Config))
-            && let (Some(renderer), Some(active)) = (shared.as_mut(), selection.as_mut())
+        if !pending_ipc.as_ref().is_some_and(|pending| {
+            matches!(
+                pending.kind,
+                PendingIpcKind::Config | PendingIpcKind::AdaptiveMode { .. }
+            )
+        }) && let (Some(renderer), Some(active)) = (shared.as_mut(), selection.as_mut())
         {
             let mut completions = Vec::new();
             if let Some(worker) = scene_loader.as_ref() {
@@ -4218,6 +4390,23 @@ mod tests {
         selection
     }
 
+    fn library_test_manifest() -> SceneManifest {
+        SceneManifest {
+            schema_version: 1,
+            id: "canvascycle-demo".into(),
+            package_dir: PathBuf::new(),
+            image_path: PathBuf::new(),
+            palette_path: PathBuf::new(),
+            animation_path: None,
+            time_of_day_path: None,
+            times: Vec::new(),
+            weather: Vec::new(),
+            seasons: Vec::new(),
+            family_id: None,
+            temperature_band: None,
+        }
+    }
+
     fn weather_test_config(location: Location, timezone: &str, cache_scope: u128) -> AppConfig {
         AppConfig {
             schema_version: 2,
@@ -4235,6 +4424,30 @@ mod tests {
             source_path: None,
             scene_pools_file: None,
         }
+    }
+
+    #[test]
+    fn adaptive_mode_commands_are_reported_or_idempotent_before_preparation() {
+        assert_eq!(
+            adaptive_mode_action(AdaptiveModeCommand::Status, false),
+            AdaptiveModeAction::Status
+        );
+        assert_eq!(
+            adaptive_mode_action(AdaptiveModeCommand::On, false),
+            AdaptiveModeAction::Change { enabled: true }
+        );
+        assert_eq!(
+            adaptive_mode_action(AdaptiveModeCommand::On, true),
+            AdaptiveModeAction::Unchanged { enabled: true }
+        );
+        assert_eq!(
+            adaptive_mode_action(AdaptiveModeCommand::Off, true),
+            AdaptiveModeAction::Change { enabled: false }
+        );
+        assert_eq!(
+            adaptive_mode_action(AdaptiveModeCommand::Off, false),
+            AdaptiveModeAction::Unchanged { enabled: false }
+        );
     }
 
     #[test]
@@ -4498,7 +4711,14 @@ mod tests {
             std::thread::sleep(Duration::from_millis(1));
         }
         assert!(old_cancelled.load(AtomicOrdering::Acquire));
-        assert!(new_started.load(AtomicOrdering::Acquire));
+        let new_start_deadline = Instant::now() + Duration::from_secs(2);
+        while !new_started.load(AtomicOrdering::Acquire) && Instant::now() < new_start_deadline {
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        assert!(
+            new_started.load(AtomicOrdering::Acquire),
+            "replacement provider did not start within the bounded deadline"
+        );
         assert!(previous_cancelled_at_fetch.load(AtomicOrdering::Acquire));
         assert_eq!(*old_requests.lock().unwrap(), vec![old_location]);
         assert_eq!(*new_requests.lock().unwrap(), vec![new_location]);
@@ -4567,6 +4787,199 @@ mod tests {
         assert!(resident.controller.pools().is_some());
         assert_eq!(resident.controller.generation(), generation);
         assert_eq!(resident.transaction.active().unwrap().id, "resident-scene");
+    }
+
+    #[test]
+    fn runtime_adaptive_off_exposes_eligible_library_candidates_without_selecting_or_fetching() {
+        let mut selection = adaptive_test_selection();
+        let base_registry = selection.controller.registry().clone();
+        let library_manifest = library_test_manifest();
+        let mut adaptive_registry = base_registry.clone();
+        adaptive_registry
+            .add_pool_packages([library_manifest.clone()], false)
+            .unwrap();
+        let pools = ScenePools::parse(
+            r#"schema_version = 1
+
+[[pool]]
+id = "canvascycle"
+source = "library"
+enabled = true
+scene_ids = ["canvascycle-demo"]
+"#,
+        )
+        .unwrap();
+        selection
+            .controller
+            .replace_sources(adaptive_registry, Some(pools.clone()));
+        assert!(matches!(
+            selection.controller.request(
+                EnvironmentSnapshot::unknown(),
+                None,
+                0,
+                SelectionTrigger::Next,
+            ),
+            Err(SelectionResult::Noop(reason)) if reason == "no eligible scene for next"
+        ));
+        assert!(matches!(
+            selection.controller.registry().select(
+                EnvironmentSnapshot::unknown(),
+                0,
+                SelectionTrigger::ManualId("canvascycle-demo".into()),
+                None,
+            ),
+            SelectionResult::Selected(_)
+        ));
+
+        let mut non_adaptive_registry = base_registry;
+        non_adaptive_registry
+            .add_pool_packages([library_manifest], true)
+            .unwrap();
+        let location = Location::new(10.0, 20.0).unwrap();
+        let mut active_config = weather_test_config(location, "Etc/UTC", 303);
+        active_config.schema_version = 5;
+        active_config.adaptive_scenes = true;
+        active_config.scene_pools_file = Some(PathBuf::from("/tmp/test-scene-pools.toml"));
+        let configured_mode = active_config.adaptive_scenes;
+        let requests = Arc::new(Mutex::new(Vec::new()));
+        let started = Arc::new(AtomicBool::new(false));
+        let cancelled = Arc::new(AtomicBool::new(false));
+        let mut weather = WeatherRuntime::from_config_with_provider(
+            &active_config,
+            TestWeatherProvider {
+                requests: Arc::clone(&requests),
+                started,
+                cancelled,
+                wait_for_cancellation: false,
+                capture_cancellation: None,
+                previous_cancellation: None,
+                previous_cancelled_at_fetch: None,
+            },
+        )
+        .unwrap();
+        let mut civil_time = CivilTimeRuntime::from_config(&active_config).unwrap();
+        let generation = selection.controller.generation();
+        let resident_scene = selection
+            .transaction
+            .active()
+            .expect("adaptive startup scene remains resident")
+            .id
+            .clone();
+        let mut live_selection = Some(selection);
+        let mut candidate_config = active_config.clone();
+        candidate_config.adaptive_scenes = false;
+        let prepared = PreparedAppConfig {
+            config: candidate_config,
+            registry: Some(non_adaptive_registry),
+            pools: Some(pools),
+        };
+        let mut state_store = Some(AdaptiveSelectionStateStore::new(
+            "/tmp/worldwall-cr0010-adaptive-state-test",
+        ));
+        finish_adaptive_mode_change(
+            prepared,
+            &mut active_config,
+            &mut live_selection,
+            &mut BTreeMap::new(),
+            &mut civil_time,
+            &mut weather,
+            &mut state_store,
+        )
+        .unwrap();
+
+        assert!(
+            configured_mode,
+            "runtime toggle must not rewrite config input"
+        );
+        assert!(!active_config.adaptive_scenes);
+        assert!(state_store.is_none());
+        let mut selection = live_selection.expect("runtime mode change preserves selection source");
+        assert_eq!(selection.controller.generation(), generation);
+        assert_eq!(
+            selection.transaction.active().unwrap().id,
+            resident_scene,
+            "mode change must leave resident resources and selection identity untouched"
+        );
+        assert!(
+            requests.lock().unwrap().is_empty(),
+            "toggle must not fetch weather"
+        );
+        assert!(matches!(
+            selection.controller.request(
+                EnvironmentSnapshot::unknown(),
+                None,
+                0,
+                SelectionTrigger::Next,
+            ),
+            Ok(request) if request.id == "canvascycle-demo"
+        ));
+    }
+
+    #[test]
+    fn runtime_adaptive_on_is_atomic_and_does_not_start_weather_or_select() {
+        let location = Location::new(10.0, 20.0).unwrap();
+        let mut active_config = weather_test_config(location, "Etc/UTC", 404);
+        active_config.schema_version = 5;
+        let requests = Arc::new(Mutex::new(Vec::new()));
+        let mut weather = WeatherRuntime::from_config_with_provider(
+            &active_config,
+            TestWeatherProvider {
+                requests: Arc::clone(&requests),
+                started: Arc::new(AtomicBool::new(false)),
+                cancelled: Arc::new(AtomicBool::new(false)),
+                wait_for_cancellation: false,
+                capture_cancellation: None,
+                previous_cancellation: None,
+                previous_cancelled_at_fetch: None,
+            },
+        )
+        .unwrap();
+        let mut civil_time = CivilTimeRuntime::from_config(&active_config).unwrap();
+        let mut selection = Some(adaptive_test_selection());
+        let registry = selection.as_ref().unwrap().controller.registry().clone();
+        let generation = selection.as_ref().unwrap().controller.generation();
+        let resident = selection
+            .as_ref()
+            .unwrap()
+            .transaction
+            .active()
+            .unwrap()
+            .id
+            .clone();
+        let mut candidate = active_config.clone();
+        candidate.adaptive_scenes = true;
+        let prepared = PreparedAppConfig {
+            config: candidate,
+            registry: Some(registry),
+            pools: None,
+        };
+        let state_path =
+            std::env::temp_dir().join(format!("worldwall-cr0010-state-{}", std::process::id()));
+        let mut state_store = Some(AdaptiveSelectionStateStore::new(state_path));
+        finish_adaptive_mode_change(
+            prepared,
+            &mut active_config,
+            &mut selection,
+            &mut BTreeMap::new(),
+            &mut civil_time,
+            &mut weather,
+            &mut state_store,
+        )
+        .unwrap();
+
+        assert!(active_config.adaptive_scenes);
+        assert!(state_store.is_some());
+        let selection = selection.unwrap();
+        assert_eq!(selection.controller.generation(), generation);
+        assert_eq!(selection.transaction.active().unwrap().id, resident);
+        assert_eq!(
+            selection.adaptive_state,
+            selection
+                .controller
+                .registry()
+                .adaptive_state_for_scene(&resident)
+        );
+        assert!(requests.lock().unwrap().is_empty());
     }
 
     #[test]

@@ -1,6 +1,19 @@
 # Current project status
 
-**As of:** 2026-10-01 · **Evidence basis:** historical S00–S11 reviews/acceptances, CR-0005 evidence, CR-0006/CR-0007 in contract v0.7, RB-0005 bounded-loader tests, the [authorized live Hyprland activation](updates/2026-09-23-hyprland-session-activation.md), the S12 correction record below, and the [local Arch package increment](updates/2026-10-01-aur-package.md) (not installed or published). Both outputs run configured time/weather-aware animation with live rate/reload evidence; the assigned-session V15 scene was applied successfully on 2026-09-24. CR-0006/CR-0007 supplemental acceptance remains open; physical resume remains not-run. S09/S11 retain historical acceptances and CR-0004's separate incompatible-output limitation. S12's 2026-09-23 acceptance is historical; AC5 is back in review after an empty-source fail-closed defect was reproduced and corrected.
+**As of:** 2026-10-01 · **Evidence basis:** historical S00–S11 reviews/acceptances, CR-0005 evidence, CR-0006/CR-0007 in contract v0.7, RB-0005 bounded-loader tests, the [authorized live Hyprland activation](updates/2026-09-23-hyprland-session-activation.md), the S12 correction record below, the [local Arch package increment](updates/2026-10-01-aur-package.md) (not installed or published), and [CR-0010 implementation evidence](updates/2026-10-01-cr0010-adaptive-mode-toggle.md). Both outputs run configured time/weather-aware animation with live rate/reload evidence; the assigned-session V15 scene was applied successfully on 2026-09-24. CR-0006/CR-0007 supplemental acceptance remains open; physical resume remains not-run. S09/S11 retain historical acceptances and CR-0004's separate incompatible-output limitation. S12's 2026-09-23 acceptance is historical; AC5 is back in review after an empty-source fail-closed defect was reproduced and corrected.
+
+## 2026-10-01 — CR-0010 runtime adaptive-mode toggle
+
+CR-0010 was accepted by `simplysoup` and applied in contract v0.9. The
+`worldwallctl adaptive status|on|off` IPC/CLI flow uses off-owner validation
+and an atomic effective-mode/source commit; non-adaptive pool mode can include
+eligible library scenes without making them adaptive families. Offline Rust
+checks, 139 main tests, 81 CLI tests, 3 example tests, documentation validation
+(288 Markdown files), and 117 Python tool tests passed. Three Vulkan tests
+remain ignored as before. No installed-session IPC, provider request, config
+edit, process restart, or live compositor test occurred. Supplemental
+S10-AC10/S12-AC8 review remains open; S12 stays in review for its separate
+AC5 correction. See the [implementation record](updates/2026-10-01-cr0010-adaptive-mode-toggle.md).
 
 ## 2026-10-01 — Arch package artifact
 
@@ -50,10 +63,10 @@ Worldwall has implemented and accepted S01 single-output Wayland lifecycle, S02 
 
 ## Advice and next action
 
-1. Leave the authorized installed Worldwall process running for the user's reboot test; do not reboot or suspend on their behalf. Record next-login results and obtain authorization before a separate physical-resume test. Earlier output-115 pacing remains unresolved; current output-71/72 samples do not retroactively finalize that run. Keep private coordinates out of records.
+1. The maintainer's recorded reboot/next-login test passed; do not reboot or suspend on their behalf. Physical resume remains not-run and requires separate authorization. CR-0010's assigned-session IPC verification also remains not-run; this increment did not control the installed process. Earlier output-115 pacing remains unresolved; current output-71/72 samples do not retroactively finalize that run. Keep private coordinates out of records.
 2. Preserve the S01/S02 nested harnesses and locked-check outputs as regression checks; keep the no-bundled-art-assets rule.
 3. Existing S06/ADR-0005, ADR-0006/S07, CR-0001/CR-0002/CR-0003, and CR-0005 historical records remain in force. CR-0006 policy is in v0.6 and CR-0007 is in v0.7, but code tests are not acceptance; CR-0006 S07/S08 gates are in progress; RB-0005's technical async blocker is resolved, but assigned-session S05/S10/CR-0006 acceptance remains open. RB-0004 records crop clarification and private loader validation only. Preserve all earlier evidence unchanged.
-4. Keep unsupported or untested behavior visible. Do not substitute screenshots for lifecycle tests or claim energy savings without a repeatable baseline.
+4. Keep unsupported or untested behavior visible. CR-0010's offline tests do not pass S10-AC10/S12-AC8 live review; keep those supplemental gates open until the maintainer reviews assigned-session IPC evidence. Do not substitute screenshots for lifecycle tests or claim energy savings without a repeatable baseline.
 
 ## Decisions and blockers
 

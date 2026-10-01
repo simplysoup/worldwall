@@ -194,7 +194,8 @@ owner; a failure at any point keeps the previous live config and pool set. A
 successful `reload-config` atomically installs the validated registry, pool,
 and rule state in a single step, invalidates queued adaptive candidates, and
 never selects a scene. Pool toggles never delete or rewrite package assets, and
-no provider request is started by editing or applying rules.
+no provider request is started by editing or applying rules. `adaptive on|off`
+likewise does not edit assets, rules, or config and does not start a request.
 
 Candidate sources resolve as follows:
 
@@ -209,7 +210,16 @@ Candidate sources resolve as follows:
   candidate set (the union of enabled pools is then narrowed by the eligibility
   gate) and are also manually selectable. In CR-0006 adaptive mode they stay
   manual-only: library entries never become adaptive families and adaptive
-  registry validation is unchanged.
+  registry validation is unchanged. Under CR-0010, this is the **effective
+  runtime mode**, which may be changed with `worldwallctl adaptive off|on`; the
+  command rebuilds and validates the complete registry-plus-pool source set off
+  the Wayland owner before atomically installing it. `adaptive off` uses the
+  non-adaptive composition above; `adaptive on` returns library packages to
+  manual-only status and still requires Open-Meteo, explicit location/timezone,
+  and the complete adaptive registry. Neither toggle selects or starts a
+  weather request. The process-local override does not edit the config file;
+  restart or successful `reload-config` restores its configured
+  `adaptive_scenes` value.
 
 A configured sidecar always produces a selection source, even when no
 registry is configured and all pool membership lists are empty. Such a source

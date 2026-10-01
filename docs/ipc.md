@@ -42,6 +42,9 @@ Requests use these forms:
 {"version":1,"command":"scene","id":"v29-seascape"}
 {"version":1,"command":"next"}
 {"version":1,"command":"weather"}
+{"version":1,"command":"adaptive","mode":"status"}
+{"version":1,"command":"adaptive","mode":"on"}
+{"version":1,"command":"adaptive","mode":"off"}
 ```
 
 Successful responses contain `version`, `ok: true`, `command`, and `data`.
@@ -61,15 +64,35 @@ is:
     "fps": 30,
     "backend": "vulkan",
     "degraded_outputs": [],
-    "selection_generation": 2
+    "selection_generation": 2,
+    "adaptive_scenes": true
   }
 }
 ```
 
 `status` reports output IDs, active resident scene, weather state/freshness,
-FPS, backend, degraded outputs, and selection generation. It does not report
-coordinates, credentials, or weather request URLs. `weather` returns only the
-same cache/freshness view and never starts a provider request.
+FPS, backend, degraded outputs, selection generation, and the effective
+`adaptive_scenes` mode. It does not report coordinates, credentials, or weather
+request URLs. `weather` returns only the same cache/freshness view and never
+starts a provider request.
+
+`adaptive status` reports the effective process-local mode in `data.mode` (`on`
+or `off`) and `data.adaptive_scenes`. `adaptive on` and `adaptive off` are
+idempotent: a successful change returns `applied: true`, `reselected: false`,
+and the effective mode; an already-effective request returns
+`outcome: "unchanged"` and does no source preparation. Enabling validates the
+current Open-Meteo provider, explicit location/timezone, and complete adaptive
+registry. Disabling leaves the weather cache/provider configured but disables
+adaptive family/precipitation selection. With schema-v5 pool mode, disabling
+adds the validated library packages to the non-adaptive automatic candidate
+set, filtered by the same eligibility gate; enabling returns them to
+manual-only status. The request prepares and validates the complete source set
+off the Wayland owner, then commits mode and sources atomically. Errors use the
+`adaptive_mode_rejected` code and retain previous mode/sources. Neither change
+selects a scene, modifies pool rules/config, or starts a provider request. The
+resident scene and selection generation remain unchanged. The command is
+process-local; restart or a successful `reload-config` restores the file's
+`[weather].adaptive_scenes` value.
 
 `reload` performs one explicit environment snapshot and full selection when a
 validated registry is active. With valid schema-v3 adaptive opt-in, startup,
@@ -97,7 +120,8 @@ old worker first. Clock/solar updates never select a scene. Without adaptive
 opt-in, weather updates cache/status only. With valid opt-in, fresh known
 weather may change only the active family's precipitation variant. A successful
 config reload invalidates queued adaptive candidates without changing the
-resident scene.
+resident scene. Reload also restores the effective adaptive mode from the file;
+it remains non-selecting.
 
 ## Configuration file
 
@@ -179,6 +203,9 @@ worldwallctl reload-config
 worldwallctl scene v29-seascape
 worldwallctl next
 worldwallctl weather
+worldwallctl adaptive status
+worldwallctl adaptive on
+worldwallctl adaptive off
 ```
 
 Use `--socket PATH` only for a deliberately selected same-user test socket.

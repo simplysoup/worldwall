@@ -49,12 +49,17 @@ bin/worldwallctl reload-config
 bin/worldwallctl scene SCENE_ID
 bin/worldwallctl next
 bin/worldwallctl weather
+bin/worldwallctl adaptive status
+bin/worldwallctl adaptive on
+bin/worldwallctl adaptive off
 ```
 
 `worldwallctl` uses `$XDG_RUNTIME_DIR/worldwall.sock`; the socket is same-user
 and mode `0600`. `reload-config` validates a complete candidate before commit
 and does not reselect the resident scene. `weather` reports cache state only;
-it does not enable networking. See [IPC and configuration](ipc.md) for the
+it does not enable networking. Adaptive toggles change only the running
+process's effective selection mode, never select or request weather, and are
+restored from the config file by `reload-config` or restart. See [IPC and configuration](ipc.md) for the
 full protocol and privacy behavior.
 
 For Hyprland's legacy text config, an operator may use

@@ -10,7 +10,7 @@ S09 accepted. Freeze a versioned command/request/response schema, request limits
 
 ## Deliverables
 
-`worldwallctl`, same-user Unix socket, protocol tests, atomic schema-v1/v2/v3/v4 config validation/application (including explicit location/timezone, optional weather, default-off adaptive selection, and the global animation-speed multiplier), structured rate-limited diagnostics, and user-facing command documentation.
+`worldwallctl`, same-user Unix socket, protocol tests, atomic schema-v1/v2/v3/v4 config validation/application (including explicit location/timezone, optional weather, default-off configured adaptive selection, and the global animation-speed multiplier), the CR-0010 process-local `adaptive status|on|off` command, structured rate-limited diagnostics, and user-facing command documentation.
 
 ## Execution
 
@@ -18,7 +18,7 @@ S09 accepted. Freeze a versioned command/request/response schema, request limits
 2. Define protocol version, framing, maximum request/response size, command timeout, error codes, and success payloads. Bound clients/queues and handle partial/malformed requests.
 3. Route commands to the event-loop owner; never mutate GPU/Wayland resources directly from client I/O threads.
 4. Implement `status` (outputs, scene, weather freshness, FPS, backend, degraded state), `weather` (cache only), `reload` (bounded refresh + selection), `scene <id>`, `next`, and `reload-config` (transactional config, no reselection).
-5. Validate complete candidate config and resource consequences before committing it. Preserve schema v1-v3; schema v3 adds `[weather].adaptive_scenes = false` by default and accepts true only with enabled Open-Meteo, explicit location, and a validated adaptive registry. Schema v4 adds `animation_speed_multiplier` in `0.0..=1.0`, defaulting to `0.5` when absent in every supported schema.
+5. Validate complete candidate config and resource consequences before committing it. Preserve schema v1-v3; schema v3 adds `[weather].adaptive_scenes = false` by default and accepts true only with enabled Open-Meteo, explicit location/timezone, and a validated adaptive registry. Schema v4 adds `animation_speed_multiplier` in `0.0..=1.0`, defaulting to `0.5` when absent in every supported schema. CR-0010 adds a runtime-only adaptive override: prepare the source set off the Wayland owner, commit it with the effective mode atomically, and leave the config file authoritative on reload/restart.
 6. Keep the active scene resident if registry/location/timezone/provider paths change; reject config lacking a viable future fallback. Apply weather/location changes without leaking credentials or reusing a cache from a changed config generation; retire the old worker before starting a newly enabled provider.
 7. Test socket ownership, concurrent clients, stalled connections, stale sockets, invalid IDs/config, command ordering, disconnect, clean shutdown, and double startup.
 
@@ -33,6 +33,7 @@ S09 accepted. Freeze a versioned command/request/response schema, request limits
 - [ ] **S10-AC7 (CR-0006):** Schema-v3 compatibility/validation, adaptive registry requirements, privacy-safe family/band persistence, config-reload invalidation, and default-off behavior pass. No config reload or late candidate changes family outside an explicit full-selection trigger.
 - [ ] **S10-AC8 (CR-0006):** IPC/config and scene-package loading leave the Wayland event thread responsive; asynchronous candidate completion preserves established command and transactional failure semantics.
 - [ ] **S10-AC9 (CR-0007):** Schema-v4 multiplier parsing/range/default compatibility and transactional reload are tested; a successful rate change preserves scene identity/generation and animation phase, while an invalid candidate leaves config, rate, and resident scene unchanged.
+- [ ] **S10-AC10 (CR-0010 supplemental):** `worldwallctl adaptive status|on|off` has bounded protocol/CLI and running-service coverage. Status reports effective mode; on/off are idempotent and process-local. Enabling rejects missing Open-Meteo, explicit location/timezone, or complete adaptive registry. Both transitions preserve resident scene/generation, never fetch or select, prepare/commit validated sources atomically, and roll back on failure. `reload-config` restores the configured file value. Offline tests and assigned-session IPC evidence are reviewed separately from historical S10 acceptance.
 
 ## Failure and rollback
 

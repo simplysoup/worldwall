@@ -235,9 +235,18 @@ fn parse_command(args: &[String]) -> Result<ipc::Command, Box<dyn Error>> {
         [command] if command == "reload-config" => Ok(ipc::Command::ReloadConfig),
         [command] if command == "next" => Ok(ipc::Command::Next),
         [command] if command == "weather" => Ok(ipc::Command::Weather),
+        [command, mode] if command == "adaptive" => {
+            let mode = match mode.as_str() {
+                "status" => ipc::AdaptiveModeCommand::Status,
+                "on" => ipc::AdaptiveModeCommand::On,
+                "off" => ipc::AdaptiveModeCommand::Off,
+                _ => return Err("adaptive mode must be status, on, or off".into()),
+            };
+            Ok(ipc::Command::Adaptive(mode))
+        }
         [command, id] if command == "scene" => Ok(ipc::Command::Scene(id.clone())),
         _ => Err(
-            "usage: worldwallctl [--socket PATH] status|scenes|reload|reload-config|scene ID|next|weather; worldwallctl curator [--library DIR] [--rules FILE]"
+            "usage: worldwallctl [--socket PATH] status|scenes|reload|reload-config|scene ID|next|weather|adaptive status|on|off; worldwallctl curator [--library DIR] [--rules FILE]"
                 .into(),
         ),
     }
@@ -257,7 +266,7 @@ fn read_response(reader: &mut impl io::Read) -> Result<serde_json::Value, Box<dy
 
 #[cfg(test)]
 mod tests {
-    use super::read_scene_ids;
+    use super::{ipc, parse_command, read_scene_ids};
     use std::{fs, path::PathBuf, time::SystemTime};
 
     fn registry_file(contents: &str) -> PathBuf {
@@ -270,6 +279,31 @@ mod tests {
         fs::create_dir_all(&root).unwrap();
         fs::write(root.join("registry.toml"), contents).unwrap();
         root
+    }
+
+    #[test]
+    fn adaptive_cli_forms_map_to_the_versioned_ipc_command() {
+        for (args, expected) in [
+            (
+                vec!["adaptive".to_owned(), "status".to_owned()],
+                ipc::AdaptiveModeCommand::Status,
+            ),
+            (
+                vec!["adaptive".to_owned(), "on".to_owned()],
+                ipc::AdaptiveModeCommand::On,
+            ),
+            (
+                vec!["adaptive".to_owned(), "off".to_owned()],
+                ipc::AdaptiveModeCommand::Off,
+            ),
+        ] {
+            assert_eq!(
+                parse_command(&args).unwrap(),
+                ipc::Command::Adaptive(expected)
+            );
+        }
+        assert!(parse_command(&["adaptive".into(), "toggle".into()]).is_err());
+        assert!(parse_command(&["adaptive".into()]).is_err());
     }
 
     #[test]

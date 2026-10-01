@@ -33,6 +33,13 @@ pub const COMMAND_TIMEOUT: Duration = Duration::from_secs(2);
 const MAX_CLIENTS: usize = 16;
 const SOCKET_MODE: u32 = 0o600;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AdaptiveModeCommand {
+    Status,
+    On,
+    Off,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Command {
     Status,
@@ -41,6 +48,7 @@ pub enum Command {
     Scene(String),
     Next,
     Weather,
+    Adaptive(AdaptiveModeCommand),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -275,6 +283,19 @@ fn parse_command(value: &Value) -> Result<Command, ProtocolError> {
         "reload-config" => Ok(Command::ReloadConfig),
         "next" => Ok(Command::Next),
         "weather" => Ok(Command::Weather),
+        "adaptive" => {
+            let mode = object
+                .get("mode")
+                .and_then(Value::as_str)
+                .ok_or_else(|| protocol_error("adaptive command requires a mode"))?;
+            let mode = match mode {
+                "status" => AdaptiveModeCommand::Status,
+                "on" => AdaptiveModeCommand::On,
+                "off" => AdaptiveModeCommand::Off,
+                _ => return Err(protocol_error("adaptive mode must be status, on, or off")),
+            };
+            Ok(Command::Adaptive(mode))
+        }
         "scene" => {
             let id = object
                 .get("id")
@@ -302,6 +323,15 @@ fn command_value(command: &Command) -> Value {
         Command::Scene(id) => json!({"version": PROTOCOL_VERSION, "command": "scene", "id": id}),
         Command::Next => json!({"version": PROTOCOL_VERSION, "command": "next"}),
         Command::Weather => json!({"version": PROTOCOL_VERSION, "command": "weather"}),
+        Command::Adaptive(mode) => json!({
+            "version": PROTOCOL_VERSION,
+            "command": "adaptive",
+            "mode": match mode {
+                AdaptiveModeCommand::Status => "status",
+                AdaptiveModeCommand::On => "on",
+                AdaptiveModeCommand::Off => "off",
+            }
+        }),
     }
 }
 
@@ -466,6 +496,33 @@ mod tests {
     }
 
     #[test]
+    fn adaptive_modes_round_trip_through_bounded_request_frames() {
+        for mode in [
+            AdaptiveModeCommand::Status,
+            AdaptiveModeCommand::On,
+            AdaptiveModeCommand::Off,
+        ] {
+            let command = Command::Adaptive(mode);
+            let mut frame = Vec::new();
+            write_request(&mut frame, &command).unwrap();
+            assert_eq!(read_request(&mut Cursor::new(frame)), Ok(command));
+        }
+    }
+
+    #[test]
+    fn adaptive_command_rejects_missing_and_unknown_modes() {
+        for body in [
+            r#"{"version":1,"command":"adaptive"}"#,
+            r#"{"version":1,"command":"adaptive","mode":"toggle"}"#,
+        ] {
+            let mut frame = Vec::new();
+            frame.extend_from_slice(&(body.len() as u32).to_be_bytes());
+            frame.extend_from_slice(body.as_bytes());
+            assert!(read_request(&mut Cursor::new(frame)).is_err());
+        }
+    }
+
+    #[test]
     fn all_public_command_forms_have_stable_parsing() {
         for (body, expected) in [
             (r#"{"version":1,"command":"status"}"#, Command::Status),
@@ -476,6 +533,18 @@ mod tests {
             ),
             (r#"{"version":1,"command":"next"}"#, Command::Next),
             (r#"{"version":1,"command":"weather"}"#, Command::Weather),
+            (
+                r#"{"version":1,"command":"adaptive","mode":"status"}"#,
+                Command::Adaptive(AdaptiveModeCommand::Status),
+            ),
+            (
+                r#"{"version":1,"command":"adaptive","mode":"on"}"#,
+                Command::Adaptive(AdaptiveModeCommand::On),
+            ),
+            (
+                r#"{"version":1,"command":"adaptive","mode":"off"}"#,
+                Command::Adaptive(AdaptiveModeCommand::Off),
+            ),
             (
                 r#"{"version":1,"command":"scene","id":"day"}"#,
                 Command::Scene("day".into()),
