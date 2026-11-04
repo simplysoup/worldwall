@@ -1,20 +1,26 @@
 # Worldwall
 
-A planned GPU-accelerated, weather- and time-aware pixel-art wallpaper engine for Hyprland/Wayland.
+A GPU-accelerated, weather- and time-aware pixel-art wallpaper engine for Hyprland/Wayland, written in Rust on wgpu and Smithay.
 
-**Current state:** Historical S00–S11 acceptances remain recorded; CR-0006/CR-0007 and CR-0010 supplemental gates remain open. S12 is in review for the AC5 correction. RB-0005's bounded-loading blocker is resolved offline. The operator-authorized [Hyprland session activation](docs/updates/2026-09-23-hyprland-session-activation.md) runs a validated private adaptive registry on both outputs, with configured civil time/location, fresh Open-Meteo weather, 30 FPS, and the global 0.5 animation multiplier. The Lua startup hook uses a duplicate-safe launcher. The maintainer-reported reboot/next-login test passed; physical resume remains untested. CR-0010's new adaptive-mode CLI/IPC implementation passed offline checks, but assigned-session verification is still open. Earlier output-115 pacing and CR-0004's physical incompatible-output limitation remain separate, unresolved/not-run evidence—not universal hardware claims.
+Worldwall presents indexed pixel-art scenes on the Wayland background layer, with palette animation, time-of-day and solar palettes, optional weather-adaptive scene selection, and a control socket for a companion CLI (`worldwallctl`). It does not reselect a scene on an ordinary clock tick, weather poll, output hotplug, or config reload — selection changes only through an explicit scene choice, an adaptive-mode change, or a configured reload.
+
+## Requirements
+
+- A Wayland compositor with layer-shell support (developed against Hyprland)
+- Rust 1.94.0 (see `rust-toolchain.toml`), with `rustfmt` and `clippy`
+- Vulkan drivers for your GPU, e.g. on Arch: `sudo pacman -S wayland vulkan-icd-loader`
+- Your own scene artwork: **art assets are intentionally not bundled in this repository.** Supply scenes in the [scene format](docs/scene-format.md), or run the built-in synthetic reference scene with no scene package configured.
 
 ## Start here
 
-1. [Delivery contract](docs/delivery-contract.md) — scope, invariants, acceptance, and approval.
-2. [Roadmap](docs/roadmap.md) — canonical stage order and state.
-3. [Current status](docs/status.md) — evidence, next action, and pending decisions.
-4. [Documentation map](docs/README.md) — workflows, templates, and reference material.
-5. [S02 reviewer guide](docs/reviews/s02-reviewer-guide.md) — step-by-step acceptance walkthrough.
-6. [S03 evidence](docs/evidence/2026-09-21-s03-indexed-scene.md) — accepted M1 decoder/resource/live evidence.
-7. [Contributor instructions](AGENTS.md) — how to work safely and leave a useful handoff.
+1. [Architecture](docs/architecture.md) — environment, selector, scene resources, and renderer.
+2. [Scene format](docs/scene-format.md) — scene packages, palettes, and animation.
+3. [IPC and configuration](docs/ipc.md) — config schema, framed protocol, and `worldwallctl`.
+4. [Release and packaging](docs/release.md) — Arch package, session launcher, and runbook.
+5. [Documentation map](docs/README.md) — workflows, templates, and reference material.
+6. [Contributor instructions](AGENTS.md) — how to work safely and leave a useful handoff.
 
-**Current action:** Leave the installed wallpaper process/config untouched. The reboot/next-login test is recorded as passed; physical resume remains unrun. The private adaptive registry includes the approved Monolith crop; source artwork remains unchanged and unbundled. Follow the [session runbook](docs/release.md#opt-in-hyprland-lua-session-launcher) for launch/control. Obtain separate authorization before assigned-session CR-0010 IPC verification; review its offline implementation and keep all supplemental gates distinct from historical acceptance. See [current status](docs/status.md) and the [roadmap](docs/roadmap.md).
+Development history, stage evidence, and open decisions live in [current status](docs/status.md) and the [roadmap](docs/roadmap.md), not in this README.
 
 ## Build and run the S03 indexed-scene path
 
@@ -73,7 +79,7 @@ phase = 0.0
 ```
 
 
-Run `cargo run --locked` only in the assigned Hyprland/Wayland session; it stays
+Run `cargo run --locked` only in your Hyprland/Wayland session; it stays
 alive until the layer closes, its selected output is removed, or the compositor
 disconnects. S10 also builds `worldwallctl`, which controls a running instance
 through the same-user `$XDG_RUNTIME_DIR/worldwall.sock` socket:
@@ -128,7 +134,7 @@ tools/run_nested_s01.sh
 The harness launches a separate Hyprland instance using the nested Wayland
 backend, runs the client on its separate socket, removes the selected output,
 and repeats with a compositor disconnect. It is supplemental lifecycle/GPU
-trace evidence, not a replacement for assigned-host acceptance. See the [S02
+trace evidence, not a replacement for live compositor acceptance. See the [S02
 reviewer guide](docs/reviews/s02-reviewer-guide.md), [S02 evidence record](docs/evidence/2026-09-21-s02-gpu-presentation.md), and [S01 evidence record](docs/evidence/2026-09-21-s01-wayland-lifecycle.md)
 for known limitations and exact results.
 
