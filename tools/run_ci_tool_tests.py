@@ -11,7 +11,11 @@ def strip(s):
     for t in list(s):
         if isinstance(t, unittest.TestSuite):
             strip(t)
-        elif t.__class__.__module__.startswith("test_worldwall_theme_watch"):
+        elif (t.__class__.__module__.startswith("test_worldwall_theme_watch")
+              or "test_worldwall_theme_watch" in str(t)):
+            # The second clause catches unittest's _FailedTest placeholder,
+            # which is what discover produces when the module fails to
+            # import (e.g. Pillow missing) before any test case exists.
             s._tests.remove(t)
 strip(suite)
 result = unittest.TextTestRunner(verbosity=1).run(suite)
