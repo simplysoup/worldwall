@@ -147,7 +147,7 @@ and raw responses are deliberately kept in the local untracked
 `fixtures/untracked/effectgames/` folders and are not part of the tracked or
 published delivery. No license or redistribution permission is inferred. The
 inspection metadata is retained outside Git at
-`/home/soup/.local/state/worldwall/s04-implementation-20260921/effectgames-example-sources.json`.
+`$HOME/.local/state/worldwall/s04-implementation-20260921/effectgames-example-sources.json`.
 
 ## Approval record
 

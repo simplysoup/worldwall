@@ -23,7 +23,7 @@ hyprctl eval 'hl.monitor({ output = "HDMI-A-2", disabled = true })'
 The compositor disabled both physical outputs but created a `FALLBACK` output.
 Worldwall attached a layer to that fallback output, so this was not a valid
 zero-output workload. The raw topology snapshot and short trace are retained
-under `/home/soup/.local/state/worldwall/s11-performance-20260922/` as
+under `$HOME/.local/state/worldwall/s11-performance-20260922/` as
 `B9-zero-output-pmon-1s-output-disabled.json` and
 `B9-zero-output-pmon-1s.log`. The helper restored both physical outputs in its
 exit trap, and the post-run topology showed both enabled.

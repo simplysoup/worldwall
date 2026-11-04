@@ -21,7 +21,7 @@ c79b30669bbafb7ba4de0d619d982792282b868e0f9ccd7d5d8c48656ddc0ca6  Cargo.toml
 ```
 
 The retained runtime artifacts and their checksums are in
-`/home/soup/.local/state/worldwall/s03-review-20260921-204011/artifacts.sha256`.
+`$HOME/.local/state/worldwall/s03-review-20260921-204011/artifacts.sha256`.
 The synthetic PNG package used for the live package-loader run is outside the
 repository; its `scene.png` and `palette.png` hashes are retained there.
 

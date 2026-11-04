@@ -3,7 +3,7 @@
 - Classification: reproduced
 - Owner / date / affected versions: Pi coding agent / 2026-09-22 / CR-0003 local fixture generator before the source-rate correction
 - Stage / requirements: S04-AC1, S04-AC3, S05-AC5, WW-03, WW-04
-- Related roadblock / evidence: [CR-0003 evidence](../../evidence/2026-09-22-cr003-scene-variants.md); local live trace `/home/soup/.local/state/worldwall/cr003-effectgames-20260922/live-js-mapped-v05-rain.log`
+- Related roadblock / evidence: [CR-0003 evidence](../../evidence/2026-09-22-cr003-scene-variants.md); local live trace `$HOME/.local/state/worldwall/cr003-effectgames-20260922/live-js-mapped-v05-rain.log`
 
 ## Trigger, symptom, and mechanism
 

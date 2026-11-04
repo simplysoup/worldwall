@@ -24,7 +24,7 @@ result therefore cannot attribute utilization to Worldwall or establish a
 Worldwall budget failure.
 
 The raw B4 CSV and log are retained under
-`/home/soup/.local/state/worldwall/s11-performance-20260922/` with hashes in
+`$HOME/.local/state/worldwall/s11-performance-20260922/` with hashes in
 the linked benchmark update.
 
 ## Diagnosis and attempts
