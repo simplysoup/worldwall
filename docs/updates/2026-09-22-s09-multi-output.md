@@ -1,7 +1,7 @@
 # S09 implementation increment — shared multi-output lifecycle and live topology tests
 
 - Date / operator: 2026-09-22 · Pi coding agent
-- Revision or artifact identity: working tree based on `c8ba3fc14b633d31bc31c780f1d84ab4f9a2f3e8`; live bundle `/home/soup/.local/state/worldwall/s09-live-20260922/` with `SHA256SUMS`
+- Revision or artifact identity: working tree based on `c8ba3fc14b633d31bc31c780f1d84ab4f9a2f3e8`; live bundle `$HOME/.local/state/worldwall/s09-live-20260922/` with `SHA256SUMS`
 - Stage / requirements: S09; WW-01, WW-02, WW-05, WW-09, WW-11; implementation and test increment for S09-AC1 through S09-AC5
 - Environment: assigned `soupydesktop` session, Hyprland 0.56.2, Vulkan 1.4.357, NVIDIA RTX 3070 Ti, two HDMI outputs; Rust pinned by `rust-toolchain.toml`
 - Scene/config: synthetic reference scene, default 30 FPS, weather disabled, no location configuration; output mode changes were restored after each test
