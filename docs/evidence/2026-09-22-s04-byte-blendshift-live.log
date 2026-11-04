@@ -1,4 +1,4 @@
-   Compiling worldwall v0.1.0 (/home/soup/Documents/worldwall)
+   Compiling worldwall v0.1.0 ($HOME/Documents/worldwall)
     Finished `dev` profile [unoptimized + debuginfo] target(s) in 1.20s
      Running `target/debug/worldwall`
 trace output-added id=wl_output@5
