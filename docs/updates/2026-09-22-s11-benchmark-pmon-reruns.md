@@ -5,7 +5,7 @@
 - Stage / requirements: S11; S11-AC3, WW-05, WW-07, WW-09, WW-12.
 - Approval: `simplysoup` approved the matrix and thresholds on 2026-09-22.
 - Host: assigned Hyprland/Vulkan session recorded in the [budget proposal](2026-09-22-s11-performance-budget-proposal.md).
-- Raw root: `/home/soup/.local/state/worldwall/s11-performance-20260922/`.
+- Raw root: `$HOME/.local/state/worldwall/s11-performance-20260922/`.
 
 This update supersedes the whole-GPU utilization interpretation from the first
 benchmark increment for GPU-utilization purposes. It does not erase that

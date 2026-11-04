@@ -33,7 +33,7 @@ Applied in a fail-safe order with backups, on the running session:
    `worldwall-daemon-replaced-20260923`). Required because the previous daemon
    rejects schema v5; updating config alone would have failed the next login.
 3. **Config updated** to `schema_version = 5` with
-   `scene_pools_file = "/home/soup/.config/worldwall/scene-pools.toml"`;
+   `scene_pools_file = "$HOME/.config/worldwall/scene-pools.toml"`;
    all other settings (fps, animation multiplier, registry, explicit
    location/timezone, Open-Meteo opt-in, adaptive scenes) preserved unchanged
    (v4 file backed up as `worldwall.toml-v4-backup-20260923`).

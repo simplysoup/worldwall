@@ -36,7 +36,7 @@
 Every invalid-input row produced a single precise diagnostic line and exited
 rc=1 immediately: no hangs, no retries, no partial resources, no panics
 (`results.json` `_verdict.failures` is empty). Raw traces and JSON results are
-retained under `/home/soup/.local/state/worldwall/`:
+retained under `$HOME/.local/state/worldwall/`:
 
 - `s11-ac2-ipc-20260922T215931Z/` — `results.json` SHA-256 prefix
   `764984094aae4dcd`, `worldwall.log` prefix `d91fdc5db67e6b78`

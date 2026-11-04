@@ -12,7 +12,7 @@
   [S11 benchmark increment](2026-09-22-s11-benchmark-increment.md),
   [RB-0001](../roadblocks/RB-0001-s11-benchmark-budgets.md),
   [RB-0003](../roadblocks/RB-0003-zero-output-fallback.md), and the supplemental
-  artifact root `/home/soup/.local/state/worldwall/s11-tod-functional-20260922/`
+  artifact root `$HOME/.local/state/worldwall/s11-tod-functional-20260922/`
 
 ## Decisions
 
@@ -51,7 +51,7 @@
 ## Three-window restatement of the approved benchmark raw streams
 
 Source: retained per-sample CSVs under
-`/home/soup/.local/state/worldwall/s11-performance-20260922/` (900 samples per
+`$HOME/.local/state/worldwall/s11-performance-20260922/` (900 samples per
 workload; windows W1 = samples 1–300, W2 = 301–600, W3 = 601–900). Overall
 means reproduce the published pmon-rerun table exactly (B1 1.119, B2 1.711,
 B3 1.055, B4 1.797, B5 1.330, B6 2.189, B7 1.317, B8 2.243 percent CPU).

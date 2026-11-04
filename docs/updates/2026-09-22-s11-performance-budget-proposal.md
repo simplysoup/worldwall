@@ -150,7 +150,7 @@ No live provider request is authorized by this proposal.
 Proposed output root:
 
 ```text
-/home/soup/.local/state/worldwall/s11-performance-20260922/
+$HOME/.local/state/worldwall/s11-performance-20260922/
 ```
 
 Retain the exact command, binary/package SHA-256, tool versions, output

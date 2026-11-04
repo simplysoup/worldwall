@@ -10,11 +10,11 @@
 
 | Check | Exact command / procedure | Observed | Outcome |
 | --- | --- | --- | --- |
-| Baseline config reload | `/home/soup/.local/bin/worldwallctl reload-config` against the old daemon | Rejected transactionally with `invalid_config`: its catalog parser treated the curator-added `display_name` key as unknown. Status remained on `v08-jungle-waterfall--clear`, generation 29. | Reproduced |
+| Baseline config reload | `$HOME/.local/bin/worldwallctl reload-config` against the old daemon | Rejected transactionally with `invalid_config`: its catalog parser treated the curator-added `display_name` key as unknown. Status remained on `v08-jungle-waterfall--clear`, generation 29. | Reproduced |
 | Rust validation/build | `cargo fmt --all --check`; `cargo clippy --offline --locked --all-targets --all-features -- -D warnings`; `cargo test --offline --locked --all-targets --all-features`; `cargo build --offline --locked --release --all-targets --all-features` | Format, Clippy, and locked release build passed; 129 application and 77 CLI tests passed; 3 existing Vulkan readback tests were ignored by their adapter gate. | Pass |
-| Private catalog validation | `python3 tools/scene_pool_library.py --library /home/soup/.local/share/worldwall/scene-library --check-only` | 35 scenes, 175 files, 417 animation groups; license state was not upgraded. | Pass |
-| Install / restart | Backed up the old daemon, staged the built release binary in the install directory, atomically renamed it into place, sent SIGTERM to the old session child, then ran `hyprctl eval 'hl.exec_cmd("/home/soup/.local/bin/worldwall-session")'`. | New session process started as PID 434676; the current schema-v5 config, pool sidecar, and CanvasCycle catalog loaded. No config, sidecar, or scene package was edited. | Pass |
-| Requested scene | `/home/soup/.local/bin/worldwallctl scene canvascycle-v15` | `ok: true`, `applied: true`, generation 2. Follow-up `status` reports `scene: canvascycle-v15`, Vulkan, FPS 30, outputs `[71, 73]`, and no degraded outputs. `worldwallctl scenes` marks V15 active. | Pass |
+| Private catalog validation | `python3 tools/scene_pool_library.py --library $HOME/.local/share/worldwall/scene-library --check-only` | 35 scenes, 175 files, 417 animation groups; license state was not upgraded. | Pass |
+| Install / restart | Backed up the old daemon, staged the built release binary in the install directory, atomically renamed it into place, sent SIGTERM to the old session child, then ran `hyprctl eval 'hl.exec_cmd("$HOME/.local/bin/worldwall-session")'`. | New session process started as PID 434676; the current schema-v5 config, pool sidecar, and CanvasCycle catalog loaded. No config, sidecar, or scene package was edited. | Pass |
+| Requested scene | `$HOME/.local/bin/worldwallctl scene canvascycle-v15` | `ok: true`, `applied: true`, generation 2. Follow-up `status` reports `scene: canvascycle-v15`, Vulkan, FPS 30, outputs `[71, 73]`, and no degraded outputs. `worldwallctl scenes` marks V15 active. | Pass |
 
 ## Limitations and failures
 

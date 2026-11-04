@@ -29,7 +29,7 @@ Procedure: copied the package to an operator-controlled location
 | Bounded behavior | 812 presented frames across two runs; zero panic/fatal lines |
 
 Raw launch log retained at
-`/home/soup/.local/share/worldwall-ac4-operator/ac4-run.log`.
+`$HOME/.local/share/worldwall-ac4-operator/ac4-run.log`.
 
 ## S11-AC5 — license, provenance, and artifact identity
 

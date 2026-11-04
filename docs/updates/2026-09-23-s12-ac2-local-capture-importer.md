@@ -9,7 +9,7 @@
 
 ## Local source audit
 
-- In the inspected repository fixture tree and `/home/soup/.local/state/worldwall`, the only CanvasCycle source capture found was `fixtures/untracked/effectgames/canvascycle-v25heat/V25HEAT.LBM.json` (975,170 bytes). Its recorded SHA-256 is `2d0ee7fa2d83ab986514e76db05a88f6735a6186dde28fb6466a6fd45ed2305f`; `SOURCE.txt` records the CanvasCycle asset/page and says no independent license grant is established.
+- In the inspected repository fixture tree and `$HOME/.local/state/worldwall`, the only CanvasCycle source capture found was `fixtures/untracked/effectgames/canvascycle-v25heat/V25HEAT.LBM.json` (975,170 bytes). Its recorded SHA-256 is `2d0ee7fa2d83ab986514e76db05a88f6735a6186dde28fb6466a6fd45ed2305f`; `SOURCE.txt` records the CanvasCycle asset/page and says no independent license grant is established.
 - The other `v08-jungle-waterfall-*` captures in the ignored fixture tree are Effect Games world-package sources, not CanvasCycle entries. The V08 CanvasCycle time variants noted by CR-0008 were not present in the inspected local roots. No source was fetched, and no missing CanvasCycle entry was synthesized.
 - The available V25HEAT object reports 640×480, 256 RGB colors, 307,200 index bytes, and 16 non-overlapping cycle ranges. The local capture contains raw `reverse`, `rate`, `low`, and `high` values, but no captured engine code establishing rate/direction semantics. Those values are retained unchanged and are explicitly marked unmapped.
 

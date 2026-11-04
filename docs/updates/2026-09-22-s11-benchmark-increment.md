@@ -6,7 +6,7 @@
 - Owner: Pi coding agent. Approval authority: `simplysoup`.
 - Approved inputs: [S11 performance matrix and budget proposal](2026-09-22-s11-performance-budget-proposal.md), approved 2026-09-22.
 - Kind: assigned-session live benchmark on the approved Hyprland/Vulkan host.
-- Raw artifact root: `/home/soup/.local/state/worldwall/s11-performance-20260922/`.
+- Raw artifact root: `$HOME/.local/state/worldwall/s11-performance-20260922/`.
 
 This increment records the first full 15/30 FPS dual-output animated runs,
 the idle GPU baseline, one single-output animated run, and one interrupted
