@@ -21,7 +21,7 @@ The audit and ADR identify which decisions are proposed rather than recovered fr
 
 ## Verification
 
-Executed locally on 2026-09-21 with Python 3.14.7, Linux `7.2.4-zen2-1-zen`, x86_64, from `/home/soup/Documents/worldwall`. Python 3.10 is the tooling API baseline; it was not separately executed here.
+Executed locally on 2026-09-21 with Python 3.14.7, Linux `7.2.4-zen2-1-zen`, x86_64, from `$HOME/Documents/worldwall`. Python 3.10 is the tooling API baseline; it was not separately executed here.
 
 | Check | Exact command / procedure | Observed result | Outcome |
 | --- | --- | --- | --- |

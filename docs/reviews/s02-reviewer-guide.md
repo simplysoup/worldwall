@@ -13,7 +13,7 @@ The reviewer must record facts from the assigned host, not infer a pass from a s
 5. Create a review artifact directory outside the repository. Screenshots can contain desktop content; redact or restrict access and record retention details.
 
 ```sh
-cd /home/soup/Documents/worldwall
+cd $HOME/Documents/worldwall
 review_dir="${XDG_STATE_HOME:-$HOME/.local/state}/worldwall/s02-review-$(date +%Y%m%d-%H%M%S)"
 mkdir -p "$review_dir"
 hyprctl monitors -j >"$review_dir/monitors-before.json"

@@ -57,7 +57,7 @@ S02 remains `in-progress`; this increment does not accept any full S02 gate. ADR
 - Reviewer / acceptance authority: `simplysoup` (the project record directs unqualified review approvals to this identity)
 - Host: `soupydesktop`; Linux x86_64, kernel `7.2.4-zen2-1-zen`; Hyprland `0.56.2`; NVIDIA GeForce RTX 3070 Ti, driver `615.71.09`; Vulkan `1.4.357`; Rust `1.94.0`; wgpu `30.0.1`; SCTK `0.21.1`; two physical 1920×1080 scale-1 outputs before testing
 - Source identity: working tree; implementation hashes remain `Cargo.toml` `722b23a76ee6d4351fc8af3483b9e4db55e0be3b32ff357996b29de138da6d12`, `Cargo.lock` `041c8d3f4f672f0f01d7462b4396a9e72f285b1f7357e0cf137d7a786575d078`, `src/renderer.rs` `5579c95ea19e6e4a7d7a39a113ad11c888a7f4eb9aa2280b586e4f6121453e05`, `src/wayland_surface.rs` `87beae4469e2906274663de4da4c176cecedc121c533a1ad2c5c81fb6ed530e2`, and `tools/run_nested_s01.sh` `07488c9e80a169eebc74a3baa3b148a1cd41f13c2a194aad8d97606a27ce8a01`. The accepted ADR after this review is `b9423f90e5b5872026af7872956c1e2e177d7e66f7d05928f1ef64c46e8150f8`.
-- Artifact directory: `/home/soup/.local/state/worldwall/s02-review-20260921-200737`, retained outside the repository with user-only access. `artifacts.sha256` and `nested-attempt.sha256` identify the retained logs and topology records.
+- Artifact directory: `$HOME/.local/state/worldwall/s02-review-20260921-200737`, retained outside the repository with user-only access. `artifacts.sha256` and `nested-attempt.sha256` identify the retained logs and topology records.
 
 | Criterion | Review procedure and observed result | Outcome |
 | --- | --- | --- |
@@ -83,7 +83,7 @@ Do not move S02 to `review` or `accepted`. The next safe action is to run the mi
 
 - Operator: Pi coding agent
 - Reviewer / acceptance authority: `simplysoup`
-- Working-tree source after the bounded fixes; `src/renderer.rs` SHA-256 `fb90d417700618e57644f88989d7b13f27bc9fa5d3ce31bdd865d2d34c87e9cf`, `tools/run_nested_s01.sh` `65de987b2bad27607613cc86acc4c7a8267645830fbdfe604e8d20a8f1e6de7f`, and `tools/nested_wayland_connect.c` `37efba5b1a155ff2f342d9f5fb7b9d74ba0208dfeeaedfc5d762c42a40503c53`. Implementation and harness artifacts are retained in `/home/soup/.local/state/worldwall/s02-review-20260921-200737` with user-only access. `follow-up-artifacts.sha256` records the relevant logs, captures, input procedure, and fault matrix.
+- Working-tree source after the bounded fixes; `src/renderer.rs` SHA-256 `fb90d417700618e57644f88989d7b13f27bc9fa5d3ce31bdd865d2d34c87e9cf`, `tools/run_nested_s01.sh` `65de987b2bad27607613cc86acc4c7a8267645830fbdfe604e8d20a8f1e6de7f`, and `tools/nested_wayland_connect.c` `37efba5b1a155ff2f342d9f5fb7b9d74ba0208dfeeaedfc5d762c42a40503c53`. Implementation and harness artifacts are retained in `$HOME/.local/state/worldwall/s02-review-20260921-200737` with user-only access. `follow-up-artifacts.sha256` records the relevant logs, captures, input procedure, and fault matrix.
 
 ### S02-AC1 — pass
 
