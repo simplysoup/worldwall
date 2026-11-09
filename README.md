@@ -12,6 +12,42 @@ The curator preview, cycling the same scene through time of day and weather:
 
 Scene shown: "May — Jungle Waterfall" by Mark Ferrari, as displayed in the [EffectGames demo](https://www.effectgames.com/demos/worlds/). The artwork is copyrighted and is shown here for demonstration only; the licensed version is available in [Living Worlds by Pixfabrik](https://pixfabrik.com/livingworlds/). Art assets are intentionally not bundled in this repository.
 
+## Loading the EffectGames scenes yourself
+
+The demo scenes are not shipped with this repo, but you can fetch them from the EffectGames demo site for your own local use and convert them with the tools already in this repo. Everything below stays on your machine under `fixtures/untracked/` (git-ignored): **do not commit or publish the fetched art.** Its license state is unreviewed; see the [licensing note in the scene format](docs/scene-format.md).
+
+1. **Pick a scene from the catalog.** The catalog is at <https://www.effectgames.com/demos/worlds/scenes.js>. Each entry has a `month`, a script name (`scpt`), and a catalog name (`name`). The full inventory, with the exact source URL for every variant, is in [`fixtures/effectgames-reference-manifest.toml`](fixtures/effectgames-reference-manifest.toml) and in `tools/generate_effectgames_fixtures.py`.
+2. **Download the scene script.** The URL pattern is `https://www.effectgames.com/demos/worlds/cache/<NAME>-<MONTH>-<SCPT>.js`. For the Jungle Waterfall clear variant shown above:
+   ```sh
+   curl -o fixtures/untracked/effectgames/v08-jungle-waterfall-clear-fetch.json \
+     https://www.effectgames.com/demos/worlds/cache/V08-05May-MAYCLRSCPT.js
+   ```
+   Note the filename: `<package-id>-fetch.json` (for example `v08-jungle-waterfall-clear-fetch.json`).
+3. **Wrap it in the browser-capture JSON format.** The generator expects a JSON file with the script contents under a `text` key, not the raw `.js` file:
+   ```sh
+   python3 -c "
+   import json
+   p = 'fixtures/untracked/effectgames/v08-jungle-waterfall-clear-fetch.json'
+   open(p, 'w').write(json.dumps({'text': open(p).read()}))
+   "
+   ```
+4. **Convert it to a scene package.**
+   ```sh
+   python3 tools/generate_effectgames_fixtures.py
+   ```
+   This writes `scene.png`, `palette.png`, `animation.toml`, and `time_of_day.toml` into `fixtures/untracked/effectgames/v08-jungle-waterfall--clear/`, plus a `registry.toml` and a `SOURCE.txt` provenance note. It will report the variants you did not fetch as missing; that is expected if you only fetched one.
+5. **Point Worldwall at the registry.** The generated `registry.toml` lists all 21 catalog variants, so if you only fetched some, replace it with one listing only the scenes you have, with `fallback` set to one of them:
+   ```toml
+   schema_version = 1
+   fallback = "v08-jungle-waterfall--clear"
+   scenes = ["v08-jungle-waterfall--clear"]
+   ```
+   (Re-running the generator restores the full 21-scene list, so re-apply this afterwards if you re-run it.) Then run with the registry directory, in your Hyprland session:
+   ```sh
+   WORLDWALL_REGISTRY_DIR=$PWD/fixtures/untracked/effectgames cargo run --locked
+   ```
+   Or set `registry_dir` to that path in your `worldwall.toml` and run with `WORLDWALL_CONFIG`. The December scene (V12 Winter Manor) has no source available, so it cannot be fetched this way.
+
 ## Requirements
 
 - A Wayland compositor with layer-shell support (developed against Hyprland)
