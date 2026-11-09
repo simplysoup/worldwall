@@ -4,6 +4,14 @@ A GPU-accelerated, weather- and time-aware pixel-art wallpaper engine for Hyprla
 
 Worldwall presents indexed pixel-art scenes on the Wayland background layer, with palette animation, time-of-day and solar palettes, optional weather-adaptive scene selection, and a control socket for a companion CLI (`worldwallctl`). It does not reselect a scene on an ordinary clock tick, weather poll, output hotplug, or config reload — selection changes only through an explicit scene choice, an adaptive-mode change, or a configured reload.
 
+## Demo
+
+The curator preview, cycling the same scene through time of day and weather:
+
+<video src="docs/demo/curator-preview.mp4" width="100%" controls></video>
+
+Scene shown: "May — Jungle Waterfall" by Mark Ferrari, as displayed in the [EffectGames demo](https://www.effectgames.com/demos/worlds/). The artwork is copyrighted and is shown here for demonstration only; the licensed version is available in [Living Worlds by Pixfabrik](https://pixfabrik.com/livingworlds/). Art assets are intentionally not bundled in this repository.
+
 ## Requirements
 
 - A Wayland compositor with layer-shell support (developed against Hyprland)
